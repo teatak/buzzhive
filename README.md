@@ -26,7 +26,7 @@ Upgrade:
 curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | sh
 ```
 
-The installer writes files to the current directory by default. On upgrade, it reuses `.env` and the existing Postgres volume, then pulls the latest image and restarts the services.
+The installer writes files to the current directory by default. On upgrade, it reuses `.env` and `./pgdata`, then pulls the latest image and restarts the services.
 To choose another directory:
 
 ```bash
@@ -98,7 +98,7 @@ Then open:
 http://<server-lan-ip>:8787/admin/
 ```
 
-Postgres data is stored in the `pgdata` Docker volume.
+Postgres data is stored under `./pgdata`.
 
 Upgrade:
 

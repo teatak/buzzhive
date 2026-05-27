@@ -81,7 +81,7 @@ services:
       POSTGRES_USER: buzzhive
       POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ./pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U buzzhive -d buzzhive"]
       interval: 10s
@@ -100,9 +100,6 @@ services:
       BUZZHIVE_DATABASE_URL: postgres://buzzhive:\${POSTGRES_PASSWORD}@postgres:5432/buzzhive?sslmode=disable
     volumes:
       - ./config.yaml:/config/config.yaml:ro
-
-volumes:
-  pgdata:
 EOF
 
 docker compose pull
