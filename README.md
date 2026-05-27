@@ -5,13 +5,13 @@ BuzzHive is a local Gemini API proxy with multi-user API keys, Google account/ke
 ## Linux Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | sh
 ```
 
 Optional:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | env PORT=8787 IMAGE=teatak/buzzhive:latest bash
+curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | env PORT=8787 IMAGE=teatak/buzzhive:latest sh
 ```
 
 Then open:
@@ -23,7 +23,7 @@ http://<server-lan-ip>:8787/admin/
 Upgrade:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | sh
 ```
 
 The installer reuses `/opt/buzzhive/.env` and the existing Postgres volume, then pulls the latest image and restarts the services.
