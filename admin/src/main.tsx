@@ -162,15 +162,6 @@ function fillUsageSeries(series: UsagePoint[], from: string, to: string): UsageP
   return out;
 }
 
-function groupByAccount(keys: AdminKey[]) {
-  const groups = new Map<string, AdminKey[]>();
-  for (const key of keys) {
-    const label = key.account_email || "Unmapped";
-    groups.set(label, [...(groups.get(label) ?? []), key]);
-  }
-  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
-}
-
 function App() {
   const [view, setView] = useState<View>(viewFromHash());
   const [token, setToken] = useState(localStorage.getItem(storageKey) ?? "");
@@ -434,7 +425,6 @@ function App() {
   }
 
   const coolingKeys = Object.entries(stats.exhausted ?? {});
-  const accountGroups = groupByAccount(keys);
   const byKey = stats.by_key ?? {};
   const filteredKeys = keyAccountFilter === "all" ? keys : keys.filter((key) => String(key.account_id) === keyAccountFilter);
   const filteredKeyIds = filteredKeys.map((key) => key.id);
@@ -604,7 +594,6 @@ function App() {
                   <input placeholder="Email" value={newAccount.email} onChange={(event) => setNewAccount({ ...newAccount, email: event.target.value })} />
                   <button className="button primary" type="button" onClick={createAccount} disabled={!newAccount.email}>Add</button>
                 </div>
-                <AccountCards groups={accountGroups} />
                 <table className="section-table">
                   <thead><tr><th>Email</th><th>Prefix</th><th>Status</th><th className="right">Keys</th><th></th></tr></thead>
                   <tbody>{accounts.map((account) => (
@@ -739,20 +728,6 @@ function App() {
 
 function NavButton(props: { active: boolean; icon: ReactNode; label: string; onClick: () => void }) {
   return <button className={props.active ? "nav-button active" : "nav-button"} type="button" onClick={props.onClick}>{props.icon}{props.label}</button>;
-}
-
-function AccountCards(props: { groups: Array<[string, AdminKey[]]> }) {
-  return (
-    <div className="account-grid">{props.groups.map(([email, keys]) => (
-      <div className="account-card" key={email}>
-        <div>
-          <div className="account-email">{email}</div>
-          <div className="muted">{keys[0]?.account_prefix || "-"} account id</div>
-        </div>
-        <div className="account-count">{keys.length}</div>
-      </div>
-    ))}</div>
-  );
 }
 
 function UsageChart(props: { series: UsagePoint[] }) {

@@ -162,8 +162,7 @@ p,
 
 .metric-card,
 .panel,
-.login-panel,
-.account-card {
+.login-panel {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--card);
@@ -286,30 +285,6 @@ p,
   border-color: #fecaca;
   background: #fef2f2;
   color: var(--danger);
-}
-
-.account-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.account-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 13px;
-}
-
-.account-email {
-  font-weight: 650;
-}
-
-.account-count {
-  font-size: 22px;
-  line-height: 1;
-  font-weight: 750;
 }
 
 .list {
@@ -660,7 +635,6 @@ textarea:focus {
   .metrics,
   .layout,
   .layout.wide-left,
-  .account-grid,
   .form-row,
   .form-row.user-form,
   .form-row.key-form,
