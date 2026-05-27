@@ -2,12 +2,15 @@ IMAGE ?= teatak/buzzhive
 TAG ?= latest
 PLATFORMS ?= linux/amd64,linux/arm64
 
-.PHONY: dev admin-dev docker-build docker-push docker-publish docker-publish-current version-patch version-minor version-major
+.PHONY: dev admin-build admin-dev docker-build docker-push docker-publish docker-publish-current version-patch version-minor version-major
 
-dev:
+dev: admin-build
 	@test -f config.yaml || cp config.example.yaml config.yaml
 	docker compose up -d postgres
 	go run ./cmd/local-proxy -config config.yaml
+
+admin-build:
+	cd admin && pnpm install --frozen-lockfile && pnpm build
 
 admin-dev:
 	cd admin && pnpm install && pnpm dev
