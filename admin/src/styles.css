@@ -370,6 +370,36 @@ th {
   text-align: right;
 }
 
+td.right > .button,
+td.right > .icon-button {
+  margin-left: 6px;
+}
+
+.section-table {
+  margin-top: 12px;
+}
+
+.status-detail summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.status-detail summary::-webkit-details-marker {
+  display: none;
+}
+
+.status-detail-body {
+  max-width: 420px;
+  margin-top: 7px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .empty {
   color: var(--muted);
   padding: 10px 0;

@@ -473,6 +473,22 @@ func (s *Store) CreateUserAPIKey(key AuthToken) (AuthToken, error) {
 	return key, nil
 }
 
+func (s *Store) SetUserAPIKeyValid(id, userID int64, valid bool) error {
+	if id == 0 || userID == 0 {
+		return errors.New("id and user_id are required")
+	}
+	_, err := s.exec(`UPDATE user_api_keys SET valid = ?, updated_at = ? WHERE id = ? AND user_id = ?`, boolInt(valid), time.Now().Format(time.RFC3339), id, userID)
+	return err
+}
+
+func (s *Store) DeleteUserAPIKey(id, userID int64) error {
+	if id == 0 || userID == 0 {
+		return errors.New("id and user_id are required")
+	}
+	_, err := s.exec(`DELETE FROM user_api_keys WHERE id = ? AND user_id = ?`, id, userID)
+	return err
+}
+
 func (s *Store) VerifyPassword(username, password string) (AppUser, error) {
 	var user AppUser
 	var hash string
@@ -570,6 +586,34 @@ func (s *Store) UpdateGoogleAccount(account GoogleAccount) error {
 	}
 	_, err := s.exec(`UPDATE google_accounts SET email = ?, prefix = ?, enabled = ?, updated_at = ? WHERE id = ?`, account.Email, account.Prefix, boolInt(account.Enabled), time.Now().Format(time.RFC3339), account.ID)
 	return err
+}
+
+func (s *Store) DeleteGoogleAccount(id int64) error {
+	if id == 0 {
+		return errors.New("id is required")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	deleteKeys, err := s.prepareTx(tx, `DELETE FROM api_keys WHERE google_account_id = ?`)
+	if err != nil {
+		return err
+	}
+	defer deleteKeys.Close()
+	if _, err := deleteKeys.Exec(id); err != nil {
+		return err
+	}
+	deleteAccount, err := s.prepareTx(tx, `DELETE FROM google_accounts WHERE id = ?`)
+	if err != nil {
+		return err
+	}
+	defer deleteAccount.Close()
+	if _, err := deleteAccount.Exec(id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) CreateAPIKey(key APIKey) error {

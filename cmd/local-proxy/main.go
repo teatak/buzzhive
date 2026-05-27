@@ -1045,6 +1045,23 @@ func (s *Server) handleUserAPIKeys(w http.ResponseWriter, r *http.Request, actor
 			return
 		}
 		writeJSON(w, http.StatusOK, created)
+	case http.MethodPut:
+		var key AuthToken
+		if !decodeJSON(w, r, &key) {
+			return
+		}
+		if err := s.store.SetUserAPIKeyValid(key.ID, actor.ID, key.Valid); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		s.reloadRuntime(w)
+	case http.MethodDelete:
+		id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+		if err := s.store.DeleteUserAPIKey(id, actor.ID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		s.reloadRuntime(w)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
@@ -1075,6 +1092,13 @@ func (s *Server) handleGoogleAccounts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.UpdateGoogleAccount(account); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		s.reloadRuntime(w)
+	case http.MethodDelete:
+		id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+		if err := s.store.DeleteGoogleAccount(id); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}

@@ -279,12 +279,41 @@ function App() {
     await refresh();
   }
 
+  async function updateUserAPIKey(key: UserAPIKey, valid: boolean) {
+    await request("/admin/api/user-api-keys", token, {
+      method: "PUT",
+      body: JSON.stringify({ id: key.id, valid }),
+    });
+    await refresh();
+  }
+
+  async function deleteUserAPIKey(key: UserAPIKey) {
+    if (!window.confirm(`Delete My API Key "${key.name}"?`)) return;
+    await request(`/admin/api/user-api-keys?id=${key.id}`, token, { method: "DELETE" });
+    await refresh();
+  }
+
   async function createAccount() {
     await request("/admin/api/google-accounts", token, {
       method: "POST",
       body: JSON.stringify({ email: newAccount.email, enabled: true }),
     });
     setNewAccount({ email: "" });
+    await refresh();
+  }
+
+  async function updateGoogleAccount(account: GoogleAccount, enabled: boolean) {
+    await request("/admin/api/google-accounts", token, {
+      method: "PUT",
+      body: JSON.stringify({ ...account, enabled }),
+    });
+    await refresh();
+  }
+
+  async function deleteGoogleAccount(account: GoogleAccount) {
+    const count = keys.filter((key) => key.account_id === account.id).length;
+    if (!window.confirm(`Delete Google account "${account.email}" and ${count} API keys?`)) return;
+    await request(`/admin/api/google-accounts?id=${account.id}`, token, { method: "DELETE" });
     await refresh();
   }
 
@@ -306,6 +335,7 @@ function App() {
 
   async function deleteAPIKeys(ids: number[]) {
     if (!ids.length) return;
+    if (!window.confirm(`Delete ${ids.length} Gemini API key${ids.length === 1 ? "" : "s"}?`)) return;
     await request(`/admin/api/api-keys?ids=${ids.join(",")}`, token, { method: "DELETE" });
     setSelectedKeyIds((current) => current.filter((id) => !ids.includes(id)));
     await refresh();
@@ -403,6 +433,10 @@ function App() {
   const filteredKeys = keyAccountFilter === "all" ? keys : keys.filter((key) => String(key.account_id) === keyAccountFilter);
   const filteredKeyIds = filteredKeys.map((key) => key.id);
   const allFilteredSelected = filteredKeyIds.length > 0 && filteredKeyIds.every((id) => selectedKeyIds.includes(id));
+  const keyCountByAccount = keys.reduce<Record<number, number>>((acc, key) => {
+    acc[key.account_id] = (acc[key.account_id] ?? 0) + 1;
+    return acc;
+  }, {});
   const usageSeries = fillUsageSeries(usage?.series ?? [], usageFilter.from, usageFilter.to);
   const ownActiveKeys = userAPIKeys.filter((key) => key.valid);
 
@@ -425,7 +459,18 @@ function App() {
     const cooling = Object.entries(stats!.exhausted ?? {}).find(([name]) => name.endsWith(`::${key.name}`));
     if (cooling) return <span className="pill warn">Cooling {formatDate(cooling[1])}</span>;
     const error = Object.values(stats!.key_errors ?? {}).find((item) => item.key === key.name);
-    if (error) return <span className="pill danger" title={error.message}>Error {error.status || "network"}</span>;
+    if (error) {
+      return (
+        <details className="status-detail">
+          <summary><span className="pill danger">Error {error.status || "network"}</span></summary>
+          <div className="status-detail-body">
+            <div>Model: <span className="mono">{error.model}</span></div>
+            <div>Time: {formatDate(error.updated_at)}</div>
+            <div className="mono">{error.message || "-"}</div>
+          </div>
+        </details>
+      );
+    }
     return <span className="pill success">active</span>;
   }
   const title = {
@@ -526,12 +571,20 @@ function App() {
                 </div>
               )}
               <table>
-                <thead><tr><th>Name</th><th>API Key</th><th>Status</th></tr></thead>
+                <thead><tr><th>Name</th><th>API Key</th><th>Status</th><th></th></tr></thead>
                 <tbody>{userAPIKeys.map((key) => (
                   <tr key={key.id}>
                     <td>{key.name}</td>
                     <td className="mono">{key.token}</td>
-                    <td>{key.valid ? "active" : "disabled"}</td>
+                    <td>{key.valid ? <span className="pill success">active</span> : <span className="pill">disabled</span>}</td>
+                    <td className="right">
+                      <button className="button" type="button" onClick={() => updateUserAPIKey(key, !key.valid)}>
+                        {key.valid ? "Disable" : "Enable"}
+                      </button>
+                      <button className="icon-button" type="button" title="Delete" onClick={() => deleteUserAPIKey(key)}>
+                        <Trash2 size={15} />
+                      </button>
+                    </td>
                   </tr>
                 ))}</tbody>
               </table>
@@ -546,6 +599,25 @@ function App() {
                   <button className="button primary" type="button" onClick={createAccount} disabled={!newAccount.email}>Add</button>
                 </div>
                 <AccountCards groups={accountGroups} />
+                <table className="section-table">
+                  <thead><tr><th>Email</th><th>Prefix</th><th>Status</th><th className="right">Keys</th><th></th></tr></thead>
+                  <tbody>{accounts.map((account) => (
+                    <tr key={account.id}>
+                      <td>{account.email}</td>
+                      <td className="mono">{account.prefix}</td>
+                      <td>{account.enabled ? <span className="pill success">active</span> : <span className="pill">disabled</span>}</td>
+                      <td className="right mono">{keyCountByAccount[account.id] ?? 0}</td>
+                      <td className="right">
+                        <button className="button" type="button" onClick={() => updateGoogleAccount(account, !account.enabled)}>
+                          {account.enabled ? "Disable" : "Enable"}
+                        </button>
+                        <button className="icon-button" type="button" title="Delete" onClick={() => deleteGoogleAccount(account)}>
+                          <Trash2 size={15} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}</tbody>
+                </table>
               </Panel>
 
               <Panel title="Gemini API Keys" action={<button className="button danger" type="button" onClick={flushCooling}><Trash2 size={16} /> Clear Cooling</button>}>
