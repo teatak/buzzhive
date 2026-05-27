@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: buzzhive-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: buzzhive
+      POSTGRES_USER: buzzhive
+      POSTGRES_PASSWORD: buzzhive
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U buzzhive -d buzzhive"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  buzzhive:
+    build: .
+    image: buzzhive:local
+    container_name: buzzhive
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8787:8787"
+    environment:
+      TZ: Asia/Singapore
+      BUZZHIVE_DATABASE_URL: postgres://buzzhive:buzzhive@postgres:5432/buzzhive?sslmode=disable
+    volumes:
+      - type: bind
+        source: ./config.yaml
+        target: /config/config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  pgdata:

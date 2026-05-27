@@ -1,0 +1,32 @@
+IMAGE ?= teatak/buzzhive
+TAG ?= latest
+PLATFORMS ?= linux/amd64,linux/arm64
+
+.PHONY: docker-build docker-push docker-publish version-patch version-minor version-major
+
+docker-build:
+	docker build -t $(IMAGE):$(TAG) .
+
+docker-push:
+	docker push $(IMAGE):$(TAG)
+
+docker-publish: version-patch
+	docker buildx build --platform $(PLATFORMS) -t $(IMAGE):$(TAG) -t $(IMAGE):$$(cat VERSION) --push .
+
+docker-publish-current:
+	docker buildx build --platform $(PLATFORMS) -t $(IMAGE):$(TAG) -t $(IMAGE):$$(cat VERSION) --push .
+
+version-patch:
+	@awk -F. '{ printf "%d.%d.%d\n", $$1, $$2, $$3 + 1 }' VERSION > VERSION.tmp
+	@mv VERSION.tmp VERSION
+	@cat VERSION
+
+version-minor:
+	@awk -F. '{ printf "%d.%d.0\n", $$1, $$2 + 1 }' VERSION > VERSION.tmp
+	@mv VERSION.tmp VERSION
+	@cat VERSION
+
+version-major:
+	@awk -F. '{ printf "%d.0.0\n", $$1 + 1 }' VERSION > VERSION.tmp
+	@mv VERSION.tmp VERSION
+	@cat VERSION

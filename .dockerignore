@@ -1,0 +1,12 @@
+.DS_Store
+.git
+.pnpm-store
+node_modules
+admin/node_modules
+admin/dist
+admin/tsconfig.tsbuildinfo
+config.yaml
+*.db
+*.db-shm
+*.db-wal
+data

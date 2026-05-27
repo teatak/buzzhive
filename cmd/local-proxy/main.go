@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 	"gopkg.in/yaml.v3"
 )
@@ -43,10 +44,8 @@ type Config struct {
 		BaseURL string `yaml:"base_url"`
 		Timeout string `yaml:"timeout"`
 	} `yaml:"upstream"`
-	Database struct {
-		Path string `yaml:"path"`
-	} `yaml:"database"`
-	Auth struct {
+	Database DatabaseConfig `yaml:"database"`
+	Auth     struct {
 		Tokens []AuthToken `yaml:"tokens"`
 	} `yaml:"auth"`
 	KeyAccounts map[string]string `yaml:"key_accounts"`
@@ -205,8 +204,15 @@ func loadConfig(path string) (Config, error) {
 	if cfg.Upstream.Timeout == "" {
 		cfg.Upstream.Timeout = "10m"
 	}
-	if cfg.Database.Path == "" {
-		cfg.Database.Path = "buzzhive.db"
+	if cfg.Database.Driver == "" {
+		cfg.Database.Driver = "sqlite"
+	}
+	if cfg.Database.Driver == "sqlite" && cfg.Database.Path == "" {
+		cfg.Database.Path = "data/buzzhive.db"
+	}
+	if envURL := os.Getenv("BUZZHIVE_DATABASE_URL"); envURL != "" {
+		cfg.Database.Driver = "postgres"
+		cfg.Database.URL = envURL
 	}
 	if cfg.Retry.MaxAttempts <= 0 {
 		cfg.Retry.MaxAttempts = 8
@@ -236,7 +242,7 @@ func newServer(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	store, err := OpenStore(cfg.Database.Path)
+	store, err := OpenStore(cfg.Database)
 	if err != nil {
 		return nil, err
 	}

@@ -1,27 +1,6 @@
 server:
-  addr: 127.0.0.1:8787
-
-upstream:
-  base_url: https://generativelanguage.googleapis.com
-  timeout: 10m
+  addr: 0.0.0.0:8787
 
 database:
-  path: buzzhive.db
-
-models:
-  auto:
-    - gemini-3.5-flash
-    - gemini-3-flash-preview
-    - gemini-3.1-flash-lite-preview
-    - gemini-2.5-flash
-    - gemini-2.5-flash-lite
-
-retry:
-  max_attempts: 8
-  cooldown_seconds: 60
-
-key_accounts:
-  zhiyezhang17@gmail.com: k01
-  yanggliveus@gmail.com: k02
-
-gemini_api_keys: []
+  driver: postgres
+  url: postgres://buzzhive:buzzhive@127.0.0.1:5432/buzzhive?sslmode=disable

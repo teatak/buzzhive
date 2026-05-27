@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,7 +16,14 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db      *sql.DB
+	dialect string
+}
+
+type DatabaseConfig struct {
+	Driver string `yaml:"driver"`
+	Path   string `yaml:"path"`
+	URL    string `yaml:"url"`
 }
 
 type UsageRecord struct {
@@ -59,12 +67,38 @@ type SessionUser struct {
 	ExpiresAt time.Time
 }
 
-func OpenStore(path string) (*Store, error) {
-	db, err := sql.Open("sqlite3", path+"?_busy_timeout=5000&_journal_mode=WAL")
+func OpenStore(cfg DatabaseConfig) (*Store, error) {
+	driver := strings.ToLower(cfg.Driver)
+	if driver == "" {
+		driver = "sqlite"
+	}
+	var dsn string
+	switch driver {
+	case "sqlite", "sqlite3":
+		driver = "sqlite"
+		if cfg.Path == "" {
+			cfg.Path = "data/buzzhive.db"
+		}
+		dsn = cfg.Path + "?_busy_timeout=5000&_journal_mode=WAL"
+	case "postgres", "postgresql", "pg":
+		driver = "postgres"
+		dsn = cfg.URL
+		if dsn == "" {
+			return nil, errors.New("database.url is required for postgres")
+		}
+	default:
+		return nil, fmt.Errorf("unsupported database driver %q", cfg.Driver)
+	}
+
+	sqlDriver := driver
+	if driver == "sqlite" {
+		sqlDriver = "sqlite3"
+	}
+	db, err := sql.Open(sqlDriver, dsn)
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, dialect: driver}
 	if err := store.Migrate(); err != nil {
 		db.Close()
 		return nil, err
@@ -73,88 +107,21 @@ func OpenStore(path string) (*Store, error) {
 }
 
 func (s *Store) Migrate() error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS app_users (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT NOT NULL UNIQUE,
-			password_hash TEXT NOT NULL,
-			role TEXT NOT NULL DEFAULT 'user',
-			valid INTEGER NOT NULL DEFAULT 1,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS user_api_keys (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
-			name TEXT NOT NULL,
-			token TEXT NOT NULL UNIQUE,
-			valid INTEGER NOT NULL DEFAULT 1,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			FOREIGN KEY (user_id) REFERENCES app_users(id)
-		)`,
-		`CREATE TABLE IF NOT EXISTS app_sessions (
-			token_hash TEXT PRIMARY KEY,
-			user_id INTEGER NOT NULL,
-			expires_at TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			FOREIGN KEY (user_id) REFERENCES app_users(id)
-		)`,
-		`CREATE TABLE IF NOT EXISTS users (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			name TEXT NOT NULL,
-			token TEXT NOT NULL UNIQUE,
-			valid INTEGER NOT NULL DEFAULT 1,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS google_accounts (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			email TEXT NOT NULL UNIQUE,
-			prefix TEXT NOT NULL UNIQUE,
-			enabled INTEGER NOT NULL DEFAULT 1,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS api_keys (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			google_account_id INTEGER NOT NULL,
-			name TEXT NOT NULL UNIQUE,
-			key TEXT NOT NULL,
-			enabled INTEGER NOT NULL DEFAULT 1,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			FOREIGN KEY (google_account_id) REFERENCES google_accounts(id)
-		)`,
-		`CREATE TABLE IF NOT EXISTS usage_logs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER,
-			user_name TEXT NOT NULL,
-			api_key_id INTEGER,
-			api_key_name TEXT NOT NULL,
-			google_account_id INTEGER,
-			google_account_email TEXT NOT NULL,
-			model TEXT NOT NULL,
-			status INTEGER NOT NULL,
-			latency_ms INTEGER NOT NULL,
-			created_at TEXT NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at ON usage_logs(created_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_usage_logs_user_id ON usage_logs(user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_usage_logs_api_key_id ON usage_logs(api_key_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_app_sessions_user_id ON app_sessions(user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_app_sessions_expires_at ON app_sessions(expires_at)`,
-	}
+	stmts := s.migrationStatements()
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
 			return err
 		}
 	}
+	idRefType := "INTEGER"
+	if s.dialect == "postgres" {
+		idRefType = "BIGINT"
+	}
 	for _, column := range []struct {
 		name string
 		def  string
 	}{
-		{"user_api_key_id", "INTEGER"},
+		{"user_api_key_id", idRefType},
 		{"user_api_key_name", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.addColumnIfMissing("usage_logs", column.name, column.def); err != nil {
@@ -167,6 +134,135 @@ func (s *Store) Migrate() error {
 	return nil
 }
 
+func (s *Store) exec(query string, args ...any) (sql.Result, error) {
+	return s.db.Exec(s.rebind(query), args...)
+}
+
+func (s *Store) query(query string, args ...any) (*sql.Rows, error) {
+	return s.db.Query(s.rebind(query), args...)
+}
+
+func (s *Store) queryRow(query string, args ...any) *sql.Row {
+	return s.db.QueryRow(s.rebind(query), args...)
+}
+
+func (s *Store) prepareTx(tx *sql.Tx, query string) (*sql.Stmt, error) {
+	return tx.Prepare(s.rebind(query))
+}
+
+func (s *Store) insertReturningID(query string, args ...any) (int64, error) {
+	if s.dialect == "postgres" {
+		var id int64
+		err := s.queryRow(query+" RETURNING id", args...).Scan(&id)
+		return id, err
+	}
+	res, err := s.exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) rebind(query string) string {
+	if s.dialect != "postgres" {
+		return query
+	}
+	var b strings.Builder
+	b.Grow(len(query) + 8)
+	arg := 1
+	for i := 0; i < len(query); i++ {
+		if query[i] == '?' {
+			b.WriteByte('$')
+			b.WriteString(strconv.Itoa(arg))
+			arg++
+			continue
+		}
+		b.WriteByte(query[i])
+	}
+	return b.String()
+}
+
+func (s *Store) migrationStatements() []string {
+	idType := "INTEGER PRIMARY KEY AUTOINCREMENT"
+	intType := "INTEGER"
+	if s.dialect == "postgres" {
+		idType = "BIGSERIAL PRIMARY KEY"
+		intType = "BIGINT"
+	}
+	return []string{
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS app_users (
+			id %s,
+			username TEXT NOT NULL UNIQUE,
+			password_hash TEXT NOT NULL,
+			role TEXT NOT NULL DEFAULT 'user',
+			valid INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`, idType),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS user_api_keys (
+			id %s,
+			user_id %s NOT NULL,
+			name TEXT NOT NULL,
+			token TEXT NOT NULL UNIQUE,
+			valid INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY (user_id) REFERENCES app_users(id)
+		)`, idType, intType),
+		`CREATE TABLE IF NOT EXISTS app_sessions (
+			token_hash TEXT PRIMARY KEY,
+			user_id ` + intType + ` NOT NULL,
+			expires_at TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			FOREIGN KEY (user_id) REFERENCES app_users(id)
+		)`,
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS users (
+			id %s,
+			name TEXT NOT NULL,
+			token TEXT NOT NULL UNIQUE,
+			valid INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`, idType),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS google_accounts (
+			id %s,
+			email TEXT NOT NULL UNIQUE,
+			prefix TEXT NOT NULL UNIQUE,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`, idType),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_keys (
+			id %s,
+			google_account_id %s NOT NULL,
+			name TEXT NOT NULL UNIQUE,
+			key TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY (google_account_id) REFERENCES google_accounts(id)
+		)`, idType, intType),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS usage_logs (
+			id %s,
+			user_id %s,
+			user_name TEXT NOT NULL,
+			api_key_id %s,
+			api_key_name TEXT NOT NULL,
+			google_account_id %s,
+			google_account_email TEXT NOT NULL,
+			model TEXT NOT NULL,
+			status INTEGER NOT NULL,
+			latency_ms INTEGER NOT NULL,
+			created_at TEXT NOT NULL
+		)`, idType, intType, intType, intType),
+		`CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at ON usage_logs(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_logs_user_id ON usage_logs(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_logs_api_key_id ON usage_logs(api_key_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_app_sessions_user_id ON app_sessions(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_app_sessions_expires_at ON app_sessions(expires_at)`,
+	}
+}
+
 func (s *Store) Seed(cfg Config) error {
 	now := time.Now().Format(time.RFC3339)
 	accountIDs := make(map[string]int64)
@@ -174,7 +270,7 @@ func (s *Store) Seed(cfg Config) error {
 		if email == "" || prefix == "" {
 			continue
 		}
-		if _, err := s.db.Exec(
+		if _, err := s.exec(
 			`INSERT INTO google_accounts (email, prefix, enabled, created_at, updated_at)
 			 VALUES (?, ?, 1, ?, ?)
 			 ON CONFLICT(email) DO UPDATE SET prefix = excluded.prefix, enabled = 1, updated_at = excluded.updated_at`,
@@ -195,7 +291,7 @@ func (s *Store) Seed(cfg Config) error {
 		if accountID == 0 {
 			continue
 		}
-		if _, err := s.db.Exec(
+		if _, err := s.exec(
 			`INSERT INTO api_keys (google_account_id, name, key, enabled, created_at, updated_at)
 			 VALUES (?, ?, ?, 1, ?, ?)
 			 ON CONFLICT(name) DO UPDATE SET google_account_id = excluded.google_account_id, key = excluded.key, enabled = 1, updated_at = excluded.updated_at`,
@@ -208,7 +304,7 @@ func (s *Store) Seed(cfg Config) error {
 }
 
 func (s *Store) AuthTokens() (map[string]AuthToken, error) {
-	rows, err := s.db.Query(`
+	rows, err := s.query(`
 		SELECT k.id, k.user_id, u.username, k.name, k.token, k.valid
 		FROM user_api_keys k
 		JOIN app_users u ON u.id = k.user_id
@@ -233,7 +329,7 @@ func (s *Store) AuthTokens() (map[string]AuthToken, error) {
 }
 
 func (s *Store) Users() ([]AppUser, error) {
-	rows, err := s.db.Query(`SELECT id, username, role, valid FROM app_users ORDER BY id`)
+	rows, err := s.query(`SELECT id, username, role, valid FROM app_users ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +349,7 @@ func (s *Store) Users() ([]AppUser, error) {
 }
 
 func (s *Store) UserAPIKeys() ([]AuthToken, error) {
-	rows, err := s.db.Query(`SELECT id, user_id, name, token, valid FROM user_api_keys ORDER BY id`)
+	rows, err := s.query(`SELECT id, user_id, name, token, valid FROM user_api_keys ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +369,7 @@ func (s *Store) UserAPIKeys() ([]AuthToken, error) {
 }
 
 func (s *Store) GoogleAccounts() ([]GoogleAccount, error) {
-	rows, err := s.db.Query(`SELECT id, email, prefix, enabled FROM google_accounts ORDER BY email`)
+	rows, err := s.query(`SELECT id, email, prefix, enabled FROM google_accounts ORDER BY email`)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +389,7 @@ func (s *Store) GoogleAccounts() ([]GoogleAccount, error) {
 }
 
 func (s *Store) APIKeys() ([]APIKey, error) {
-	rows, err := s.db.Query(`
+	rows, err := s.query(`
 		SELECT k.id, k.google_account_id, k.name, k.key, k.enabled, a.email, a.prefix
 		FROM api_keys k
 		JOIN google_accounts a ON a.id = k.google_account_id
@@ -307,7 +403,7 @@ func (s *Store) APIKeys() ([]APIKey, error) {
 }
 
 func (s *Store) AllAPIKeys() ([]APIKey, error) {
-	rows, err := s.db.Query(`
+	rows, err := s.query(`
 		SELECT k.id, k.google_account_id, k.name, k.key, k.enabled, a.email, a.prefix
 		FROM api_keys k
 		JOIN google_accounts a ON a.id = k.google_account_id
@@ -345,11 +441,10 @@ func (s *Store) CreateAppUser(username, password, role string) (AppUser, error) 
 		return AppUser{}, err
 	}
 	now := time.Now().Format(time.RFC3339)
-	res, err := s.db.Exec(`INSERT INTO app_users (username, password_hash, role, valid, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)`, username, string(hash), role, now, now)
+	id, err := s.insertReturningID(`INSERT INTO app_users (username, password_hash, role, valid, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)`, username, string(hash), role, now, now)
 	if err != nil {
 		return AppUser{}, err
 	}
-	id, _ := res.LastInsertId()
 	return AppUser{ID: id, Username: username, Role: role, Valid: true}, nil
 }
 
@@ -370,11 +465,11 @@ func (s *Store) CreateUserAPIKey(key AuthToken) (AuthToken, error) {
 		key.Name = "user-key-" + randomToken(5)
 	}
 	now := time.Now().Format(time.RFC3339)
-	res, err := s.db.Exec(`INSERT INTO user_api_keys (user_id, name, token, valid, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`, key.UserID, key.Name, key.Token, boolInt(key.Valid), now, now)
+	id, err := s.insertReturningID(`INSERT INTO user_api_keys (user_id, name, token, valid, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`, key.UserID, key.Name, key.Token, boolInt(key.Valid), now, now)
 	if err != nil {
 		return AuthToken{}, err
 	}
-	key.ID, _ = res.LastInsertId()
+	key.ID = id
 	return key, nil
 }
 
@@ -382,7 +477,7 @@ func (s *Store) VerifyPassword(username, password string) (AppUser, error) {
 	var user AppUser
 	var hash string
 	var valid int
-	err := s.db.QueryRow(`SELECT id, username, password_hash, role, valid FROM app_users WHERE username = ?`, username).Scan(&user.ID, &user.Username, &hash, &user.Role, &valid)
+	err := s.queryRow(`SELECT id, username, password_hash, role, valid FROM app_users WHERE username = ?`, username).Scan(&user.ID, &user.Username, &hash, &user.Role, &valid)
 	if err != nil {
 		return AppUser{}, err
 	}
@@ -398,7 +493,7 @@ func (s *Store) VerifyPassword(username, password string) (AppUser, error) {
 
 func (s *Store) SetupRequired() (bool, error) {
 	var count int
-	if err := s.db.QueryRow(`SELECT COUNT(1) FROM app_users`).Scan(&count); err != nil {
+	if err := s.queryRow(`SELECT COUNT(1) FROM app_users`).Scan(&count); err != nil {
 		return false, err
 	}
 	return count == 0, nil
@@ -406,7 +501,7 @@ func (s *Store) SetupRequired() (bool, error) {
 
 func (s *Store) CreateSession(token string, userID int64, expiresAt time.Time) error {
 	now := time.Now().Format(time.RFC3339)
-	_, err := s.db.Exec(
+	_, err := s.exec(
 		`INSERT INTO app_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
 		sessionHash(token), userID, expiresAt.Format(time.RFC3339), now,
 	)
@@ -417,7 +512,7 @@ func (s *Store) UserBySession(token string) (SessionUser, error) {
 	var user AppUser
 	var valid int
 	var expiresAtText string
-	err := s.db.QueryRow(`
+	err := s.queryRow(`
 		SELECT u.id, u.username, u.role, u.valid, s.expires_at
 		FROM app_sessions s
 		JOIN app_users u ON u.id = s.user_id
@@ -439,17 +534,17 @@ func (s *Store) UserBySession(token string) (SessionUser, error) {
 }
 
 func (s *Store) DeleteSession(token string) error {
-	_, err := s.db.Exec(`DELETE FROM app_sessions WHERE token_hash = ?`, sessionHash(token))
+	_, err := s.exec(`DELETE FROM app_sessions WHERE token_hash = ?`, sessionHash(token))
 	return err
 }
 
 func (s *Store) RenewSession(token string, expiresAt time.Time) error {
-	_, err := s.db.Exec(`UPDATE app_sessions SET expires_at = ? WHERE token_hash = ?`, expiresAt.Format(time.RFC3339), sessionHash(token))
+	_, err := s.exec(`UPDATE app_sessions SET expires_at = ? WHERE token_hash = ?`, expiresAt.Format(time.RFC3339), sessionHash(token))
 	return err
 }
 
 func (s *Store) DeleteExpiredSessions() error {
-	_, err := s.db.Exec(`DELETE FROM app_sessions WHERE expires_at <= ?`, time.Now().Format(time.RFC3339))
+	_, err := s.exec(`DELETE FROM app_sessions WHERE expires_at <= ?`, time.Now().Format(time.RFC3339))
 	return err
 }
 
@@ -465,7 +560,7 @@ func (s *Store) CreateGoogleAccount(account GoogleAccount) error {
 		account.Prefix = prefix
 	}
 	now := time.Now().Format(time.RFC3339)
-	_, err := s.db.Exec(`INSERT INTO google_accounts (email, prefix, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`, account.Email, account.Prefix, boolInt(account.Enabled), now, now)
+	_, err := s.exec(`INSERT INTO google_accounts (email, prefix, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`, account.Email, account.Prefix, boolInt(account.Enabled), now, now)
 	return err
 }
 
@@ -473,7 +568,7 @@ func (s *Store) UpdateGoogleAccount(account GoogleAccount) error {
 	if account.ID == 0 || account.Email == "" || account.Prefix == "" {
 		return errors.New("id, email and prefix are required")
 	}
-	_, err := s.db.Exec(`UPDATE google_accounts SET email = ?, prefix = ?, enabled = ?, updated_at = ? WHERE id = ?`, account.Email, account.Prefix, boolInt(account.Enabled), time.Now().Format(time.RFC3339), account.ID)
+	_, err := s.exec(`UPDATE google_accounts SET email = ?, prefix = ?, enabled = ?, updated_at = ? WHERE id = ?`, account.Email, account.Prefix, boolInt(account.Enabled), time.Now().Format(time.RFC3339), account.ID)
 	return err
 }
 
@@ -489,7 +584,7 @@ func (s *Store) CreateAPIKey(key APIKey) error {
 		key.Name = name
 	}
 	now := time.Now().Format(time.RFC3339)
-	_, err := s.db.Exec(`INSERT INTO api_keys (google_account_id, name, key, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`, key.AccountID, key.Name, key.Key, boolInt(key.Enabled), now, now)
+	_, err := s.exec(`INSERT INTO api_keys (google_account_id, name, key, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`, key.AccountID, key.Name, key.Key, boolInt(key.Enabled), now, now)
 	return err
 }
 
@@ -497,7 +592,7 @@ func (s *Store) UpdateAPIKey(key APIKey) error {
 	if key.ID == 0 || key.AccountID == 0 || key.Name == "" || key.Key == "" {
 		return errors.New("id, account_id, name and key are required")
 	}
-	_, err := s.db.Exec(`UPDATE api_keys SET google_account_id = ?, name = ?, key = ?, enabled = ?, updated_at = ? WHERE id = ?`, key.AccountID, key.Name, key.Key, boolInt(key.Enabled), time.Now().Format(time.RFC3339), key.ID)
+	_, err := s.exec(`UPDATE api_keys SET google_account_id = ?, name = ?, key = ?, enabled = ?, updated_at = ? WHERE id = ?`, key.AccountID, key.Name, key.Key, boolInt(key.Enabled), time.Now().Format(time.RFC3339), key.ID)
 	return err
 }
 
@@ -514,7 +609,7 @@ func (s *Store) InsertUsageBatch(records []UsageRecord) error {
 		return err
 	}
 	defer tx.Rollback()
-	stmt, err := tx.Prepare(
+	stmt, err := s.prepareTx(tx,
 		`INSERT INTO usage_logs (user_id, user_name, user_api_key_id, user_api_key_name, api_key_id, api_key_name, google_account_id, google_account_email, model, status, latency_ms, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	)
@@ -538,7 +633,7 @@ func (s *Store) UsageSummary(query UsageQuery) (UsageSummary, error) {
 	where, args := usageWhere(query)
 
 	var avg sql.NullFloat64
-	if err := s.db.QueryRow(
+	if err := s.queryRow(
 		`SELECT COUNT(1), COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0), AVG(latency_ms) FROM usage_logs `+where,
 		args...,
 	).Scan(&summary.Requests, &summary.Errors, &avg); err != nil {
@@ -548,7 +643,7 @@ func (s *Store) UsageSummary(query UsageQuery) (UsageSummary, error) {
 		summary.AvgLatencyMS = avg.Float64
 	}
 
-	rows, err := s.db.Query(`SELECT COALESCE(NULLIF(user_api_key_name, ''), user_name), COUNT(1) FROM usage_logs `+where+` GROUP BY COALESCE(NULLIF(user_api_key_name, ''), user_name) ORDER BY 2 DESC`, args...)
+	rows, err := s.query(`SELECT COALESCE(NULLIF(user_api_key_name, ''), user_name), COUNT(1) FROM usage_logs `+where+` GROUP BY COALESCE(NULLIF(user_api_key_name, ''), user_name) ORDER BY 2 DESC`, args...)
 	if err != nil {
 		return summary, err
 	}
@@ -565,7 +660,7 @@ func (s *Store) UsageSummary(query UsageQuery) (UsageSummary, error) {
 		return summary, err
 	}
 
-	rows, err = s.db.Query(
+	rows, err = s.query(
 		`SELECT substr(created_at, 1, 16), COUNT(1), SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), AVG(latency_ms)
 		 FROM usage_logs `+where+` GROUP BY substr(created_at, 1, 16) ORDER BY substr(created_at, 1, 16)`,
 		args...,
@@ -599,6 +694,10 @@ func usageWhere(query UsageQuery) (string, []any) {
 }
 
 func (s *Store) addColumnIfMissing(table, name, def string) error {
+	if s.dialect == "postgres" {
+		_, err := s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN IF NOT EXISTS ` + name + ` ` + def)
+		return err
+	}
 	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
 		return err
@@ -625,7 +724,7 @@ func (s *Store) addColumnIfMissing(table, name, def string) error {
 
 func (s *Store) accountIDByPrefix(prefix string) (int64, error) {
 	var id int64
-	err := s.db.QueryRow(`SELECT id FROM google_accounts WHERE prefix = ?`, prefix).Scan(&id)
+	err := s.queryRow(`SELECT id FROM google_accounts WHERE prefix = ?`, prefix).Scan(&id)
 	return id, err
 }
 
@@ -633,7 +732,7 @@ func (s *Store) uniqueGoogleAccountPrefix() (string, error) {
 	for i := 0; i < 20; i++ {
 		prefix := "ga_" + randomToken(6)
 		var exists int
-		err := s.db.QueryRow(`SELECT COUNT(1) FROM google_accounts WHERE prefix = ?`, prefix).Scan(&exists)
+		err := s.queryRow(`SELECT COUNT(1) FROM google_accounts WHERE prefix = ?`, prefix).Scan(&exists)
 		if err != nil {
 			return "", err
 		}
@@ -646,13 +745,13 @@ func (s *Store) uniqueGoogleAccountPrefix() (string, error) {
 
 func (s *Store) uniqueAPIKeyName(accountID int64) (string, error) {
 	var prefix string
-	if err := s.db.QueryRow(`SELECT prefix FROM google_accounts WHERE id = ?`, accountID).Scan(&prefix); err != nil {
+	if err := s.queryRow(`SELECT prefix FROM google_accounts WHERE id = ?`, accountID).Scan(&prefix); err != nil {
 		return "", err
 	}
 	for i := 0; i < 20; i++ {
 		name := prefix + "-" + randomToken(5)
 		var exists int
-		err := s.db.QueryRow(`SELECT COUNT(1) FROM api_keys WHERE name = ?`, name).Scan(&exists)
+		err := s.queryRow(`SELECT COUNT(1) FROM api_keys WHERE name = ?`, name).Scan(&exists)
 		if err != nil {
 			return "", err
 		}
