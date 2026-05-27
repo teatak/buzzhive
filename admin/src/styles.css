@@ -282,6 +282,12 @@ p,
   color: var(--warning);
 }
 
+.pill.danger {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: var(--danger);
+}
+
 .account-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -402,6 +408,12 @@ input {
   color: var(--foreground);
 }
 
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+}
+
 select {
   height: 38px;
   width: 100%;
@@ -438,7 +450,8 @@ textarea:focus {
 }
 
 .form-row.key-form {
-  grid-template-columns: minmax(220px, 0.9fr) minmax(260px, 1.2fr) auto;
+  grid-template-columns: minmax(220px, 360px) auto;
+  justify-content: start;
 }
 
 .form-row.user-form {
@@ -502,8 +515,25 @@ textarea:focus {
 
 .filter-row {
   display: grid;
-  grid-template-columns: minmax(220px, 360px);
+  grid-template-columns: minmax(220px, 360px) auto;
+  gap: 8px;
   margin-bottom: 12px;
+}
+
+.generated-key {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #f8fafc;
+}
+
+.generated-key .mono {
+  overflow-wrap: anywhere;
 }
 
 .usage-filters {

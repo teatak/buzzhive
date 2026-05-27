@@ -596,6 +596,20 @@ func (s *Store) UpdateAPIKey(key APIKey) error {
 	return err
 }
 
+func (s *Store) DeleteAPIKeys(ids []int64) error {
+	if len(ids) == 0 {
+		return errors.New("id is required")
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	_, err := s.exec(`DELETE FROM api_keys WHERE id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	return err
+}
+
 func (s *Store) InsertUsage(record UsageRecord) error {
 	return s.InsertUsageBatch([]UsageRecord{record})
 }

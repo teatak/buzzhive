@@ -26,7 +26,7 @@ import (
 
 var corsHeaders = map[string]string{
 	"Access-Control-Allow-Origin":  "*",
-	"Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
+	"Access-Control-Allow-Methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
 	"Access-Control-Allow-Headers": "Content-Type, Authorization, x-goog-api-key",
 	"X-Proxy-Version":              "local-go-v1",
 }
@@ -78,13 +78,22 @@ type APIKey struct {
 	AccountPrefix string `yaml:"-" json:"account_prefix,omitempty"`
 }
 
+type KeyError struct {
+	Key       string `json:"key"`
+	Model     string `json:"model"`
+	Status    int    `json:"status"`
+	Message   string `json:"message"`
+	UpdatedAt string `json:"updated_at"`
+}
+
 type Stats struct {
-	StartedAt   time.Time         `json:"started_at"`
-	Requests    int64             `json:"requests"`
-	ByUser      map[string]int64  `json:"by_user"`
-	ByKey       map[string]int64  `json:"by_key"`
-	Exhausted   map[string]string `json:"exhausted"`
-	LastUpdated time.Time         `json:"last_updated"`
+	StartedAt   time.Time           `json:"started_at"`
+	Requests    int64               `json:"requests"`
+	ByUser      map[string]int64    `json:"by_user"`
+	ByKey       map[string]int64    `json:"by_key"`
+	Exhausted   map[string]string   `json:"exhausted"`
+	KeyErrors   map[string]KeyError `json:"key_errors"`
+	LastUpdated time.Time           `json:"last_updated"`
 }
 
 type KeyState struct {
@@ -92,6 +101,7 @@ type KeyState struct {
 	next      int
 	cooldown  time.Duration
 	exhausted map[string]time.Time
+	errors    map[string]KeyError
 	mu        sync.Mutex
 }
 
@@ -273,12 +283,14 @@ func newServer(cfg Config) (*Server, error) {
 			keys:      apiKeys,
 			cooldown:  time.Duration(cfg.Retry.CooldownSeconds) * time.Second,
 			exhausted: make(map[string]time.Time),
+			errors:    make(map[string]KeyError),
 		},
 		stats: Stats{
 			StartedAt: time.Now(),
 			ByUser:    make(map[string]int64),
 			ByKey:     make(map[string]int64),
 			Exhausted: make(map[string]string),
+			KeyErrors: make(map[string]KeyError),
 		},
 	}
 	go srv.usageWriter()
@@ -317,7 +329,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/flush-exhausted":
 		s.keyState.Flush()
-		s.refreshExhaustedStats()
+		s.refreshKeyStateStats()
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
@@ -465,7 +477,7 @@ func (s *Server) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.keyState.Flush()
-		s.refreshExhaustedStats()
+		s.refreshKeyStateStats()
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
@@ -577,19 +589,33 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, user
 			resp, err := s.forward(r, body, originalModel, model, key)
 			if err != nil {
 				chain = append(chain, fmt.Sprintf("%s(%s):%s", model, key.Name, err.Error()))
+				s.keyState.MarkError(model, key, 0, err.Error())
+				s.refreshKeyStateStats()
 				continue
 			}
 
-			if shouldRetry(resp.StatusCode) {
+			if resp.StatusCode >= 400 {
 				lastStatus = resp.StatusCode
 				lastErrBody = drain(resp.Body, 64*1024)
-				resp.Body.Close()
-				chain = append(chain, fmt.Sprintf("%s(%s):%d", model, key.Name, resp.StatusCode))
 				if resp.StatusCode == http.StatusTooManyRequests {
 					s.keyState.MarkExhausted(model, key)
-					s.refreshExhaustedStats()
+				} else {
+					s.keyState.MarkError(model, key, resp.StatusCode, string(lastErrBody))
 				}
+				s.refreshKeyStateStats()
+			}
+
+			if shouldRetry(resp.StatusCode) {
+				resp.Body.Close()
+				chain = append(chain, fmt.Sprintf("%s(%s):%d", model, key.Name, resp.StatusCode))
 				continue
+			}
+			if resp.StatusCode >= 400 {
+				resp.Body.Close()
+				resp.Body = io.NopCloser(bytes.NewReader(lastErrBody))
+			} else {
+				s.keyState.ClearError(key)
+				s.refreshKeyStateStats()
 			}
 
 			defer resp.Body.Close()
@@ -669,6 +695,32 @@ func (k *KeyState) MarkExhausted(model string, key APIKey) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.exhausted[cooldownKey(model, key.Name)] = time.Now().Add(k.cooldown + time.Duration(mathrand.Intn(500))*time.Millisecond)
+	delete(k.errors, cooldownKey(model, key.Name))
+}
+
+func (k *KeyState) MarkError(model string, key APIKey, status int, message string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if len(message) > 500 {
+		message = message[:500]
+	}
+	k.errors[cooldownKey(model, key.Name)] = KeyError{
+		Key:       key.Name,
+		Model:     model,
+		Status:    status,
+		Message:   strings.TrimSpace(message),
+		UpdatedAt: time.Now().Format(time.RFC3339),
+	}
+}
+
+func (k *KeyState) ClearError(key APIKey) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	for id, item := range k.errors {
+		if item.Key == key.Name {
+			delete(k.errors, id)
+		}
+	}
 }
 
 func (k *KeyState) Flush() {
@@ -683,6 +735,7 @@ func (k *KeyState) Replace(keys []APIKey) {
 	k.keys = keys
 	k.next = 0
 	k.exhausted = make(map[string]time.Time)
+	k.errors = make(map[string]KeyError)
 }
 
 func (k *KeyState) SnapshotExhausted() map[string]string {
@@ -697,6 +750,17 @@ func (k *KeyState) SnapshotExhausted() map[string]string {
 			continue
 		}
 		out[key] = expires.Format(time.RFC3339)
+	}
+	return out
+}
+
+func (k *KeyState) SnapshotErrors() map[string]KeyError {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	out := make(map[string]KeyError, len(k.errors))
+	for key, item := range k.errors {
+		out[key] = item
 	}
 	return out
 }
@@ -760,7 +824,7 @@ func (s *Server) usageWriter() {
 }
 
 func (s *Server) writeStats(w http.ResponseWriter) {
-	s.refreshExhaustedStats()
+	s.refreshKeyStateStats()
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
 	writeJSON(w, http.StatusOK, s.stats)
@@ -826,10 +890,11 @@ func parseUsageTime(value string, loc *time.Location, endOfDay bool) (time.Time,
 	return parsed, nil
 }
 
-func (s *Server) refreshExhaustedStats() {
+func (s *Server) refreshKeyStateStats() {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
 	s.stats.Exhausted = s.keyState.SnapshotExhausted()
+	s.stats.KeyErrors = s.keyState.SnapshotErrors()
 }
 
 func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) bool {
@@ -967,11 +1032,19 @@ func (s *Server) handleUserAPIKeys(w http.ResponseWriter, r *http.Request, actor
 		}
 		key.UserID = actor.ID
 		key.Valid = true
-		if _, err := s.store.CreateUserAPIKey(key); err != nil {
+		if key.Token == "" {
+			key.Token = "bh_" + randomHex(24)
+		}
+		created, err := s.store.CreateUserAPIKey(key)
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		s.reloadRuntime(w)
+		if err := s.reloadRuntimeState(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, created)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
@@ -1044,22 +1117,46 @@ func (s *Server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.reloadRuntime(w)
+	case http.MethodDelete:
+		ids := parseIDs(r.URL.Query().Get("ids"))
+		if len(ids) == 0 {
+			if id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64); id != 0 {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+			return
+		}
+		if err := s.store.DeleteAPIKeys(ids); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		s.reloadRuntime(w)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
 }
 
 func (s *Server) reloadRuntime(w http.ResponseWriter) {
-	tokens, keys, err := s.store.ReloadRuntime()
-	if err != nil {
+	if err := s.reloadRuntimeState(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) reloadRuntimeState() error {
+	tokens, keys, err := s.store.ReloadRuntime()
+	if err != nil {
+		return err
 	}
 	s.runtimeMu.Lock()
 	s.authTokens = tokens
 	s.runtimeMu.Unlock()
 	s.keyState.Replace(keys)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	s.refreshKeyStateStats()
+	return nil
 }
 
 func (s *Server) reloadRuntimeNoResponse() {
@@ -1150,6 +1247,21 @@ func parseModel(path string, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+func parseIDs(value string) []int64 {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	ids := make([]int64, 0, len(parts))
+	for _, part := range parts {
+		id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err == nil && id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func cleanHeaders(in http.Header) http.Header {

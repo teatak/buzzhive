@@ -4,6 +4,7 @@ import {
   Activity,
   BarChart3,
   CircleOff,
+  Copy,
   Database,
   Gauge,
   KeyRound,
@@ -30,6 +31,7 @@ type AdminKey = {
   account_email: string;
   account_prefix: string;
 };
+type KeyError = { key: string; model: string; status: number; message: string; updated_at: string };
 type AdminConfig = {
   addr: string;
   upstream_base_url: string;
@@ -50,6 +52,7 @@ type Stats = {
   requests: number;
   by_key: Record<string, number>;
   exhausted: Record<string, string>;
+  key_errors: Record<string, KeyError>;
   last_updated: string;
 };
 type UsagePoint = { date: string; requests: number; errors: number; avg_latency_ms: number };
@@ -185,10 +188,12 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [newUser, setNewUser] = useState({ username: "", password: "", role: "user" });
   const [newUserKey, setNewUserKey] = useState({ name: "", token: "" });
+  const [generatedUserKey, setGeneratedUserKey] = useState<UserAPIKey | null>(null);
   const [showUserDialog, setShowUserDialog] = useState(false);
   const [newAccount, setNewAccount] = useState({ email: "" });
   const [newKey, setNewKey] = useState({ account_id: "", key: "" });
   const [keyAccountFilter, setKeyAccountFilter] = useState("all");
+  const [selectedKeyIds, setSelectedKeyIds] = useState<number[]>([]);
   const [usageFilter, setUsageFilter] = useState({
     key_id: "all",
     from: isoMinute(addMinutes(new Date(), -360)),
@@ -262,14 +267,14 @@ function App() {
   }
 
   async function createUserAPIKey() {
-    await request("/admin/api/user-api-keys", token, {
+    const created = await request<UserAPIKey>("/admin/api/user-api-keys", token, {
       method: "POST",
       body: JSON.stringify({
         name: newUserKey.name,
-        token: newUserKey.token,
         valid: true,
       }),
     });
+    setGeneratedUserKey(created);
     setNewUserKey({ name: "", token: "" });
     await refresh();
   }
@@ -297,6 +302,17 @@ function App() {
     }
     setNewKey({ account_id: "", key: "" });
     await refresh();
+  }
+
+  async function deleteAPIKeys(ids: number[]) {
+    if (!ids.length) return;
+    await request(`/admin/api/api-keys?ids=${ids.join(",")}`, token, { method: "DELETE" });
+    setSelectedKeyIds((current) => current.filter((id) => !ids.includes(id)));
+    await refresh();
+  }
+
+  async function copyText(value: string) {
+    await navigator.clipboard?.writeText(value);
   }
 
   async function logout() {
@@ -385,8 +401,33 @@ function App() {
   const accountGroups = groupByAccount(keys);
   const byKey = stats.by_key ?? {};
   const filteredKeys = keyAccountFilter === "all" ? keys : keys.filter((key) => String(key.account_id) === keyAccountFilter);
+  const filteredKeyIds = filteredKeys.map((key) => key.id);
+  const allFilteredSelected = filteredKeyIds.length > 0 && filteredKeyIds.every((id) => selectedKeyIds.includes(id));
   const usageSeries = fillUsageSeries(usage?.series ?? [], usageFilter.from, usageFilter.to);
   const ownActiveKeys = userAPIKeys.filter((key) => key.valid);
+
+  function toggleKeySelection(id: number, checked: boolean) {
+    setSelectedKeyIds((current) => checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id));
+  }
+
+  function toggleAllFilteredKeys(checked: boolean) {
+    setSelectedKeyIds((current) => {
+      const currentSet = new Set(current);
+      for (const id of filteredKeyIds) {
+        if (checked) currentSet.add(id);
+        else currentSet.delete(id);
+      }
+      return Array.from(currentSet);
+    });
+  }
+
+  function keyStatus(key: AdminKey): ReactNode {
+    const cooling = Object.entries(stats!.exhausted ?? {}).find(([name]) => name.endsWith(`::${key.name}`));
+    if (cooling) return <span className="pill warn">Cooling {formatDate(cooling[1])}</span>;
+    const error = Object.values(stats!.key_errors ?? {}).find((item) => item.key === key.name);
+    if (error) return <span className="pill danger" title={error.message}>Error {error.status || "network"}</span>;
+    return <span className="pill success">active</span>;
+  }
   const title = {
     dashboard: "Dashboard",
     users: "Users",
@@ -474,9 +515,16 @@ function App() {
             <Panel title="My API Keys" action={<span className="pill">{userAPIKeys.length} keys</span>}>
               <div className="form-row key-form">
                 <input placeholder="Key name" value={newUserKey.name} onChange={(event) => setNewUserKey({ ...newUserKey, name: event.target.value })} />
-                <input placeholder="API key" value={newUserKey.token} onChange={(event) => setNewUserKey({ ...newUserKey, token: event.target.value })} />
-                <button className="button primary" type="button" onClick={createUserAPIKey} disabled={!newUserKey.token}>Add</button>
+                <button className="button primary" type="button" onClick={createUserAPIKey}>Generate</button>
               </div>
+              {generatedUserKey && (
+                <div className="generated-key">
+                  <span className="mono">{generatedUserKey.token}</span>
+                  <button className="icon-button" type="button" title="Copy" onClick={() => copyText(generatedUserKey.token)}>
+                    <Copy size={15} />
+                  </button>
+                </div>
+              )}
               <table>
                 <thead><tr><th>Name</th><th>API Key</th><th>Status</th></tr></thead>
                 <tbody>{userAPIKeys.map((key) => (
@@ -519,15 +567,25 @@ function App() {
                     <option value="all">All Google accounts</option>
                     {accounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}
                   </select>
+                  <button className="button danger" type="button" onClick={() => deleteAPIKeys(selectedKeyIds)} disabled={!selectedKeyIds.length}>
+                    <Trash2 size={16} /> Delete Selected
+                  </button>
                 </div>
                 <table>
-                  <thead><tr><th>Name</th><th>Account</th><th>Key</th><th className="right">Requests</th></tr></thead>
+                  <thead><tr><th><input type="checkbox" checked={allFilteredSelected} onChange={(event) => toggleAllFilteredKeys(event.target.checked)} /></th><th>Name</th><th>Account</th><th>Key</th><th>Status</th><th className="right">Requests</th><th></th></tr></thead>
                   <tbody>{filteredKeys.map((key) => (
                     <tr key={key.name}>
+                      <td><input type="checkbox" checked={selectedKeyIds.includes(key.id)} onChange={(event) => toggleKeySelection(key.id, event.target.checked)} /></td>
                       <td className="mono">{key.name}</td>
                       <td>{key.account_email || <span className="muted">Unmapped</span>}</td>
                       <td className="mono">{key.key}</td>
+                      <td>{keyStatus(key)}</td>
                       <td className="right mono">{byKey[key.name] ?? 0}</td>
+                      <td className="right">
+                        <button className="icon-button" type="button" title="Delete" onClick={() => deleteAPIKeys([key.id])}>
+                          <Trash2 size={15} />
+                        </button>
+                      </td>
                     </tr>
                   ))}</tbody>
                 </table>
