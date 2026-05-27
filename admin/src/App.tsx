@@ -5,6 +5,8 @@ import {
   CircleOff,
   Copy,
   Database,
+  Eye,
+  EyeOff,
   Gauge,
   KeyRound,
   LogOut,
@@ -49,6 +51,7 @@ export function App() {
   const [newUser, setNewUser] = useState({ username: "", password: "", role: "user" });
   const [newUserKey, setNewUserKey] = useState({ name: "", token: "" });
   const [generatedUserKey, setGeneratedUserKey] = useState<UserAPIKey | null>(null);
+  const [revealedUserKeys, setRevealedUserKeys] = useState<Record<number, string>>({});
   const [showUserDialog, setShowUserDialog] = useState(false);
   const [newAccount, setNewAccount] = useState({ email: "" });
   const [newKey, setNewKey] = useState({ account_id: "", key: "" });
@@ -145,6 +148,19 @@ export function App() {
       body: JSON.stringify({ id: key.id, valid }),
     });
     await refresh();
+  }
+
+  async function toggleUserAPIKeyReveal(key: UserAPIKey) {
+    if (revealedUserKeys[key.id]) {
+      setRevealedUserKeys((current) => {
+        const next = { ...current };
+        delete next[key.id];
+        return next;
+      });
+      return;
+    }
+    const full = await request<UserAPIKey>(`/admin/api/user-api-keys?id=${key.id}`, token);
+    setRevealedUserKeys((current) => ({ ...current, [key.id]: full.token }));
   }
 
   async function deleteUserAPIKey(key: UserAPIKey) {
@@ -439,9 +455,12 @@ export function App() {
                 <tbody>{userAPIKeys.map((key) => (
                   <tr key={key.id}>
                     <td>{key.name}</td>
-                    <td className="mono">{key.token}</td>
+                    <td className="mono">{revealedUserKeys[key.id] ?? key.token}</td>
                     <td>{key.valid ? <span className="pill success">active</span> : <span className="pill">disabled</span>}</td>
                     <td className="right">
+                      <button className="icon-button" type="button" title={revealedUserKeys[key.id] ? "Hide" : "Reveal"} onClick={() => toggleUserAPIKeyReveal(key)}>
+                        {revealedUserKeys[key.id] ? <EyeOff size={15} /> : <Eye size={15} />}
+                      </button>
                       <button className="button" type="button" onClick={() => updateUserAPIKey(key, !key.valid)}>
                         {key.valid ? "Disable" : "Enable"}
                       </button>

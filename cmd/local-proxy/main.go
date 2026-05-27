@@ -1024,6 +1024,15 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUserAPIKeys(w http.ResponseWriter, r *http.Request, actor AppUser) {
 	switch r.Method {
 	case http.MethodGet:
+		if id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64); id != 0 {
+			key, err := s.store.UserAPIKey(id, actor.ID)
+			if err != nil {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+				return
+			}
+			writeJSON(w, http.StatusOK, key)
+			return
+		}
 		keys, err := s.store.UserAPIKeys()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

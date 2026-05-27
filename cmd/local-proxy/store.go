@@ -368,6 +368,18 @@ func (s *Store) UserAPIKeys() ([]AuthToken, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) UserAPIKey(id, userID int64) (AuthToken, error) {
+	var key AuthToken
+	var valid int
+	err := s.queryRow(`SELECT id, user_id, name, token, valid FROM user_api_keys WHERE id = ? AND user_id = ?`, id, userID).
+		Scan(&key.ID, &key.UserID, &key.Name, &key.Token, &valid)
+	if err != nil {
+		return AuthToken{}, err
+	}
+	key.Valid = valid != 0
+	return key, nil
+}
+
 func (s *Store) GoogleAccounts() ([]GoogleAccount, error) {
 	rows, err := s.query(`SELECT id, email, prefix, enabled FROM google_accounts ORDER BY email`)
 	if err != nil {
