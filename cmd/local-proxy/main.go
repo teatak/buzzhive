@@ -223,12 +223,6 @@ func loadConfig(path string) (Config, error) {
 	if len(cfg.Models.Auto) == 0 {
 		cfg.Models.Auto = []string{"gemini-3.5-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"}
 	}
-	if len(cfg.KeyAccounts) == 0 {
-		cfg.KeyAccounts = map[string]string{
-			"zhiyezhang17@gmail.com": "k01",
-			"yanggliveus@gmail.com":  "k02",
-		}
-	}
 	return cfg, nil
 }
 
