@@ -36,9 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | e
 ## Run
 
 ```bash
-cp config.example.yaml config.yaml
-docker compose up -d postgres
-go run ./cmd/local-proxy -config config.yaml
+make dev
 ```
 
 Admin UI:
@@ -81,6 +79,12 @@ models:
 cd admin
 pnpm install
 pnpm build
+```
+
+For frontend development:
+
+```bash
+make admin-dev
 ```
 
 The Go server serves the built frontend from `admin/dist` by default, with an embedded fallback for basic admin access.

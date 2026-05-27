@@ -1414,10 +1414,14 @@ const adminHTML = `<!doctype html>
 
     <main id="loginView" class="login">
       <section class="login-panel">
-        <h2 class="card-title">Admin Login</h2>
+        <h2 class="card-title" id="loginTitle">Admin Login</h2>
         <div class="field">
-          <label for="tokenInput">Access key</label>
-          <input id="tokenInput" type="password" autocomplete="current-password" autofocus>
+          <label for="usernameInput">Username</label>
+          <input id="usernameInput" autocomplete="username" autofocus>
+        </div>
+        <div class="field">
+          <label for="passwordInput">Password</label>
+          <input id="passwordInput" type="password" autocomplete="current-password">
         </div>
         <button class="btn primary" id="loginBtn" type="button">Login</button>
         <div class="error" id="loginError"></div>
@@ -1490,7 +1494,7 @@ const adminHTML = `<!doctype html>
   </div>
 
   <script>
-    const state = { token: localStorage.getItem('buzzhive-admin-key') || '', config: null, stats: null };
+    const state = { token: localStorage.getItem('buzzhive-admin-key') || '', config: null, stats: null, setupRequired: false };
     const $ = (id) => document.getElementById(id);
 
     function headers() {
@@ -1517,16 +1521,23 @@ const adminHTML = `<!doctype html>
       return '<div class="row"><span class="subtle">' + label + '</span><span class="mono">' + value + '</span></div>';
     }
     async function login() {
-      state.token = $('tokenInput').value.trim();
       $('loginError').textContent = '';
       try {
-        const session = await api('/admin/api/session');
-        localStorage.setItem('buzzhive-admin-key', state.token);
-        $('userPill').textContent = session.user.name || 'admin';
+        const path = state.setupRequired ? '/admin/api/setup' : '/admin/api/login';
+        const result = await api(path, {
+          method: 'POST',
+          body: JSON.stringify({
+            username: $('usernameInput').value.trim(),
+            password: $('passwordInput').value
+          })
+        });
+        state.token = result.token;
+        localStorage.setItem('buzzhive-admin-key', result.token);
+        $('userPill').textContent = result.user.username || 'admin';
         showApp(true);
         await load();
       } catch (err) {
-        $('loginError').textContent = 'Invalid key';
+        $('loginError').textContent = 'Login failed';
         localStorage.removeItem('buzzhive-admin-key');
       }
     }
@@ -1569,28 +1580,32 @@ const adminHTML = `<!doctype html>
         : '<div class="empty">No cooling keys</div>';
     }
     $('loginBtn').addEventListener('click', login);
-    $('tokenInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') login(); });
+    $('passwordInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') login(); });
     $('refreshBtn').addEventListener('click', load);
     $('logoutBtn').addEventListener('click', () => {
       state.token = '';
       localStorage.removeItem('buzzhive-admin-key');
       showApp(false);
-      $('tokenInput').focus();
+      $('usernameInput').focus();
     });
     $('flushBtn').addEventListener('click', async () => {
       await api('/admin/api/flush-exhausted', { method: 'POST' });
       await load();
     });
 
-    if (state.token) {
-      api('/admin/api/session')
-        .then((session) => {
-          $('userPill').textContent = session.user.name || 'admin';
+    api('/admin/api/setup-state')
+      .then((setup) => {
+        state.setupRequired = setup.setup_required;
+        $('loginTitle').textContent = setup.setup_required ? 'Create Initial Admin' : 'Admin Login';
+        $('loginBtn').textContent = setup.setup_required ? 'Create admin' : 'Login';
+        if (!state.token) return;
+        return api('/admin/api/session').then((session) => {
+          $('userPill').textContent = session.user.username || 'admin';
           showApp(true);
           return load();
-        })
-        .catch(() => showApp(false));
-    }
+        });
+      })
+      .catch(() => showApp(false));
   </script>
 </body>
 </html>`

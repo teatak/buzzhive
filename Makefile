@@ -2,7 +2,15 @@ IMAGE ?= teatak/buzzhive
 TAG ?= latest
 PLATFORMS ?= linux/amd64,linux/arm64
 
-.PHONY: docker-build docker-push docker-publish version-patch version-minor version-major
+.PHONY: dev admin-dev docker-build docker-push docker-publish docker-publish-current version-patch version-minor version-major
+
+dev:
+	@test -f config.yaml || cp config.example.yaml config.yaml
+	docker compose up -d postgres
+	go run ./cmd/local-proxy -config config.yaml
+
+admin-dev:
+	cd admin && pnpm install && pnpm dev
 
 docker-build:
 	docker build -t $(IMAGE):$(TAG) .
