@@ -27,7 +27,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -411,8 +412,20 @@ select {
   color: var(--foreground);
 }
 
+textarea {
+  width: 100%;
+  min-height: 112px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--foreground);
+  resize: vertical;
+}
+
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: var(--primary);
   outline: 2px solid var(--ring);
 }
@@ -430,6 +443,17 @@ select:focus {
 
 .form-row.user-form {
   grid-template-columns: minmax(160px, 1fr) minmax(180px, 1fr) minmax(120px, 0.5fr) auto;
+}
+
+.api-key-form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.api-key-form .button {
+  justify-self: start;
 }
 
 .section-spacer {

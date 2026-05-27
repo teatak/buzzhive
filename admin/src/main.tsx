@@ -284,14 +284,17 @@ function App() {
   }
 
   async function createKey() {
-    await request("/admin/api/api-keys", token, {
-      method: "POST",
-      body: JSON.stringify({
-        account_id: Number(newKey.account_id),
-        key: newKey.key,
-        enabled: true,
-      }),
-    });
+    const values = newKey.key.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+    for (const value of values) {
+      await request("/admin/api/api-keys", token, {
+        method: "POST",
+        body: JSON.stringify({
+          account_id: Number(newKey.account_id),
+          key: value,
+          enabled: true,
+        }),
+      });
+    }
     setNewKey({ account_id: "", key: "" });
     await refresh();
   }
@@ -498,13 +501,18 @@ function App() {
               </Panel>
 
               <Panel title="Gemini API Keys" action={<button className="button danger" type="button" onClick={flushCooling}><Trash2 size={16} /> Clear Cooling</button>}>
-                <div className="form-row key-form">
+                <div className="api-key-form">
                   <select value={newKey.account_id} onChange={(event) => setNewKey({ ...newKey, account_id: event.target.value })}>
                     <option value="">Google account</option>
                     {accounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}
                   </select>
-                  <input placeholder="AIza..." value={newKey.key} onChange={(event) => setNewKey({ ...newKey, key: event.target.value })} />
-                  <button className="button primary" type="button" onClick={createKey} disabled={!newKey.account_id || !newKey.key}>Add</button>
+                  <textarea
+                    placeholder={"AIza...\nAIza..."}
+                    rows={4}
+                    value={newKey.key}
+                    onChange={(event) => setNewKey({ ...newKey, key: event.target.value })}
+                  />
+                  <button className="button primary" type="button" onClick={createKey} disabled={!newKey.account_id || !newKey.key.trim()}>Add</button>
                 </div>
                 <div className="filter-row">
                   <select value={keyAccountFilter} onChange={(event) => setKeyAccountFilter(event.target.value)}>
