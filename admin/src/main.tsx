@@ -176,6 +176,7 @@ function App() {
   const [token, setToken] = useState(localStorage.getItem(storageKey) ?? "");
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [setupRequired, setSetupRequired] = useState(false);
+  const [booting, setBooting] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
   const [config, setConfig] = useState<AdminConfig | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -362,8 +363,9 @@ function App() {
     request<{ setup_required: boolean }>("/admin/api/setup-state", "")
       .then((state) => setSetupRequired(state.setup_required))
       .then(() => {
-        if (token) load(token).catch(() => logout());
-      });
+        if (token) return load(token).catch(() => logout());
+      })
+      .finally(() => setBooting(false));
   }, []);
 
   useEffect(() => {
@@ -389,6 +391,10 @@ function App() {
       navigate("dashboard");
     }
   }, [session, view]);
+
+  if (booting) {
+    return <main className="login-page" />;
+  }
 
   if (!session || !config || !stats) {
     return (

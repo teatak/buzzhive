@@ -304,6 +304,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Path == "/" {
+		http.Redirect(w, r, "/admin/", http.StatusFound)
+		return
+	}
+
 	if r.URL.Path == "/admin" || r.URL.Path == "/admin/" || strings.HasPrefix(r.URL.Path, "/admin/assets/") {
 		if s.serveAdmin(w, r) {
 			return
