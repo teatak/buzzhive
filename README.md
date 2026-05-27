@@ -26,7 +26,12 @@ Upgrade:
 curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | sh
 ```
 
-The installer reuses `/opt/buzzhive/.env` and the existing Postgres volume, then pulls the latest image and restarts the services.
+The installer writes files to the current directory by default. On upgrade, it reuses `.env` and the existing Postgres volume, then pulls the latest image and restarts the services.
+To choose another directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | env INSTALL_DIR=/opt/buzzhive sh
+```
 
 ## Run
 

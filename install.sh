@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-INSTALL_DIR="${INSTALL_DIR:-/opt/buzzhive}"
+INSTALL_DIR="${INSTALL_DIR:-$PWD}"
 REQUESTED_IMAGE="${IMAGE:-}"
 REQUESTED_PORT="${PORT:-}"
 REQUESTED_POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
@@ -68,12 +68,8 @@ chmod 600 .env
 cat > config.yaml <<EOF
 server:
   addr: 0.0.0.0:8787
-
-database:
-  driver: postgres
-  url: postgres://buzzhive:${POSTGRES_PASSWORD}@postgres:5432/buzzhive?sslmode=disable
 EOF
-chmod 600 config.yaml
+chmod 644 config.yaml
 
 cat > docker-compose.yml <<EOF
 services:
