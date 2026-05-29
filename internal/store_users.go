@@ -11,7 +11,7 @@ func (s *Store) AuthTokens() (map[string]AuthToken, error) {
 	rows, err := s.query(`
 		SELECT k.id, k.user_id, u.username, k.name, k.token, k.valid
 		FROM user_api_keys k
-		JOIN app_users u ON u.id = k.user_id
+		JOIN users u ON u.id = k.user_id
 		WHERE k.valid = 1 AND u.valid = 1
 		ORDER BY k.id`)
 	if err != nil {
@@ -33,7 +33,7 @@ func (s *Store) AuthTokens() (map[string]AuthToken, error) {
 }
 
 func (s *Store) Users() ([]AppUser, error) {
-	rows, err := s.query(`SELECT id, username, role, valid FROM app_users ORDER BY id`)
+	rows, err := s.query(`SELECT id, username, role, valid FROM users ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func (s *Store) CreateAppUser(username, password, role string) (AppUser, error) 
 		return AppUser{}, err
 	}
 	now := time.Now().Format(time.RFC3339)
-	id, err := s.insertReturningID(`INSERT INTO app_users (username, password_hash, role, valid, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)`, username, string(hash), role, now, now)
+	id, err := s.insertReturningID(`INSERT INTO users (username, password_hash, role, valid, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)`, username, string(hash), role, now, now)
 	if err != nil {
 		return AppUser{}, err
 	}
@@ -148,7 +148,7 @@ func (s *Store) VerifyPassword(username, password string) (AppUser, error) {
 	var user AppUser
 	var hash string
 	var valid int
-	err := s.queryRow(`SELECT id, username, password_hash, role, valid FROM app_users WHERE username = ?`, username).Scan(&user.ID, &user.Username, &hash, &user.Role, &valid)
+	err := s.queryRow(`SELECT id, username, password_hash, role, valid FROM users WHERE username = ?`, username).Scan(&user.ID, &user.Username, &hash, &user.Role, &valid)
 	if err != nil {
 		return AppUser{}, err
 	}
@@ -167,7 +167,7 @@ func (s *Store) ChangePassword(userID int64, currentPassword, nextPassword strin
 		return errors.New("current_password and new_password are required")
 	}
 	var hash string
-	if err := s.queryRow(`SELECT password_hash FROM app_users WHERE id = ? AND valid = 1`, userID).Scan(&hash); err != nil {
+	if err := s.queryRow(`SELECT password_hash FROM users WHERE id = ? AND valid = 1`, userID).Scan(&hash); err != nil {
 		return err
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(currentPassword)); err != nil {
@@ -177,13 +177,13 @@ func (s *Store) ChangePassword(userID int64, currentPassword, nextPassword strin
 	if err != nil {
 		return err
 	}
-	_, err = s.exec(`UPDATE app_users SET password_hash = ?, updated_at = ? WHERE id = ?`, string(nextHash), time.Now().Format(time.RFC3339), userID)
+	_, err = s.exec(`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, string(nextHash), time.Now().Format(time.RFC3339), userID)
 	return err
 }
 
 func (s *Store) SetupRequired() (bool, error) {
 	var count int
-	if err := s.queryRow(`SELECT COUNT(1) FROM app_users`).Scan(&count); err != nil {
+	if err := s.queryRow(`SELECT COUNT(1) FROM users`).Scan(&count); err != nil {
 		return false, err
 	}
 	return count == 0, nil
@@ -192,7 +192,7 @@ func (s *Store) SetupRequired() (bool, error) {
 func (s *Store) CreateSession(token string, userID int64, expiresAt time.Time) error {
 	now := time.Now().Format(time.RFC3339)
 	_, err := s.exec(
-		`INSERT INTO app_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
 		sessionHash(token), userID, expiresAt.Format(time.RFC3339), now,
 	)
 	return err
@@ -204,8 +204,8 @@ func (s *Store) UserBySession(token string) (SessionUser, error) {
 	var expiresAtText string
 	err := s.queryRow(`
 		SELECT u.id, u.username, u.role, u.valid, s.expires_at
-		FROM app_sessions s
-		JOIN app_users u ON u.id = s.user_id
+		FROM sessions s
+		JOIN users u ON u.id = s.user_id
 		WHERE s.token_hash = ? AND s.expires_at > ?`,
 		sessionHash(token), time.Now().Format(time.RFC3339),
 	).Scan(&user.ID, &user.Username, &user.Role, &valid, &expiresAtText)
@@ -224,16 +224,16 @@ func (s *Store) UserBySession(token string) (SessionUser, error) {
 }
 
 func (s *Store) DeleteSession(token string) error {
-	_, err := s.exec(`DELETE FROM app_sessions WHERE token_hash = ?`, sessionHash(token))
+	_, err := s.exec(`DELETE FROM sessions WHERE token_hash = ?`, sessionHash(token))
 	return err
 }
 
 func (s *Store) RenewSession(token string, expiresAt time.Time) error {
-	_, err := s.exec(`UPDATE app_sessions SET expires_at = ? WHERE token_hash = ?`, expiresAt.Format(time.RFC3339), sessionHash(token))
+	_, err := s.exec(`UPDATE sessions SET expires_at = ? WHERE token_hash = ?`, expiresAt.Format(time.RFC3339), sessionHash(token))
 	return err
 }
 
 func (s *Store) DeleteExpiredSessions() error {
-	_, err := s.exec(`DELETE FROM app_sessions WHERE expires_at <= ?`, time.Now().Format(time.RFC3339))
+	_, err := s.exec(`DELETE FROM sessions WHERE expires_at <= ?`, time.Now().Format(time.RFC3339))
 	return err
 }

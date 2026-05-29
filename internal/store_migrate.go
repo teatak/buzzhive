@@ -3,6 +3,9 @@ package buzzhive
 import "fmt"
 
 func (s *Store) Migrate() error {
+	if err := s.migrateUserTables(); err != nil {
+		return err
+	}
 	stmts := s.migrationStatements()
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -72,7 +75,7 @@ func (s *Store) migrationStatements() []string {
 		intType = "BIGINT"
 	}
 	return []string{
-		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS app_users (
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS users (
 			id %s,
 			username TEXT NOT NULL UNIQUE,
 			password_hash TEXT NOT NULL,
@@ -89,23 +92,15 @@ func (s *Store) migrationStatements() []string {
 			valid INTEGER NOT NULL DEFAULT 1,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
-			FOREIGN KEY (user_id) REFERENCES app_users(id)
+			FOREIGN KEY (user_id) REFERENCES users(id)
 		)`, idType, intType),
-		`CREATE TABLE IF NOT EXISTS app_sessions (
+		`CREATE TABLE IF NOT EXISTS sessions (
 			token_hash TEXT PRIMARY KEY,
 			user_id ` + intType + ` NOT NULL,
 			expires_at TEXT NOT NULL,
 			created_at TEXT NOT NULL,
-			FOREIGN KEY (user_id) REFERENCES app_users(id)
+			FOREIGN KEY (user_id) REFERENCES users(id)
 		)`,
-		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS users (
-			id %s,
-			name TEXT NOT NULL,
-			token TEXT NOT NULL UNIQUE,
-			valid INTEGER NOT NULL DEFAULT 1,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`, idType),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS google_accounts (
 			id %s,
 			email TEXT NOT NULL UNIQUE,
@@ -163,9 +158,65 @@ func (s *Store) migrationStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_model_usage_logs_created_at ON model_usage_logs(created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_model_usage_logs_api_key_id ON model_usage_logs(api_key_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_model_usage_logs_model ON model_usage_logs(model)`,
-		`CREATE INDEX IF NOT EXISTS idx_app_sessions_user_id ON app_sessions(user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_app_sessions_expires_at ON app_sessions(expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 	}
+}
+
+func (s *Store) migrateUserTables() error {
+	usersExists, err := s.tableExists("users")
+	if err != nil {
+		return err
+	}
+	if usersExists {
+		hasUsername, err := s.columnExists("users", "username")
+		if err != nil {
+			return err
+		}
+		hasPasswordHash, err := s.columnExists("users", "password_hash")
+		if err != nil {
+			return err
+		}
+		if !hasUsername || !hasPasswordHash {
+			legacyExists, err := s.tableExists("legacy_users")
+			if err != nil {
+				return err
+			}
+			if legacyExists {
+				if _, err := s.db.Exec(`DROP TABLE users`); err != nil {
+					return err
+				}
+			} else if _, err := s.db.Exec(`ALTER TABLE users RENAME TO legacy_users`); err != nil {
+				return err
+			}
+			usersExists = false
+		}
+	}
+
+	appUsersExists, err := s.tableExists("app_users")
+	if err != nil {
+		return err
+	}
+	if appUsersExists && !usersExists {
+		if _, err := s.db.Exec(`ALTER TABLE app_users RENAME TO users`); err != nil {
+			return err
+		}
+	}
+
+	appSessionsExists, err := s.tableExists("app_sessions")
+	if err != nil {
+		return err
+	}
+	sessionsExists, err := s.tableExists("sessions")
+	if err != nil {
+		return err
+	}
+	if appSessionsExists && !sessionsExists {
+		if _, err := s.db.Exec(`ALTER TABLE app_sessions RENAME TO sessions`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) addColumnIfMissing(table, name, def string) error {
@@ -195,4 +246,40 @@ func (s *Store) addColumnIfMissing(table, name, def string) error {
 	}
 	_, err = s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + name + ` ` + def)
 	return err
+}
+
+func (s *Store) tableExists(name string) (bool, error) {
+	var count int
+	if s.dialect == "postgres" {
+		err := s.queryRow(`SELECT COUNT(1) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ?`, name).Scan(&count)
+		return count > 0, err
+	}
+	err := s.queryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&count)
+	return count > 0, err
+}
+
+func (s *Store) columnExists(table, name string) (bool, error) {
+	if s.dialect == "postgres" {
+		var count int
+		err := s.queryRow(`SELECT COUNT(1) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ? AND column_name = ?`, table, name).Scan(&count)
+		return count > 0, err
+	}
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var columnName, columnType string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if columnName == name {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }

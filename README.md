@@ -169,6 +169,6 @@ make docker-publish-current
 
 ## Notes
 
-- The Go server serves `admin/dist` by default and has an embedded fallback admin UI.
+- The Go server serves `admin/dist` by default.
 - Admin sessions are stored in the database for 7 days and renew when they have 3 days or less remaining.
 - `config.yaml`, database files, and built frontend assets are intentionally ignored.
