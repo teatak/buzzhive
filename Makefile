@@ -7,7 +7,7 @@ PLATFORMS ?= linux/amd64,linux/arm64
 dev: admin-build
 	@test -f config.yaml || cp config.example.yaml config.yaml
 	docker compose up -d postgres
-	go run ./cmd/local-proxy -config config.yaml
+	go run ./cmd/buzzhive -config config.yaml
 
 admin-build:
 	cd admin && pnpm install --frozen-lockfile --config.confirm-modules-purge=false && pnpm build

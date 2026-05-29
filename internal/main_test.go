@@ -1,4 +1,4 @@
-package main
+package buzzhive
 
 import (
 	"net/http"

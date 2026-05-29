@@ -16,7 +16,8 @@ RUN apt-get update \
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ ./cmd/
-RUN CGO_ENABLED=1 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/buzzhive ./cmd/local-proxy
+COPY internal/ ./internal/
+RUN CGO_ENABLED=1 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/buzzhive ./cmd/buzzhive
 
 FROM debian:bookworm-slim
 RUN apt-get update \

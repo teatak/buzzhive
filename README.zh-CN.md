@@ -1,48 +1,48 @@
 # BuzzHive
 
-BuzzHive is a self-hosted Gemini API proxy with multi-user API keys, Google account/key pooling, failover, automatic bad-key disabling, usage analytics, and a web admin UI.
+BuzzHive 是一个自托管 Gemini API 代理，支持多用户 API Key、Google 账号/Key 池、失败重试、故障切换、异常 Key 自动停用、用量统计和 Web 管理后台。
 
-[简体中文](README.zh-CN.md)
+[English](README.md)
 
-## Features
+## 功能
 
-- Web admin UI for users, user API keys, Google accounts, Gemini keys, runtime status, and usage charts.
-- User-facing API keys sent with `Authorization: Bearer <api-key>`.
-- Google account and Gemini key pool with retry, cooldown, failover, and request counting.
-- Automatically disables invalid/suspended upstream keys on 400 API key invalid, 401, and 403 responses.
-- Natural-day usage views, draggable chart range selection, and per-key/model statistics.
-- Postgres-backed users, sessions, accounts, keys, and usage logs.
+- Web 管理后台：用户、用户 API Keys、Google 账号、Gemini Keys、运行状态、用量图表。
+- 对外使用用户 API Key，通过 `Authorization: Bearer <api-key>` 访问。
+- Google 账号和 Gemini Key 池：支持重试、冷却、故障切换和请求计数。
+- 上游 Key 异常时自动停用：包括 400 API key invalid、401、403。
+- 按自然日统计用量，支持从图表拖拽选择时间范围。
+- Postgres 持久化用户、会话、账号、Keys 和用量日志。
 
-## Quick Install
+## 快速安装
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | sh
 ```
 
-Then open:
+然后打开：
 
 ```text
-http://<server-ip>:9622/admin/
+http://<服务器 IP>:9622/admin/
 ```
 
-Optional:
+可选参数：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | env INSTALL_DIR=/opt/buzzhive PORT=9622 IMAGE=teatak/buzzhive:latest sh
 ```
 
-Run the same command again to upgrade. The installer keeps `.env`, `config.yaml`, and `./pgdata`.
+再次运行同一条命令即可升级。安装脚本会保留 `.env`、`config.yaml` 和 `./pgdata`。
 
 ## Docker Compose
 
-Create `config.yaml`:
+创建 `config.yaml`：
 
 ```yaml
 server:
   addr: 0.0.0.0:9622
 ```
 
-Create `docker-compose.yml`:
+创建 `docker-compose.yml`：
 
 ```yaml
 services:
@@ -76,46 +76,46 @@ services:
       - ./config.yaml:/config/config.yaml:ro
 ```
 
-Start:
+启动：
 
 ```bash
 docker compose up -d
 ```
 
-Upgrade:
+升级：
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
-This repository also includes [docker-compose.example.yml](docker-compose.example.yml).
+仓库里也提供了 [docker-compose.example.yml](docker-compose.example.yml)。
 
-## Local Development
+## 本地开发
 
 ```bash
 make dev
 ```
 
-Admin UI:
+管理后台：
 
 ```text
 http://127.0.0.1:9622/admin/
 ```
 
-Proxy endpoint example:
+代理接口示例：
 
 ```text
 http://127.0.0.1:9622/v1beta/models/gemini-auto:generateContent
 ```
 
-On first launch, create the initial admin user in the admin UI. Then create user API keys in the UI and pass them as:
+首次启动时，在管理后台创建初始管理员。之后在 UI 中创建用户 API Key，并这样调用：
 
 ```http
 Authorization: Bearer <api-key>
 ```
 
-## Admin Frontend
+## 前端管理后台
 
 ```bash
 cd admin
@@ -123,15 +123,15 @@ pnpm install
 pnpm build
 ```
 
-Frontend dev server:
+前端开发：
 
 ```bash
 make admin-dev
 ```
 
-## Models
+## 模型
 
-`gemini-auto` tries the configured model list in order. Default:
+`gemini-auto` 会按配置的模型列表依次尝试。默认：
 
 ```text
 gemini-3.5-flash
@@ -139,7 +139,7 @@ gemini-3-flash-preview
 gemini-3.1-flash-lite
 ```
 
-Override in `config.yaml`:
+在 `config.yaml` 中覆盖：
 
 ```yaml
 models:
@@ -149,16 +149,16 @@ models:
     - gemini-3.1-flash-lite
 ```
 
-## Build And Publish
+## 构建和发布
 
 ```bash
 make docker-build
 make docker-publish
 ```
 
-`make docker-publish` bumps `VERSION` by patch and publishes both `latest` and that version for `linux/amd64` and `linux/arm64`.
+`make docker-publish` 会递增 `VERSION` 的 patch 版本，并发布 `latest` 和当前版本，默认包含 `linux/amd64`、`linux/arm64`。
 
-Useful helpers:
+常用命令：
 
 ```bash
 make version-patch
@@ -167,8 +167,8 @@ make version-major
 make docker-publish-current
 ```
 
-## Notes
+## 说明
 
-- The Go server serves `admin/dist` by default and has an embedded fallback admin UI.
-- Admin sessions are stored in the database for 7 days and renew when they have 3 days or less remaining.
-- `config.yaml`, database files, and built frontend assets are intentionally ignored.
+- Go 服务默认提供 `admin/dist`，并内置一个基础管理后台作为 fallback。
+- 管理员会话保存在数据库中，有效期 7 天；剩余 3 天以内时自动续期。
+- `config.yaml`、数据库文件和前端构建产物已加入忽略列表。
