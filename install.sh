@@ -102,6 +102,31 @@ services:
       - ./config.yaml:/config/config.yaml:ro
 EOF
 
+cat > makefile <<'EOF'
+G = $(shell printf "\033[0;32m")
+C = $(shell printf "\033[0m")
+
+default:
+	@docker compose -f docker-compose.yml up -d
+	@echo "$(G)[OK]$(C)"
+
+upgrade:
+	@docker compose -f docker-compose.yml pull
+	@docker compose -f docker-compose.yml up -d
+	@echo "$(G)[OK]$(C)"
+
+restart:
+	@docker compose -f docker-compose.yml restart
+	@echo "$(G)[OK]$(C)"
+
+stop:
+	@docker compose -f docker-compose.yml down
+	@echo "$(G)[OK]$(C)"
+
+logs:
+	@docker compose -f docker-compose.yml logs -f buzzhive
+EOF
+
 docker compose pull
 docker compose up -d
 

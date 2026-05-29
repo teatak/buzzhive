@@ -31,7 +31,16 @@ Optional:
 curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | env INSTALL_DIR=/opt/buzzhive PORT=9622 IMAGE=teatak/buzzhive:latest sh
 ```
 
-Run the same command again to upgrade. The installer keeps `.env`, `config.yaml`, and `./pgdata`.
+Run the same command again to refresh the installer files. The installer keeps `.env`, `config.yaml`, and `./pgdata`.
+
+The installer writes a small `makefile` into the install directory:
+
+```bash
+make upgrade
+make logs
+make restart
+make stop
+```
 
 ## Docker Compose
 
@@ -85,8 +94,7 @@ docker compose up -d
 Upgrade:
 
 ```bash
-docker compose pull
-docker compose up -d
+make upgrade
 ```
 
 For local source builds, use [docker-compose.dev.yml](docker-compose.dev.yml).

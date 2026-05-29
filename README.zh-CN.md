@@ -31,7 +31,16 @@ http://<服务器 IP>:9622/admin/
 curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | env INSTALL_DIR=/opt/buzzhive PORT=9622 IMAGE=teatak/buzzhive:latest sh
 ```
 
-再次运行同一条命令即可升级。安装脚本会保留 `.env`、`config.yaml` 和 `./pgdata`。
+再次运行同一条命令会刷新安装文件。安装脚本会保留 `.env`、`config.yaml` 和 `./pgdata`。
+
+安装脚本会在安装目录写入一个小 `makefile`：
+
+```bash
+make upgrade
+make logs
+make restart
+make stop
+```
 
 ## Docker Compose
 
@@ -85,8 +94,7 @@ docker compose up -d
 升级：
 
 ```bash
-docker compose pull
-docker compose up -d
+make upgrade
 ```
 
 本地源码构建使用 [docker-compose.dev.yml](docker-compose.dev.yml)。
