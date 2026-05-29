@@ -3,7 +3,7 @@
 FROM node:22-bookworm-slim AS admin-builder
 WORKDIR /src/admin
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
-COPY admin/package.json admin/pnpm-lock.yaml ./
+COPY admin/package.json admin/pnpm-lock.yaml admin/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY admin/ ./
 RUN pnpm build
