@@ -6,7 +6,7 @@ PLATFORMS ?= linux/amd64,linux/arm64
 
 dev: admin-build
 	@test -f config.yaml || cp config.example.yaml config.yaml
-	docker compose up -d postgres
+	docker compose -f docker-compose.dev.yml up -d postgres
 	go run ./cmd/buzzhive -config config.yaml
 
 admin-build:

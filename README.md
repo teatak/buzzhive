@@ -89,7 +89,7 @@ docker compose pull
 docker compose up -d
 ```
 
-This repository also includes [docker-compose.example.yml](docker-compose.example.yml).
+For local source builds, use [docker-compose.dev.yml](docker-compose.dev.yml).
 
 ## Local Development
 

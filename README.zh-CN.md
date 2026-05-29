@@ -89,7 +89,7 @@ docker compose pull
 docker compose up -d
 ```
 
-仓库里也提供了 [docker-compose.example.yml](docker-compose.example.yml)。
+本地源码构建使用 [docker-compose.dev.yml](docker-compose.dev.yml)。
 
 ## 本地开发
 
