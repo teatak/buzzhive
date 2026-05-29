@@ -12,7 +12,10 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/admin/api": "http://127.0.0.1:8787",
+      "/admin/api": {
+        target: "http://localhost:9622",
+        changeOrigin: true,
+      },
     },
   },
 });

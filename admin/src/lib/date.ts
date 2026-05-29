@@ -18,16 +18,34 @@ export function isoMinute(date: Date): string {
   return `${isoDate(date)}T${hours}:${minutes}`;
 }
 
+export function displayMinute(value: string): string {
+  return value.replace("T", " ").replace(/-/g, "/");
+}
+
 export function addMinutes(date: Date, minutes: number): Date {
   const next = new Date(date);
   next.setMinutes(next.getMinutes() + minutes);
   return next;
 }
 
+export function naturalDayRange(date = new Date()): { from: string; to: string } {
+  const from = new Date(date);
+  from.setHours(0, 0, 0, 0);
+  const to = new Date(from);
+  to.setDate(to.getDate() + 1);
+  return { from: isoMinute(from), to: isoMinute(to) };
+}
+
 export function usagePath(filter: { key_id: string; from: string; to: string }) {
   const params = new URLSearchParams({ from: filter.from, to: filter.to });
   if (filter.key_id !== "all") params.set("key_id", filter.key_id);
   return `/admin/api/usage?${params.toString()}`;
+}
+
+export function modelUsagePath(filter: { key_id: string; from: string; to: string }) {
+  const params = new URLSearchParams({ from: filter.from, to: filter.to });
+  if (filter.key_id !== "all") params.set("key_id", filter.key_id);
+  return `/admin/api/model-usage?${params.toString()}`;
 }
 
 export function fillUsageSeries(series: UsagePoint[], from: string, to: string): UsagePoint[] {
@@ -44,7 +62,7 @@ export function fillUsageSeries(series: UsagePoint[], from: string, to: string):
   const byDate = new Map(series.map((point) => [point.date, point]));
   const out: UsagePoint[] = [];
   let cursor = start;
-  while (cursor <= end) {
+  while (cursor < end) {
     const date = isoMinute(cursor);
     out.push(byDate.get(date) ?? { date, requests: 0, errors: 0, avg_latency_ms: 0 });
     cursor = addMinutes(cursor, 1);

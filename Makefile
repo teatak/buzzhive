@@ -10,10 +10,10 @@ dev: admin-build
 	go run ./cmd/local-proxy -config config.yaml
 
 admin-build:
-	cd admin && pnpm install --frozen-lockfile && pnpm build
+	cd admin && pnpm install --frozen-lockfile --config.confirm-modules-purge=false && pnpm build
 
 admin-dev:
-	cd admin && pnpm install && pnpm dev
+	cd admin && pnpm install --config.confirm-modules-purge=false && pnpm dev
 
 docker-build:
 	docker build -t $(IMAGE):$(TAG) .

@@ -10,7 +10,17 @@ export function request<T>(path: string, token: string, options: RequestInit = {
     },
   }).then(async (response) => {
     if (response.status === 401) throw new Error("unauthorized");
-    if (!response.ok) throw new Error(await response.text());
+    if (!response.ok) {
+      const text = await response.text();
+      let message = text;
+      try {
+        const parsed = JSON.parse(text) as { error?: string };
+        message = parsed.error || text;
+      } catch {
+        // Keep the raw response body when the server does not return JSON.
+      }
+      throw new Error(message);
+    }
     return response.json() as Promise<T>;
   });
 }

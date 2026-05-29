@@ -30,5 +30,5 @@ COPY --from=go-builder /out/buzzhive /usr/local/bin/buzzhive
 COPY --from=admin-builder /src/admin/dist /app/admin/dist
 COPY config.example.yaml /app/config.example.yaml
 USER buzzhive
-EXPOSE 8787
+EXPOSE 9622
 CMD ["buzzhive", "-config", "/config/config.yaml", "-admin-dir", "/app/admin/dist"]

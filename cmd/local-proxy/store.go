@@ -27,6 +27,8 @@ type DatabaseConfig struct {
 }
 
 type UsageRecord struct {
+	RequestID          string
+	Attempt            int
 	UserID             int64
 	UserName           string
 	UserAPIKeyID       int64
@@ -38,6 +40,10 @@ type UsageRecord struct {
 	Model              string
 	Status             int
 	LatencyMS          int64
+	CreatedAt          time.Time
+	ErrorCode          string
+	ErrorMessage       string
+	ErrorBody          string
 }
 
 type UsageSummary struct {
@@ -46,6 +52,56 @@ type UsageSummary struct {
 	AvgLatencyMS float64          `json:"avg_latency_ms"`
 	ByKey        map[string]int64 `json:"by_key"`
 	Series       []UsagePoint     `json:"series"`
+}
+
+type ModelUsageSummary struct {
+	TotalByModel  []ModelUsageTotal    `json:"total_by_model"`
+	Series        []ModelUsagePoint    `json:"series"`
+	AccountTotals []AccountModelUsage  `json:"account_totals"`
+	QuotaSignals  []AccountQuotaSignal `json:"quota_signals"`
+	RecentErrors  []ModelUsageError    `json:"recent_errors"`
+}
+
+type ModelUsageTotal struct {
+	Model    string `json:"model"`
+	Requests int64  `json:"requests"`
+	Errors   int64  `json:"errors"`
+}
+
+type ModelUsagePoint struct {
+	Date     string `json:"date"`
+	Model    string `json:"model"`
+	Requests int64  `json:"requests"`
+	Errors   int64  `json:"errors"`
+}
+
+type AccountModelUsage struct {
+	AccountEmail string `json:"account_email"`
+	Model        string `json:"model"`
+	Requests     int64  `json:"requests"`
+	Quota429     int64  `json:"quota_429"`
+	DistinctKeys int64  `json:"distinct_keys"`
+}
+
+type AccountQuotaSignal struct {
+	Date         string `json:"date"`
+	AccountEmail string `json:"account_email"`
+	Model        string `json:"model"`
+	Quota429     int64  `json:"quota_429"`
+	DistinctKeys int64  `json:"distinct_keys"`
+}
+
+type ModelUsageError struct {
+	Date         string `json:"date"`
+	RequestID    string `json:"request_id"`
+	Attempt      int    `json:"attempt"`
+	AccountEmail string `json:"account_email"`
+	KeyName      string `json:"key_name"`
+	Model        string `json:"model"`
+	Status       int    `json:"status"`
+	ErrorCode    string `json:"error_code"`
+	ErrorMessage string `json:"error_message"`
+	ErrorBody    string `json:"error_body"`
 }
 
 type UsagePoint struct {
@@ -60,6 +116,12 @@ type UsageQuery struct {
 	UserAPIKeyID int64
 	From         time.Time
 	To           time.Time
+}
+
+type ModelUsageQuery struct {
+	APIKeyID int64
+	From     time.Time
+	To       time.Time
 }
 
 type SessionUser struct {
@@ -129,6 +191,40 @@ func (s *Store) Migrate() error {
 		}
 	}
 	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_logs_user_api_key_id ON usage_logs(user_api_key_id)`); err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		name string
+		def  string
+	}{
+		{"disabled_status", "INTEGER NOT NULL DEFAULT 0"},
+		{"disabled_error_code", "TEXT NOT NULL DEFAULT ''"},
+		{"disabled_error_message", "TEXT NOT NULL DEFAULT ''"},
+		{"disabled_error_body", "TEXT NOT NULL DEFAULT ''"},
+		{"disabled_at", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.addColumnIfMissing("api_keys", column.name, column.def); err != nil {
+			return err
+		}
+	}
+	for _, column := range []struct {
+		name string
+		def  string
+	}{
+		{"request_id", "TEXT NOT NULL DEFAULT ''"},
+		{"attempt", "INTEGER NOT NULL DEFAULT 0"},
+		{"error_code", "TEXT NOT NULL DEFAULT ''"},
+		{"error_message", "TEXT NOT NULL DEFAULT ''"},
+		{"error_body", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.addColumnIfMissing("model_usage_logs", column.name, column.def); err != nil {
+			return err
+		}
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_model_usage_logs_request_id ON model_usage_logs(request_id)`); err != nil {
+		return err
+	}
+	if err := s.backfillDisabledAPIKeyReasons(); err != nil {
 		return err
 	}
 	return nil
@@ -255,9 +351,32 @@ func (s *Store) migrationStatements() []string {
 			latency_ms INTEGER NOT NULL,
 			created_at TEXT NOT NULL
 		)`, idType, intType, intType, intType),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS model_usage_logs (
+			id %s,
+			user_id %s,
+			user_name TEXT NOT NULL,
+			user_api_key_id %s,
+			user_api_key_name TEXT NOT NULL DEFAULT '',
+			api_key_id %s,
+			api_key_name TEXT NOT NULL,
+			google_account_id %s,
+			google_account_email TEXT NOT NULL,
+			request_id TEXT NOT NULL DEFAULT '',
+			attempt INTEGER NOT NULL DEFAULT 0,
+			model TEXT NOT NULL,
+			status INTEGER NOT NULL,
+			latency_ms INTEGER NOT NULL,
+			created_at TEXT NOT NULL,
+			error_code TEXT NOT NULL DEFAULT '',
+			error_message TEXT NOT NULL DEFAULT '',
+			error_body TEXT NOT NULL DEFAULT ''
+		)`, idType, intType, intType, intType, intType),
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at ON usage_logs(created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_user_id ON usage_logs(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_api_key_id ON usage_logs(api_key_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_model_usage_logs_created_at ON model_usage_logs(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_model_usage_logs_api_key_id ON model_usage_logs(api_key_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_model_usage_logs_model ON model_usage_logs(model)`,
 		`CREATE INDEX IF NOT EXISTS idx_app_sessions_user_id ON app_sessions(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_app_sessions_expires_at ON app_sessions(expires_at)`,
 	}
@@ -402,7 +521,8 @@ func (s *Store) GoogleAccounts() ([]GoogleAccount, error) {
 
 func (s *Store) APIKeys() ([]APIKey, error) {
 	rows, err := s.query(`
-		SELECT k.id, k.google_account_id, k.name, k.key, k.enabled, a.email, a.prefix
+		SELECT k.id, k.google_account_id, k.name, k.key, k.enabled, a.email, a.prefix,
+			k.disabled_status, k.disabled_error_code, k.disabled_error_message, k.disabled_error_body, k.disabled_at
 		FROM api_keys k
 		JOIN google_accounts a ON a.id = k.google_account_id
 		WHERE k.enabled = 1 AND a.enabled = 1
@@ -416,7 +536,8 @@ func (s *Store) APIKeys() ([]APIKey, error) {
 
 func (s *Store) AllAPIKeys() ([]APIKey, error) {
 	rows, err := s.query(`
-		SELECT k.id, k.google_account_id, k.name, k.key, k.enabled, a.email, a.prefix
+		SELECT k.id, k.google_account_id, k.name, k.key, k.enabled, a.email, a.prefix,
+			k.disabled_status, k.disabled_error_code, k.disabled_error_message, k.disabled_error_body, k.disabled_at
 		FROM api_keys k
 		JOIN google_accounts a ON a.id = k.google_account_id
 		ORDER BY k.name`)
@@ -432,7 +553,20 @@ func scanAPIKeys(rows *sql.Rows) ([]APIKey, error) {
 	for rows.Next() {
 		var key APIKey
 		var enabled int
-		if err := rows.Scan(&key.ID, &key.AccountID, &key.Name, &key.Key, &enabled, &key.AccountEmail, &key.AccountPrefix); err != nil {
+		if err := rows.Scan(
+			&key.ID,
+			&key.AccountID,
+			&key.Name,
+			&key.Key,
+			&enabled,
+			&key.AccountEmail,
+			&key.AccountPrefix,
+			&key.DisabledStatus,
+			&key.DisabledErrorCode,
+			&key.DisabledErrorMessage,
+			&key.DisabledErrorBody,
+			&key.DisabledAt,
+		); err != nil {
 			return nil, err
 		}
 		key.Enabled = enabled != 0
@@ -517,6 +651,25 @@ func (s *Store) VerifyPassword(username, password string) (AppUser, error) {
 	}
 	user.Valid = true
 	return user, nil
+}
+
+func (s *Store) ChangePassword(userID int64, currentPassword, nextPassword string) error {
+	if userID == 0 || currentPassword == "" || nextPassword == "" {
+		return errors.New("current_password and new_password are required")
+	}
+	var hash string
+	if err := s.queryRow(`SELECT password_hash FROM app_users WHERE id = ? AND valid = 1`, userID).Scan(&hash); err != nil {
+		return err
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(currentPassword)); err != nil {
+		return errors.New("current password is incorrect")
+	}
+	nextHash, err := bcrypt.GenerateFromPassword([]byte(nextPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	_, err = s.exec(`UPDATE app_users SET password_hash = ?, updated_at = ? WHERE id = ?`, string(nextHash), time.Now().Format(time.RFC3339), userID)
+	return err
 }
 
 func (s *Store) SetupRequired() (bool, error) {
@@ -648,8 +801,82 @@ func (s *Store) UpdateAPIKey(key APIKey) error {
 	if key.ID == 0 || key.AccountID == 0 || key.Name == "" || key.Key == "" {
 		return errors.New("id, account_id, name and key are required")
 	}
+	if key.Enabled {
+		_, err := s.exec(
+			`UPDATE api_keys SET google_account_id = ?, name = ?, key = ?, enabled = 1, disabled_status = 0, disabled_error_code = '', disabled_error_message = '', disabled_error_body = '', disabled_at = '', updated_at = ? WHERE id = ?`,
+			key.AccountID, key.Name, key.Key, time.Now().Format(time.RFC3339), key.ID,
+		)
+		return err
+	}
 	_, err := s.exec(`UPDATE api_keys SET google_account_id = ?, name = ?, key = ?, enabled = ?, updated_at = ? WHERE id = ?`, key.AccountID, key.Name, key.Key, boolInt(key.Enabled), time.Now().Format(time.RFC3339), key.ID)
 	return err
+}
+
+func (s *Store) SetAPIKeyEnabled(id int64, enabled bool) error {
+	if id == 0 {
+		return errors.New("id is required")
+	}
+	if enabled {
+		_, err := s.exec(
+			`UPDATE api_keys SET enabled = 1, disabled_status = 0, disabled_error_code = '', disabled_error_message = '', disabled_error_body = '', disabled_at = '', updated_at = ? WHERE id = ?`,
+			time.Now().Format(time.RFC3339), id,
+		)
+		return err
+	}
+	_, err := s.exec(`UPDATE api_keys SET enabled = 0, updated_at = ? WHERE id = ?`, time.Now().Format(time.RFC3339), id)
+	return err
+}
+
+func (s *Store) DisableAPIKey(id int64, status int, errorCode, errorMessage, errorBody string) error {
+	if id == 0 {
+		return errors.New("id is required")
+	}
+	if len(errorBody) > 4096 {
+		errorBody = errorBody[:4096]
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, err := s.exec(
+		`UPDATE api_keys SET enabled = 0, disabled_status = ?, disabled_error_code = ?, disabled_error_message = ?, disabled_error_body = ?, disabled_at = ?, updated_at = ? WHERE id = ?`,
+		status, errorCode, errorMessage, errorBody, now, now, id,
+	)
+	return err
+}
+
+func (s *Store) backfillDisabledAPIKeyReasons() error {
+	rows, err := s.query(`
+		SELECT k.id, l.status, l.error_code, l.error_message, l.error_body, l.created_at
+		FROM api_keys k
+		JOIN model_usage_logs l ON l.api_key_id = k.id
+		WHERE k.enabled = 0 AND k.disabled_status = 0 AND l.status IN (400, 401, 403)
+		ORDER BY k.id, l.created_at DESC`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	seen := make(map[int64]bool)
+	for rows.Next() {
+		var id int64
+		var status int
+		var errorCode, errorMessage, errorBody, createdAt string
+		if err := rows.Scan(&id, &status, &errorCode, &errorMessage, &errorBody, &createdAt); err != nil {
+			return err
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		if len(errorBody) > 4096 {
+			errorBody = errorBody[:4096]
+		}
+		if _, err := s.exec(
+			`UPDATE api_keys SET disabled_status = ?, disabled_error_code = ?, disabled_error_message = ?, disabled_error_body = ?, disabled_at = ? WHERE id = ?`,
+			status, errorCode, errorMessage, errorBody, createdAt, id,
+		); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func (s *Store) DeleteAPIKeys(ids []int64) error {
@@ -691,6 +918,41 @@ func (s *Store) InsertUsageBatch(records []UsageRecord) error {
 	for _, record := range records {
 		if _, err := stmt.Exec(
 			record.UserID, record.UserName, record.UserAPIKeyID, record.UserAPIKeyName, record.APIKeyID, record.APIKeyName, record.GoogleAccountID, record.GoogleAccountEmail, record.Model, record.Status, record.LatencyMS, now,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) InsertModelUsage(record UsageRecord) error {
+	return s.InsertModelUsageBatch([]UsageRecord{record})
+}
+
+func (s *Store) InsertModelUsageBatch(records []UsageRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := s.prepareTx(tx,
+		`INSERT INTO model_usage_logs (user_id, user_name, user_api_key_id, user_api_key_name, api_key_id, api_key_name, google_account_id, google_account_email, request_id, attempt, model, status, latency_ms, created_at, error_code, error_message, error_body)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, record := range records {
+		createdAt := record.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = time.Now()
+		}
+		if _, err := stmt.Exec(
+			record.UserID, record.UserName, record.UserAPIKeyID, record.UserAPIKeyName, record.APIKeyID, record.APIKeyName, record.GoogleAccountID, record.GoogleAccountEmail, record.RequestID, record.Attempt, record.Model, record.Status, record.LatencyMS, createdAt.Format(time.RFC3339Nano), record.ErrorCode, record.ErrorMessage, record.ErrorBody,
 		); err != nil {
 			return err
 		}
@@ -753,12 +1015,131 @@ func (s *Store) UsageSummary(query UsageQuery) (UsageSummary, error) {
 	return summary, rows.Err()
 }
 
+func (s *Store) ModelUsageSummary(query ModelUsageQuery) (ModelUsageSummary, error) {
+	var summary ModelUsageSummary
+	where, args := modelUsageWhere(query)
+
+	rows, err := s.query(
+		`SELECT model, COUNT(1), COALESCE(SUM(CASE WHEN status >= 400 OR status = 0 THEN 1 ELSE 0 END), 0)
+		 FROM model_usage_logs `+where+` GROUP BY model ORDER BY 2 DESC`,
+		args...,
+	)
+	if err != nil {
+		return summary, err
+	}
+	for rows.Next() {
+		var item ModelUsageTotal
+		if err := rows.Scan(&item.Model, &item.Requests, &item.Errors); err != nil {
+			rows.Close()
+			return summary, err
+		}
+		summary.TotalByModel = append(summary.TotalByModel, item)
+	}
+	if err := rows.Close(); err != nil {
+		return summary, err
+	}
+
+	rows, err = s.query(
+		`SELECT google_account_email, model, COUNT(1), COALESCE(SUM(CASE WHEN status = 429 THEN 1 ELSE 0 END), 0), COUNT(DISTINCT api_key_name)
+		 FROM model_usage_logs `+where+` GROUP BY google_account_email, model ORDER BY 4 DESC, 3 DESC`,
+		args...,
+	)
+	if err != nil {
+		return summary, err
+	}
+	for rows.Next() {
+		var item AccountModelUsage
+		if err := rows.Scan(&item.AccountEmail, &item.Model, &item.Requests, &item.Quota429, &item.DistinctKeys); err != nil {
+			rows.Close()
+			return summary, err
+		}
+		summary.AccountTotals = append(summary.AccountTotals, item)
+	}
+	if err := rows.Close(); err != nil {
+		return summary, err
+	}
+
+	rows, err = s.query(
+		`SELECT substr(created_at, 1, 16), google_account_email, model, COUNT(1), COUNT(DISTINCT api_key_name)
+		 FROM model_usage_logs `+where+` AND status = 429
+		 GROUP BY substr(created_at, 1, 16), google_account_email, model
+		 HAVING COUNT(DISTINCT api_key_name) > 1
+		 ORDER BY substr(created_at, 1, 16) DESC, 4 DESC
+		 LIMIT 50`,
+		args...,
+	)
+	if err != nil {
+		return summary, err
+	}
+	for rows.Next() {
+		var item AccountQuotaSignal
+		if err := rows.Scan(&item.Date, &item.AccountEmail, &item.Model, &item.Quota429, &item.DistinctKeys); err != nil {
+			rows.Close()
+			return summary, err
+		}
+		summary.QuotaSignals = append(summary.QuotaSignals, item)
+	}
+	if err := rows.Close(); err != nil {
+		return summary, err
+	}
+
+	rows, err = s.query(
+		`SELECT created_at, request_id, attempt, google_account_email, api_key_name, model, status, error_code, error_message, error_body
+		 FROM model_usage_logs `+where+` AND (status >= 400 OR status = 0)
+		 ORDER BY created_at DESC
+		 LIMIT 30`,
+		args...,
+	)
+	if err != nil {
+		return summary, err
+	}
+	for rows.Next() {
+		var item ModelUsageError
+		if err := rows.Scan(&item.Date, &item.RequestID, &item.Attempt, &item.AccountEmail, &item.KeyName, &item.Model, &item.Status, &item.ErrorCode, &item.ErrorMessage, &item.ErrorBody); err != nil {
+			rows.Close()
+			return summary, err
+		}
+		summary.RecentErrors = append(summary.RecentErrors, item)
+	}
+	if err := rows.Close(); err != nil {
+		return summary, err
+	}
+
+	rows, err = s.query(
+		`SELECT substr(created_at, 1, 16), model, COUNT(1), COALESCE(SUM(CASE WHEN status >= 400 OR status = 0 THEN 1 ELSE 0 END), 0)
+		 FROM model_usage_logs `+where+` GROUP BY substr(created_at, 1, 16), model ORDER BY substr(created_at, 1, 16), model`,
+		args...,
+	)
+	if err != nil {
+		return summary, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var point ModelUsagePoint
+		if err := rows.Scan(&point.Date, &point.Model, &point.Requests, &point.Errors); err != nil {
+			return summary, err
+		}
+		summary.Series = append(summary.Series, point)
+	}
+	return summary, rows.Err()
+}
+
 func usageWhere(query UsageQuery) (string, []any) {
 	clauses := []string{"WHERE user_id = ?", "created_at >= ?", "created_at < ?"}
-	args := []any{query.UserID, query.From.Format(time.RFC3339), query.To.Add(time.Minute).Format(time.RFC3339)}
+	args := []any{query.UserID, query.From.Format(time.RFC3339), query.To.Format(time.RFC3339)}
 	if query.UserAPIKeyID > 0 {
 		clauses = append(clauses, "user_api_key_id = ?")
 		args = append(args, query.UserAPIKeyID)
+	}
+	return strings.Join(clauses, " AND "), args
+}
+
+func modelUsageWhere(query ModelUsageQuery) (string, []any) {
+	clauses := []string{"WHERE created_at >= ?", "created_at < ?"}
+	args := []any{query.From.Format(time.RFC3339), query.To.Format(time.RFC3339)}
+	if query.APIKeyID > 0 {
+		clauses = append(clauses, "api_key_id = ?")
+		args = append(args, query.APIKeyID)
 	}
 	return strings.Join(clauses, " AND "), args
 }

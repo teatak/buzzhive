@@ -1,5 +1,3 @@
-import type { ReactNode } from "react";
-
 export type View = "dashboard" | "users" | "myKeys" | "accounts" | "runtime";
 
 export type Session = { user: AppUser };
@@ -15,6 +13,11 @@ export type AdminKey = {
   enabled: boolean;
   account_email: string;
   account_prefix: string;
+  disabled_status?: number;
+  disabled_error_code?: string;
+  disabled_error_message?: string;
+  disabled_error_body?: string;
+  disabled_at?: string;
 };
 
 export type KeyError = { key: string; model: string; status: number; message: string; updated_at: string };
@@ -55,4 +58,26 @@ export type UsageSummary = {
   series: UsagePoint[];
 };
 
-export type MetricValue = ReactNode;
+export type ModelUsageTotal = { model: string; requests: number; errors: number };
+export type ModelUsagePoint = { date: string; model: string; requests: number; errors: number };
+export type AccountModelUsage = { account_email: string; model: string; requests: number; quota_429: number; distinct_keys: number };
+export type AccountQuotaSignal = { date: string; account_email: string; model: string; quota_429: number; distinct_keys: number };
+export type ModelUsageError = {
+  date: string;
+  request_id: string;
+  attempt: number;
+  account_email: string;
+  key_name: string;
+  model: string;
+  status: number;
+  error_code: string;
+  error_message: string;
+  error_body: string;
+};
+export type ModelUsageSummary = {
+  total_by_model: ModelUsageTotal[];
+  series: ModelUsagePoint[];
+  account_totals: AccountModelUsage[];
+  quota_signals: AccountQuotaSignal[];
+  recent_errors: ModelUsageError[];
+};

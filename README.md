@@ -11,13 +11,13 @@ curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | s
 Optional:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | env PORT=8787 IMAGE=teatak/buzzhive:latest sh
+curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | env PORT=9622 IMAGE=teatak/buzzhive:latest sh
 ```
 
 Then open:
 
 ```text
-http://<server-lan-ip>:8787/admin/
+http://<server-lan-ip>:9622/admin/
 ```
 
 Upgrade:
@@ -42,13 +42,13 @@ make dev
 Admin UI:
 
 ```text
-http://127.0.0.1:8787/admin/
+http://127.0.0.1:9622/admin/
 ```
 
 Proxy endpoint example:
 
 ```text
-http://127.0.0.1:8787/v1beta/models/gemini-auto:generateContent
+http://127.0.0.1:9622/v1beta/models/gemini-auto:generateContent
 ```
 
 On first launch, the admin UI asks you to create the initial admin user. User API keys are then created from the UI and sent as `Authorization: Bearer <api-key>`.
@@ -59,9 +59,7 @@ Google accounts and Gemini API keys are stored in Postgres and managed from the 
 ```text
 gemini-3.5-flash
 gemini-3-flash-preview
-gemini-3.1-flash-lite-preview
-gemini-2.5-flash
-gemini-2.5-flash-lite
+gemini-3.1-flash-lite
 ```
 
 To override it, add:
@@ -69,8 +67,9 @@ To override it, add:
 ```yaml
 models:
   auto:
-    - gemini-2.5-flash
-    - gemini-2.5-flash-lite
+    - gemini-3.5-flash
+    - gemini-3-flash-preview
+    - gemini-3.1-flash-lite
 ```
 
 ## Admin Frontend
@@ -99,7 +98,7 @@ docker compose up --build -d
 Then open:
 
 ```text
-http://<server-lan-ip>:8787/admin/
+http://<server-lan-ip>:9622/admin/
 ```
 
 Postgres data is stored under `./pgdata`.

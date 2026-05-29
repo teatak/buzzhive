@@ -6,7 +6,7 @@ REQUESTED_IMAGE="${IMAGE:-}"
 REQUESTED_PORT="${PORT:-}"
 REQUESTED_POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
 IMAGE="${REQUESTED_IMAGE:-teatak/buzzhive:latest}"
-PORT="${REQUESTED_PORT:-8787}"
+PORT="${REQUESTED_PORT:-9622}"
 POSTGRES_PASSWORD="$REQUESTED_POSTGRES_PASSWORD"
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -67,7 +67,7 @@ chmod 600 .env
 
 cat > config.yaml <<EOF
 server:
-  addr: 0.0.0.0:8787
+  addr: 0.0.0.0:9622
 EOF
 chmod 644 config.yaml
 
@@ -95,7 +95,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "\${PORT}:8787"
+      - "\${PORT}:9622"
     environment:
       BUZZHIVE_DATABASE_URL: postgres://buzzhive:\${POSTGRES_PASSWORD}@postgres:5432/buzzhive?sslmode=disable
     volumes:

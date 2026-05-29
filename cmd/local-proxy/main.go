@@ -69,13 +69,18 @@ type AuthToken struct {
 }
 
 type APIKey struct {
-	ID            int64  `yaml:"-" json:"id"`
-	AccountID     int64  `yaml:"-" json:"account_id"`
-	Name          string `yaml:"name" json:"name"`
-	Key           string `yaml:"key" json:"key,omitempty"`
-	Enabled       bool   `yaml:"-" json:"enabled"`
-	AccountEmail  string `yaml:"-" json:"account_email,omitempty"`
-	AccountPrefix string `yaml:"-" json:"account_prefix,omitempty"`
+	ID                   int64  `yaml:"-" json:"id"`
+	AccountID            int64  `yaml:"-" json:"account_id"`
+	Name                 string `yaml:"name" json:"name"`
+	Key                  string `yaml:"key" json:"key,omitempty"`
+	Enabled              bool   `yaml:"-" json:"enabled"`
+	AccountEmail         string `yaml:"-" json:"account_email,omitempty"`
+	AccountPrefix        string `yaml:"-" json:"account_prefix,omitempty"`
+	DisabledStatus       int    `yaml:"-" json:"disabled_status,omitempty"`
+	DisabledErrorCode    string `yaml:"-" json:"disabled_error_code,omitempty"`
+	DisabledErrorMessage string `yaml:"-" json:"disabled_error_message,omitempty"`
+	DisabledErrorBody    string `yaml:"-" json:"disabled_error_body,omitempty"`
+	DisabledAt           string `yaml:"-" json:"disabled_at,omitempty"`
 }
 
 type KeyError struct {
@@ -106,18 +111,19 @@ type KeyState struct {
 }
 
 type Server struct {
-	cfg        Config
-	adminDir   string
-	store      *Store
-	upstream   *url.URL
-	client     *http.Client
-	authTokens map[string]AuthToken
-	sessions   map[string]SessionUser
-	keyState   *KeyState
-	usageCh    chan UsageRecord
-	stats      Stats
-	statsMu    sync.Mutex
-	runtimeMu  sync.Mutex
+	cfg          Config
+	adminDir     string
+	store        *Store
+	upstream     *url.URL
+	client       *http.Client
+	authTokens   map[string]AuthToken
+	sessions     map[string]SessionUser
+	keyState     *KeyState
+	usageCh      chan UsageRecord
+	modelUsageCh chan UsageRecord
+	stats        Stats
+	statsMu      sync.Mutex
+	runtimeMu    sync.Mutex
 }
 
 type AdminConfig struct {
@@ -206,7 +212,7 @@ func loadConfig(path string) (Config, error) {
 		return cfg, err
 	}
 	if cfg.Server.Addr == "" {
-		cfg.Server.Addr = "127.0.0.1:8787"
+		cfg.Server.Addr = "127.0.0.1:9622"
 	}
 	if cfg.Upstream.BaseURL == "" {
 		cfg.Upstream.BaseURL = "https://generativelanguage.googleapis.com"
@@ -231,7 +237,7 @@ func loadConfig(path string) (Config, error) {
 		cfg.Retry.CooldownSeconds = 60
 	}
 	if len(cfg.Models.Auto) == 0 {
-		cfg.Models.Auto = []string{"gemini-3.5-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"}
+		cfg.Models.Auto = []string{"gemini-3.5-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite"}
 	}
 	return cfg, nil
 }
@@ -272,13 +278,14 @@ func newServer(cfg Config) (*Server, error) {
 	}).DialContext
 
 	srv := &Server{
-		cfg:        cfg,
-		store:      store,
-		upstream:   upstream,
-		client:     &http.Client{Timeout: timeout, Transport: transport},
-		authTokens: authTokens,
-		sessions:   make(map[string]SessionUser),
-		usageCh:    make(chan UsageRecord, 4096),
+		cfg:          cfg,
+		store:        store,
+		upstream:     upstream,
+		client:       &http.Client{Timeout: timeout, Transport: transport},
+		authTokens:   authTokens,
+		sessions:     make(map[string]SessionUser),
+		usageCh:      make(chan UsageRecord, 4096),
+		modelUsageCh: make(chan UsageRecord, 4096),
 		keyState: &KeyState{
 			keys:      apiKeys,
 			cooldown:  time.Duration(cfg.Retry.CooldownSeconds) * time.Second,
@@ -294,6 +301,7 @@ func newServer(cfg Config) (*Server, error) {
 		},
 	}
 	go srv.usageWriter()
+	go srv.modelUsageWriter()
 	return srv, nil
 }
 
@@ -448,10 +456,29 @@ func (s *Server) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		delete(s.sessions, token)
 		s.runtimeMu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	case "/admin/api/password":
+		if r.Method != http.MethodPut {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+		var req struct {
+			CurrentPassword string `json:"current_password"`
+			NewPassword     string `json:"new_password"`
+		}
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		if err := s.store.ChangePassword(user.ID, req.CurrentPassword, req.NewPassword); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	case "/admin/api/stats":
 		s.writeStats(w)
 	case "/admin/api/usage":
 		s.writeUsage(w, r, user)
+	case "/admin/api/model-usage":
+		s.writeModelUsage(w, r)
 	case "/admin/api/config":
 		writeJSON(w, http.StatusOK, s.adminConfig())
 	case "/admin/api/data":
@@ -581,38 +608,56 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, user
 	var lastStatus int
 	var chain []string
 	attempts := 0
+	requestID := randomHex(8)
 
 	for _, model := range models {
 		for attempts < s.cfg.Retry.MaxAttempts {
-			attempts++
 			key, ok := s.keyState.Next(model)
 			if !ok {
 				chain = append(chain, model+":all-keys-cooling")
 				break
 			}
 
+			attempts++
+			attemptStartedAt := time.Now()
 			resp, err := s.forward(r, body, originalModel, model, key)
 			if err != nil {
+				s.recordModelUsage(user, key, model, 0, time.Since(attemptStartedAt), requestID, attempts, attemptStartedAt, "", err.Error(), "")
 				chain = append(chain, fmt.Sprintf("%s(%s):%s", model, key.Name, err.Error()))
 				s.keyState.MarkError(model, key, 0, err.Error())
 				s.refreshKeyStateStats()
 				continue
 			}
 
+			var errorCode, errorMessage string
+			disableKey := false
 			if resp.StatusCode >= 400 {
 				lastStatus = resp.StatusCode
 				lastErrBody = drain(resp.Body, 64*1024)
+				errorCode, errorMessage = parseUpstreamError(lastErrBody)
+				disableKey = shouldDisableAPIKey(resp.StatusCode, errorCode, errorMessage, lastErrBody)
+				s.recordModelUsage(user, key, model, resp.StatusCode, time.Since(attemptStartedAt), requestID, attempts, attemptStartedAt, errorCode, errorMessage, string(lastErrBody))
 				if resp.StatusCode == http.StatusTooManyRequests {
 					s.keyState.MarkExhausted(model, key)
+				} else if disableKey {
+					s.keyState.MarkError(model, key, resp.StatusCode, string(lastErrBody))
+					s.disableAPIKey(key, resp.StatusCode, errorCode, errorMessage, lastErrBody)
 				} else {
 					s.keyState.MarkError(model, key, resp.StatusCode, string(lastErrBody))
 				}
 				s.refreshKeyStateStats()
+			} else {
+				s.recordModelUsage(user, key, model, resp.StatusCode, time.Since(attemptStartedAt), requestID, attempts, attemptStartedAt, "", "", "")
 			}
 
 			if shouldRetry(resp.StatusCode) {
 				resp.Body.Close()
 				chain = append(chain, fmt.Sprintf("%s(%s):%d", model, key.Name, resp.StatusCode))
+				continue
+			}
+			if disableKey {
+				resp.Body.Close()
+				chain = append(chain, fmt.Sprintf("%s(%s):disabled:%d", model, key.Name, resp.StatusCode))
 				continue
 			}
 			if resp.StatusCode >= 400 {
@@ -639,11 +684,18 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, user
 	if lastStatus == 0 {
 		lastStatus = http.StatusTooManyRequests
 	}
+	reason := "all keys or models failed"
+	if attempts >= s.cfg.Retry.MaxAttempts {
+		reason = "retry max_attempts reached"
+		chain = append(chain, fmt.Sprintf("max-attempts:%d", s.cfg.Retry.MaxAttempts))
+	}
 	w.Header().Set("X-Proxy-Debug", strings.Join(chain, " -> "))
 	writeJSON(w, lastStatus, map[string]any{
-		"error": "all keys or models failed",
-		"chain": chain,
-		"body":  string(lastErrBody),
+		"error":        reason,
+		"attempts":     attempts,
+		"max_attempts": s.cfg.Retry.MaxAttempts,
+		"chain":        chain,
+		"body":         string(lastErrBody),
 	})
 }
 
@@ -718,6 +770,29 @@ func (k *KeyState) MarkError(model string, key APIKey, status int, message strin
 	}
 }
 
+func (k *KeyState) Remove(key APIKey) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	nextKeys := k.keys[:0]
+	for _, item := range k.keys {
+		if item.ID != key.ID {
+			nextKeys = append(nextKeys, item)
+		}
+	}
+	k.keys = nextKeys
+	if len(k.keys) == 0 {
+		k.next = 0
+	} else if k.next >= len(k.keys) {
+		k.next = k.next % len(k.keys)
+	}
+	suffix := "::" + key.Name
+	for item := range k.exhausted {
+		if strings.HasSuffix(item, suffix) {
+			delete(k.exhausted, item)
+		}
+	}
+}
+
 func (k *KeyState) ClearError(key APIKey) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -770,6 +845,15 @@ func (k *KeyState) SnapshotErrors() map[string]KeyError {
 	return out
 }
 
+func (s *Server) disableAPIKey(key APIKey, status int, errorCode, errorMessage string, errorBody []byte) {
+	if err := s.store.DisableAPIKey(key.ID, status, errorCode, errorMessage, string(errorBody)); err != nil {
+		log.Printf("disable api key %s after %d %s: %v", key.Name, status, errorCode, err)
+		return
+	}
+	s.keyState.Remove(key)
+	log.Printf("disabled api key %s after %d %s", key.Name, status, errorCode)
+}
+
 func (s *Server) recordUsage(user AuthToken, key APIKey, model string, status int, latency time.Duration) {
 	s.statsMu.Lock()
 	s.stats.Requests++
@@ -802,6 +886,38 @@ func (s *Server) recordUsage(user AuthToken, key APIKey, model string, status in
 	}
 }
 
+func (s *Server) recordModelUsage(user AuthToken, key APIKey, model string, status int, latency time.Duration, requestID string, attempt int, createdAt time.Time, errorCode, errorMessage, errorBody string) {
+	if s.store == nil || s.modelUsageCh == nil {
+		return
+	}
+	record := UsageRecord{
+		RequestID:          requestID,
+		Attempt:            attempt,
+		UserID:             user.UserID,
+		UserName:           user.UserName,
+		UserAPIKeyID:       user.ID,
+		UserAPIKeyName:     user.Name,
+		APIKeyID:           key.ID,
+		APIKeyName:         key.Name,
+		GoogleAccountID:    key.AccountID,
+		GoogleAccountEmail: key.AccountEmail,
+		Model:              model,
+		Status:             status,
+		LatencyMS:          latency.Milliseconds(),
+		CreatedAt:          createdAt,
+		ErrorCode:          errorCode,
+		ErrorMessage:       errorMessage,
+		ErrorBody:          errorBody,
+	}
+	select {
+	case s.modelUsageCh <- record:
+	default:
+		if err := s.store.InsertModelUsage(record); err != nil {
+			log.Printf("record model usage: %v", err)
+		}
+	}
+}
+
 func (s *Server) usageWriter() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -818,6 +934,32 @@ func (s *Server) usageWriter() {
 	for {
 		select {
 		case record := <-s.usageCh:
+			batch = append(batch, record)
+			if len(batch) >= 100 {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		}
+	}
+}
+
+func (s *Server) modelUsageWriter() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	batch := make([]UsageRecord, 0, 100)
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		if err := s.store.InsertModelUsageBatch(batch); err != nil {
+			log.Printf("record model usage batch: %v", err)
+		}
+		batch = batch[:0]
+	}
+	for {
+		select {
+		case record := <-s.modelUsageCh:
 			batch = append(batch, record)
 			if len(batch) >= 100 {
 				flush()
@@ -855,10 +997,29 @@ func (s *Server) writeUsage(w http.ResponseWriter, r *http.Request, actor AppUse
 	writeJSON(w, http.StatusOK, summary)
 }
 
+func (s *Server) writeModelUsage(w http.ResponseWriter, r *http.Request) {
+	from, to, ok := parseUsageRange(r)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid date range"})
+		return
+	}
+	keyID, _ := strconv.ParseInt(r.URL.Query().Get("key_id"), 10, 64)
+	summary, err := s.store.ModelUsageSummary(ModelUsageQuery{
+		APIKeyID: keyID,
+		From:     from,
+		To:       to,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
 func parseUsageRange(r *http.Request) (time.Time, time.Time, bool) {
 	now := time.Now()
-	to := now.Truncate(time.Minute)
-	from := to.Add(-6 * time.Hour)
+	from := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	to := from.AddDate(0, 0, 1)
 	if value := r.URL.Query().Get("from"); value != "" {
 		parsed, err := parseUsageTime(value, now.Location(), false)
 		if err != nil {
@@ -890,7 +1051,7 @@ func parseUsageTime(value string, loc *time.Location, endOfDay bool) (time.Time,
 		return time.Time{}, err
 	}
 	if endOfDay {
-		return parsed.Add(23*time.Hour + 59*time.Minute), nil
+		return parsed.AddDate(0, 0, 1), nil
 	}
 	return parsed, nil
 }
@@ -1256,7 +1417,7 @@ func maskSecret(value string) string {
 	if len(value) <= 10 {
 		return "****"
 	}
-	return value[:6] + "..." + value[len(value)-4:]
+	return value[:6] + strings.Repeat(".", len(value)-10) + value[len(value)-4:]
 }
 
 func randomHex(size int) string {
@@ -1347,7 +1508,18 @@ func setCORS(h http.Header) {
 }
 
 func shouldRetry(status int) bool {
-	return status == http.StatusTooManyRequests || status == http.StatusNotFound || status >= 500
+	return status == http.StatusTooManyRequests || status >= 500
+}
+
+func shouldDisableAPIKey(status int, errorCode, errorMessage string, body []byte) bool {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return true
+	}
+	if status != http.StatusBadRequest {
+		return false
+	}
+	text := strings.ToUpper(errorCode + "\n" + errorMessage + "\n" + string(body))
+	return strings.Contains(text, "API_KEY_INVALID") || strings.Contains(text, "API KEY NOT VALID")
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
@@ -1363,6 +1535,19 @@ func drain(r io.Reader, max int64) []byte {
 	}
 	data, _ := io.ReadAll(io.LimitReader(r, max))
 	return data
+}
+
+func parseUpstreamError(body []byte) (string, string) {
+	var payload struct {
+		Error struct {
+			Status  string `json:"status"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if len(body) == 0 || json.Unmarshal(body, &payload) != nil {
+		return "", ""
+	}
+	return payload.Error.Status, payload.Error.Message
 }
 
 func cooldownKey(model, keyName string) string {
