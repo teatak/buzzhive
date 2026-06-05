@@ -1,17 +1,21 @@
 # BuzzHive
 
-BuzzHive is a self-hosted Gemini API proxy with multi-user API keys, Google account/key pooling, failover, automatic bad-key disabling, usage analytics, and a web admin UI.
+BuzzHive is a self-hosted LLM API proxy with multi-user API keys, provider key routing, failover, automatic bad-key disabling, and a web admin UI.
 
 [简体中文](README.zh-CN.md)
 
 ## Features
 
-- Web admin UI for users, user API keys, Google accounts, Gemini keys, runtime status, and usage charts.
+- Web admin UI for users, user API keys, providers, provider keys, models, and runtime status.
 - User-facing API keys sent with `Authorization: Bearer <api-key>`.
-- Google account and Gemini key pool with retry, cooldown, failover, and request counting.
+- Provider key routing with retry, cooldown, failover, and request counting.
 - Automatically disables invalid/suspended upstream keys on 400 API key invalid, 401, and 403 responses.
-- Natural-day usage views, draggable chart range selection, and per-key/model statistics.
-- Postgres-backed users, sessions, accounts, keys, and usage logs.
+- Postgres-backed users, providers, keys, and models; Redis-backed admin sessions and runtime state.
+
+## Architecture Docs
+
+- [Model routing plan](docs/model-routing-plan.zh-CN.md): model-centric provider / key / route architecture.
+- [Model routing task list](docs/model-routing-tasks.zh-CN.md): current completion status and remaining work.
 
 ## Quick Install
 
@@ -31,7 +35,7 @@ Optional:
 curl -fsSL https://raw.githubusercontent.com/teatak/buzzhive/main/install.sh | env INSTALL_DIR=/opt/buzzhive PORT=9622 IMAGE=teatak/buzzhive:latest sh
 ```
 
-Run the same command again to refresh the installer files. The installer keeps `.env`, `config.yaml`, and `./pgdata`.
+Run the same command again to refresh the installer files. The installer keeps `.env`, `config.yaml`, `./pgdata`, and `./redisdata`.
 
 The installer writes a small `makefile` into the install directory:
 
@@ -70,17 +74,32 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   buzzhive:
     image: ${IMAGE:-teatak/buzzhive:latest}
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "${PORT:-9622}:9622"
     environment:
       TZ: ${TZ:-Asia/Singapore}
       BUZZHIVE_DATABASE_URL: postgres://buzzhive:${POSTGRES_PASSWORD:-buzzhive-change-me}@postgres:5432/buzzhive?sslmode=disable
+      BUZZHIVE_REDIS_ADDR: redis:6379
     volumes:
       - ./config.yaml:/config/config.yaml:ro
 ```
@@ -111,11 +130,14 @@ Admin UI:
 http://127.0.0.1:9622/admin/
 ```
 
-Proxy endpoint example:
+Public API:
 
 ```text
-http://127.0.0.1:9622/v1beta/models/gemini-auto:generateContent
+GET  http://127.0.0.1:9622/v1/models
+POST http://127.0.0.1:9622/v1/chat/completions
 ```
+
+BuzzHive currently exposes an OpenAI-compatible API. Put the user-visible BuzzHive model name in the OpenAI `model` field; the backend routes it to configured providers such as Gemini or OpenAI-compatible upstreams.
 
 On first launch, create the initial admin user in the admin UI. Then create user API keys in the UI and pass them as:
 
@@ -137,25 +159,15 @@ Frontend dev server:
 make admin-dev
 ```
 
-## Models
+## Models And Providers
 
-`gemini-auto` tries the configured model list in order. Default:
+Models and providers are managed in the admin UI:
 
-```text
-gemini-3.5-flash
-gemini-3-flash-preview
-gemini-3.1-flash-lite
-```
+- Models: user-visible models, with preset import and per-model route management in the model detail view.
+- Providers: upstream providers, with preset import. The DeepSeek preset uses the official `https://api.deepseek.com` base URL.
+- Provider Keys: upstream API keys directly attached to providers; Ollama / keyless providers are not a current target.
 
-Override in `config.yaml`:
-
-```yaml
-models:
-  auto:
-    - gemini-3.5-flash
-    - gemini-3-flash-preview
-    - gemini-3.1-flash-lite
-```
+The old `gemini-auto` cross-model fallback and public Gemini native proxy have been removed. Each model only rotates through its own routes.
 
 ## Build And Publish
 
@@ -178,5 +190,5 @@ make docker-publish-current
 ## Notes
 
 - The Go server serves `admin/dist` by default.
-- Admin sessions are stored in the database for 7 days and renew when they have 3 days or less remaining.
+- Admin sessions are stored in Redis for 7 days and renew when they have 3 days or less remaining. Without Redis config, local source runs fall back to the database.
 - `config.yaml`, database files, and built frontend assets are intentionally ignored.

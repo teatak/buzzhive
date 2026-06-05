@@ -1,23 +1,81 @@
-export type View = "dashboard" | "users" | "myKeys" | "accounts" | "runtime";
+export type View = "dashboard" | "users" | "myKeys" | "providers" | "models";
 
 export type Session = { user: AppUser };
 export type AppUser = { id: number; username: string; role: string; valid: boolean };
 export type UserAPIKey = { id: number; user_id: number; name: string; token: string; valid: boolean };
-export type GoogleAccount = { id: number; email: string; prefix: string; enabled: boolean };
 
-export type AdminKey = {
+export type ProviderRecord = {
   id: number;
-  account_id: number;
   name: string;
-  key: string;
+  type: string;
+  preset_id: string;
+  base_url: string;
   enabled: boolean;
-  account_email: string;
-  account_prefix: string;
+};
+
+export type ProviderPreset = {
+  id: string;
+  name: string;
+  type: string;
+  base_url: string;
+  description: string;
+};
+
+export type ProviderKey = {
+  id: number;
+  provider_id: number;
+  provider_name?: string;
+  name: string;
+  secret: string;
+  secret_hint: string;
+  enabled: boolean;
+  priority: number;
+  weight: number;
+  labels?: string;
   disabled_status?: number;
   disabled_error_code?: string;
   disabled_error_message?: string;
   disabled_error_body?: string;
   disabled_at?: string;
+};
+
+export type Model = {
+  id: number;
+  name: string;
+  display_name: string;
+  description: string;
+  context_window: number;
+  max_input_tokens: number;
+  max_output_tokens: number;
+  capabilities: string;
+  selection_policy: string;
+  enabled: boolean;
+};
+
+export type ModelPreset = {
+  id: string;
+  family: string;
+  name: string;
+  display_name: string;
+  description: string;
+  context_window: number;
+  max_input_tokens: number;
+  max_output_tokens: number;
+  capabilities: string;
+  selection_policy: string;
+};
+
+export type ModelRoute = {
+  id: number;
+  model_id: number;
+  provider_id: number;
+  provider_name?: string;
+  provider_type?: string;
+  upstream_model: string;
+  quota_family: string;
+  enabled: boolean;
+  priority: number;
+  weight: number;
 };
 
 export type KeyError = { key: string; model: string; status: number; message: string; updated_at: string };
@@ -28,15 +86,12 @@ export type AdminConfig = {
   timeout: string;
   max_attempts: number;
   cooldown_seconds: number;
-  models: string[];
 };
 
 export type AdminData = {
   config: AdminConfig;
   users: AppUser[];
   user_api_keys: UserAPIKey[];
-  accounts: GoogleAccount[];
-  keys: AdminKey[];
 };
 
 export type Stats = {
@@ -44,11 +99,10 @@ export type Stats = {
   requests: number;
   by_key: Record<string, number>;
   exhausted: Record<string, string>;
+  rpd_like: Record<string, boolean>;
   key_errors: Record<string, KeyError>;
   last_updated: string;
 };
-
-export type UsagePoint = { date: string; requests: number; errors: number; avg_latency_ms: number };
 
 export type UsageSummary = {
   requests: number;
@@ -56,28 +110,12 @@ export type UsageSummary = {
   avg_latency_ms: number;
   by_key: Record<string, number>;
   series: UsagePoint[];
+  bucket_minutes: number;
 };
 
-export type ModelUsageTotal = { model: string; requests: number; errors: number };
-export type ModelUsagePoint = { date: string; model: string; requests: number; errors: number };
-export type AccountModelUsage = { account_email: string; model: string; requests: number; quota_429: number; distinct_keys: number };
-export type AccountQuotaSignal = { date: string; account_email: string; model: string; quota_429: number; distinct_keys: number };
-export type ModelUsageError = {
+export type UsagePoint = {
   date: string;
-  request_id: string;
-  attempt: number;
-  account_email: string;
-  key_name: string;
-  model: string;
-  status: number;
-  error_code: string;
-  error_message: string;
-  error_body: string;
-};
-export type ModelUsageSummary = {
-  total_by_model: ModelUsageTotal[];
-  series: ModelUsagePoint[];
-  account_totals: AccountModelUsage[];
-  quota_signals: AccountQuotaSignal[];
-  recent_errors: ModelUsageError[];
+  requests: number;
+  errors: number;
+  avg_latency_ms: number;
 };

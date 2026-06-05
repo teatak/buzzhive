@@ -28,6 +28,14 @@ export function addMinutes(date: Date, minutes: number): Date {
   return next;
 }
 
+export function floorToMinuteBucket(date: Date, bucketMinutes: number): Date {
+  const next = new Date(date);
+  const bucket = Math.max(1, bucketMinutes);
+  next.setSeconds(0, 0);
+  next.setMinutes(Math.floor(next.getMinutes() / bucket) * bucket);
+  return next;
+}
+
 export function naturalDayRange(date = new Date()): { from: string; to: string } {
   const from = new Date(date);
   from.setHours(0, 0, 0, 0);
@@ -36,24 +44,20 @@ export function naturalDayRange(date = new Date()): { from: string; to: string }
   return { from: isoMinute(from), to: isoMinute(to) };
 }
 
-export function usagePath(filter: { key_id: string; from: string; to: string }) {
+export function usagePath(filter: { key_id: string; model: string; from: string; to: string }) {
   const params = new URLSearchParams({ from: filter.from, to: filter.to });
   if (filter.key_id !== "all") params.set("key_id", filter.key_id);
+  if (filter.model !== "all") params.set("model", filter.model);
   return `/admin/api/usage?${params.toString()}`;
 }
 
-export function modelUsagePath(filter: { key_id: string; from: string; to: string }) {
-  const params = new URLSearchParams({ from: filter.from, to: filter.to });
-  if (filter.key_id !== "all") params.set("key_id", filter.key_id);
-  return `/admin/api/model-usage?${params.toString()}`;
-}
-
-export function fillUsageSeries(series: UsagePoint[], from: string, to: string): UsagePoint[] {
-  const start = new Date(from);
+export function fillUsageSeries(series: UsagePoint[], from: string, to: string, bucketMinutes = 1): UsagePoint[] {
+  const start = floorToMinuteBucket(new Date(from), bucketMinutes);
   const end = new Date(to);
+  const step = Math.max(1, bucketMinutes);
   const minuteCount = Math.floor((end.getTime() - start.getTime()) / 60000);
   if (!Number.isFinite(minuteCount) || minuteCount < 0) return series;
-  if (minuteCount > 1440) {
+  if (Math.floor(minuteCount / step) > 1440) {
     return series.length ? series : [
       { date: from, requests: 0, errors: 0, avg_latency_ms: 0 },
       { date: to, requests: 0, errors: 0, avg_latency_ms: 0 },
@@ -65,7 +69,7 @@ export function fillUsageSeries(series: UsagePoint[], from: string, to: string):
   while (cursor < end) {
     const date = isoMinute(cursor);
     out.push(byDate.get(date) ?? { date, requests: 0, errors: 0, avg_latency_ms: 0 });
-    cursor = addMinutes(cursor, 1);
+    cursor = addMinutes(cursor, step);
   }
   return out;
 }

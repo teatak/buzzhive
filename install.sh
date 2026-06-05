@@ -88,16 +88,31 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   buzzhive:
     image: \${IMAGE}
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "\${PORT}:9622"
     environment:
       BUZZHIVE_DATABASE_URL: postgres://buzzhive:\${POSTGRES_PASSWORD}@postgres:5432/buzzhive?sslmode=disable
+      BUZZHIVE_REDIS_ADDR: redis:6379
     volumes:
       - ./config.yaml:/config/config.yaml:ro
 EOF

@@ -1,6 +1,5 @@
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { useLocale } from "../i18n/locale";
 import type { AppUser } from "../types/admin";
@@ -12,15 +11,13 @@ export function UsersPage(props: {
   const { t } = useLocale();
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("nav.users")}</CardTitle>
-        <CardAction>
-          <Button type="button" onClick={props.onNewUser}>{t("users.new_user")}</Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="min-w-0 overflow-hidden">
-        <Table>
+    <div className="stack">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-2xl font-semibold tracking-tight">{t("nav.users")}</h2>
+        <Button type="button" onClick={props.onNewUser}>{t("users.new_user")}</Button>
+      </div>
+      <div className="data-table-card">
+        <Table className="keys-table-inner">
           <TableHeader>
             <TableRow>
               <TableHead>{t("auth.username")}</TableHead>
@@ -42,7 +39,7 @@ export function UsersPage(props: {
             </TableRow>
           ))}</TableBody>
         </Table>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

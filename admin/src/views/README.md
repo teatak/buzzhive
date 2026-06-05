@@ -7,7 +7,7 @@ Current planned split:
 - `DashboardView`
 - `MyApiKeysView`
 - `UsersView`
-- `GoogleAccountsView`
-- `RuntimeView`
+- `ProvidersView`
+- `ModelsView`
 
 Views receive data/actions from `App` until the app grows enough to justify feature stores.

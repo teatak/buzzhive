@@ -5,7 +5,7 @@ import { tNow } from "../../i18n/locale";
 import { addMinutes, isoMinute } from "../../lib/date";
 import type { UsagePoint } from "../../types/admin";
 
-export function UsageChart(props: { series: UsagePoint[]; onRangeSelect?: (from: string, to: string) => void }) {
+export function UsageChart(props: { series: UsagePoint[]; bucketMinutes?: number; onRangeSelect?: (from: string, to: string) => void }) {
   const [dragStart, setDragStart] = useState<number | null>(null);
   const [dragEnd, setDragEnd] = useState<number | null>(null);
   const [isPointerSelecting, setIsPointerSelecting] = useState(false);
@@ -75,7 +75,7 @@ export function UsageChart(props: { series: UsagePoint[]; onRangeSelect?: (from:
     const end = Math.max(dragStart, dragEnd);
     if (start !== end) {
       preserveTooltipSuppression.current = true;
-      props.onRangeSelect?.(props.series[start].date, isoMinute(addMinutes(new Date(props.series[end].date), 1)));
+      props.onRangeSelect?.(props.series[start].date, isoMinute(addMinutes(new Date(props.series[end].date), props.bucketMinutes ?? 1)));
     } else {
       setSuppressTooltip(false);
     }

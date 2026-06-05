@@ -4,77 +4,84 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/teatak/cart/v2"
 )
 
-func (s *Server) recordUsage(user AuthToken, key APIKey, model string, status int, latency time.Duration) {
-	s.statsMu.Lock()
-	s.stats.Requests++
-	s.stats.ByUser[user.Name]++
-	s.stats.ByKey[key.Name]++
-	s.stats.LastUpdated = time.Now()
-	s.statsMu.Unlock()
-
-	if s.store != nil && s.usageCh != nil {
-		record := UsageRecord{
-			UserID:             user.UserID,
-			UserName:           user.UserName,
-			UserAPIKeyID:       user.ID,
-			UserAPIKeyName:     user.Name,
-			APIKeyID:           key.ID,
-			APIKeyName:         key.Name,
-			GoogleAccountID:    key.AccountID,
-			GoogleAccountEmail: key.AccountEmail,
-			Model:              model,
-			Status:             status,
-			LatencyMS:          latency.Milliseconds(),
-		}
-		select {
-		case s.usageCh <- record:
-		default:
-			if err := s.store.InsertUsage(record); err != nil {
-				log.Printf("record usage: %v", err)
-			}
-		}
+func (s *Server) recordProviderResultUsage(user AuthToken, model string, result ProviderAttemptResult, status int) {
+	latency := time.Duration(0)
+	if !result.StartedAt.IsZero() {
+		latency = time.Since(result.StartedAt)
 	}
+	s.recordUsage(user, result.Key, model, result.Target.UpstreamModel, status, latency)
 }
 
-func (s *Server) recordModelUsage(user AuthToken, key APIKey, model string, status int, latency time.Duration, requestID string, attempt int, createdAt time.Time, errorCode, errorMessage, errorBody string) {
-	if s.store == nil || s.modelUsageCh == nil {
+func (s *Server) recordUsage(user AuthToken, key APIKey, model, upstreamModel string, status int, latency time.Duration) {
+	if status == 0 {
+		status = http.StatusBadGateway
+	}
+	userName := strings.TrimSpace(user.UserName)
+	if userName == "" {
+		userName = strings.TrimSpace(user.Name)
+	}
+	if userName == "" {
+		userName = "local"
+	}
+	latencyMS := latency.Milliseconds()
+	if latencyMS < 0 {
+		latencyMS = 0
+	}
+
+	record := UsageRecord{
+		UserID:          user.UserID,
+		UserName:        userName,
+		UserAPIKeyID:    user.ID,
+		UserAPIKeyName:  user.Name,
+		ProviderID:      key.ProviderID,
+		ProviderName:    key.ProviderName,
+		ProviderKeyID:   key.ProviderKeyID,
+		ProviderKeyName: key.Name,
+		Model:           model,
+		UpstreamModel:   upstreamModel,
+		Status:          status,
+		LatencyMS:       latencyMS,
+		CreatedAt:       time.Now(),
+	}
+
+	s.statsMu.Lock()
+	if s.stats.ByUser == nil {
+		s.stats.ByUser = make(map[string]int64)
+	}
+	if s.stats.ByKey == nil {
+		s.stats.ByKey = make(map[string]int64)
+	}
+	s.stats.Requests++
+	s.stats.ByUser[userName]++
+	if record.UserAPIKeyName != "" {
+		s.stats.ByKey[record.UserAPIKeyName]++
+	}
+	s.stats.LastUpdated = record.CreatedAt
+	s.statsMu.Unlock()
+
+	if s.usageCh == nil {
+		if err := s.store.InsertUsageBatch([]UsageRecord{record}); err != nil {
+			log.Printf("record usage: %v", err)
+		}
 		return
 	}
-	record := UsageRecord{
-		RequestID:          requestID,
-		Attempt:            attempt,
-		UserID:             user.UserID,
-		UserName:           user.UserName,
-		UserAPIKeyID:       user.ID,
-		UserAPIKeyName:     user.Name,
-		APIKeyID:           key.ID,
-		APIKeyName:         key.Name,
-		GoogleAccountID:    key.AccountID,
-		GoogleAccountEmail: key.AccountEmail,
-		Model:              model,
-		Status:             status,
-		LatencyMS:          latency.Milliseconds(),
-		CreatedAt:          createdAt,
-		ErrorCode:          errorCode,
-		ErrorMessage:       errorMessage,
-		ErrorBody:          errorBody,
-	}
 	select {
-	case s.modelUsageCh <- record:
+	case s.usageCh <- record:
 	default:
-		if err := s.store.InsertModelUsage(record); err != nil {
-			log.Printf("record model usage: %v", err)
-		}
+		log.Printf("usage queue full; dropping usage record")
 	}
 }
 
 func (s *Server) usageWriter() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	batch := make([]UsageRecord, 0, 100)
+	batch := make([]UsageRecord, 0, 64)
 	flush := func() {
 		if len(batch) == 0 {
 			return
@@ -84,11 +91,12 @@ func (s *Server) usageWriter() {
 		}
 		batch = batch[:0]
 	}
+
 	for {
 		select {
 		case record := <-s.usageCh:
 			batch = append(batch, record)
-			if len(batch) >= 100 {
+			if len(batch) >= 64 {
 				flush()
 			}
 		case <-ticker.C:
@@ -97,114 +105,95 @@ func (s *Server) usageWriter() {
 	}
 }
 
-func (s *Server) modelUsageWriter() {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	batch := make([]UsageRecord, 0, 100)
-	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-		if err := s.store.InsertModelUsageBatch(batch); err != nil {
-			log.Printf("record model usage batch: %v", err)
-		}
-		batch = batch[:0]
+func (s *Server) handleUsage(c *cart.Context) error {
+	from, to, err := parseUsageRange(c.Request)
+	if err != nil {
+		return jsonError(c, http.StatusBadRequest, err)
 	}
-	for {
-		select {
-		case record := <-s.modelUsageCh:
-			batch = append(batch, record)
-			if len(batch) >= 100 {
-				flush()
-			}
-		case <-ticker.C:
-			flush()
-		}
+	keyID, err := parseUsageKeyID(c.Request)
+	if err != nil {
+		return jsonError(c, http.StatusBadRequest, err)
 	}
-}
-
-func (s *Server) writeStats(w http.ResponseWriter) {
-	s.refreshKeyStateStats()
-	s.statsMu.Lock()
-	defer s.statsMu.Unlock()
-	writeJSON(w, http.StatusOK, s.stats)
-}
-
-func (s *Server) writeUsage(w http.ResponseWriter, r *http.Request, actor AppUser) {
-	from, to, ok := parseUsageRange(r)
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid date range"})
-		return
-	}
-	keyID, _ := strconv.ParseInt(r.URL.Query().Get("key_id"), 10, 64)
-	summary, err := s.store.UsageSummary(UsageQuery{
-		UserID:       actor.ID,
+	user := adminUser(c)
+	usage, err := s.store.UsageSummary(UsageQuery{
+		UserID:       user.ID,
 		UserAPIKeyID: keyID,
+		Model:        strings.TrimSpace(c.Request.URL.Query().Get("model")),
 		From:         from,
 		To:           to,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		return jsonError(c, http.StatusInternalServerError, err)
 	}
-	writeJSON(w, http.StatusOK, summary)
+	return jsonOK(c, usage)
 }
 
-func (s *Server) writeModelUsage(w http.ResponseWriter, r *http.Request) {
-	from, to, ok := parseUsageRange(r)
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid date range"})
-		return
-	}
-	keyID, _ := strconv.ParseInt(r.URL.Query().Get("key_id"), 10, 64)
-	summary, err := s.store.ModelUsageSummary(ModelUsageQuery{
-		APIKeyID: keyID,
-		From:     from,
-		To:       to,
-	})
+func parseUsageRange(r *http.Request) (time.Time, time.Time, error) {
+	from, err := parseUsageTime(r.URL.Query().Get("from"))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		return time.Time{}, time.Time{}, err
 	}
-	writeJSON(w, http.StatusOK, summary)
-}
-
-func parseUsageRange(r *http.Request) (time.Time, time.Time, bool) {
-	now := time.Now()
-	from := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	to := from.AddDate(0, 0, 1)
-	if value := r.URL.Query().Get("from"); value != "" {
-		parsed, err := parseUsageTime(value, now.Location(), false)
-		if err != nil {
-			return time.Time{}, time.Time{}, false
-		}
-		from = parsed
-	}
-	if value := r.URL.Query().Get("to"); value != "" {
-		parsed, err := parseUsageTime(value, now.Location(), true)
-		if err != nil {
-			return time.Time{}, time.Time{}, false
-		}
-		to = parsed
-	}
-	if from.After(to) {
-		return time.Time{}, time.Time{}, false
-	}
-	return from, to, true
-}
-
-func parseUsageTime(value string, loc *time.Location, endOfDay bool) (time.Time, error) {
-	for _, layout := range []string{"2006-01-02T15:04", "2006-01-02 15:04"} {
-		if parsed, err := time.ParseInLocation(layout, value, loc); err == nil {
-			return parsed, nil
-		}
-	}
-	parsed, err := time.ParseInLocation("2006-01-02", value, loc)
+	to, err := parseUsageTime(r.URL.Query().Get("to"))
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, time.Time{}, err
 	}
-	if endOfDay {
-		return parsed.AddDate(0, 0, 1), nil
+	if from.IsZero() && to.IsZero() {
+		from = time.Now()
+		from = time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, from.Location())
+		to = from.Add(24 * time.Hour)
 	}
-	return parsed, nil
+	if !from.IsZero() && !to.IsZero() && !from.Before(to) {
+		return time.Time{}, time.Time{}, strconv.ErrSyntax
+	}
+	return from, to, nil
+}
+
+func parseUsageTime(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	for _, layout := range []string{"2006-01-02T15:04", "2006-01-02T15:04:05", time.RFC3339, time.RFC3339Nano} {
+		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, strconv.ErrSyntax
+}
+
+func parseUsageKeyID(r *http.Request) (int64, error) {
+	keyID := strings.TrimSpace(r.URL.Query().Get("key_id"))
+	if keyID == "" || keyID == "all" {
+		return 0, nil
+	}
+	return strconv.ParseInt(keyID, 10, 64)
+}
+
+func providerResultStatus(resp *http.Response) int {
+	if resp == nil {
+		return http.StatusBadGateway
+	}
+	return resp.StatusCode
+}
+
+func (s *Server) statsSnapshot() Stats {
+	s.refreshKeyStateStats()
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	return s.stats
+}
+
+func (s *Server) userStats() Stats {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	return Stats{
+		StartedAt:   s.stats.StartedAt,
+		Requests:    s.stats.Requests,
+		ByUser:      map[string]int64{},
+		ByKey:       s.stats.ByKey,
+		Exhausted:   map[string]string{},
+		RPDLike:     map[string]bool{},
+		KeyErrors:   map[string]KeyError{},
+		LastUpdated: s.stats.LastUpdated,
+	}
 }

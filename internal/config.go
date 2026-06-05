@@ -2,6 +2,7 @@ package buzzhive
 
 import (
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -34,14 +35,27 @@ func loadConfig(path string) (Config, error) {
 		cfg.Database.Driver = "postgres"
 		cfg.Database.URL = envURL
 	}
+	if envURL := os.Getenv("BUZZHIVE_REDIS_URL"); envURL != "" {
+		cfg.Redis.URL = envURL
+	}
+	if envAddr := os.Getenv("BUZZHIVE_REDIS_ADDR"); envAddr != "" {
+		cfg.Redis.Addr = envAddr
+	}
+	if envPassword := os.Getenv("BUZZHIVE_REDIS_PASSWORD"); envPassword != "" {
+		cfg.Redis.Password = envPassword
+	}
+	if envDB := os.Getenv("BUZZHIVE_REDIS_DB"); envDB != "" {
+		db, err := strconv.Atoi(envDB)
+		if err != nil {
+			return cfg, err
+		}
+		cfg.Redis.DB = db
+	}
 	if cfg.Retry.MaxAttempts <= 0 {
 		cfg.Retry.MaxAttempts = 8
 	}
 	if cfg.Retry.CooldownSeconds <= 0 {
-		cfg.Retry.CooldownSeconds = 60
-	}
-	if len(cfg.Models.Auto) == 0 {
-		cfg.Models.Auto = []string{"gemini-3.5-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite"}
+		cfg.Retry.CooldownSeconds = 120
 	}
 	return cfg, nil
 }

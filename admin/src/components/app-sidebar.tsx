@@ -1,4 +1,4 @@
-import { Activity, Database, Gauge, KeyRound, UserRound } from "lucide-react";
+import { Boxes, Gauge, KeyRound, Server, UserRound } from "lucide-react";
 import type { View } from "@/types/admin";
 import { BrandLogo } from "@/components/brand-logo";
 import { useLocale } from "@/i18n/locale";
@@ -24,8 +24,8 @@ const items: Array<{ view: View; labelKey: string; icon: typeof Gauge; adminOnly
   { view: "dashboard", labelKey: "nav.dashboard", icon: Gauge },
   { view: "myKeys", labelKey: "nav.my_keys", icon: KeyRound },
   { view: "users", labelKey: "nav.users", icon: UserRound, adminOnly: true },
-  { view: "accounts", labelKey: "nav.accounts", icon: Database, adminOnly: true },
-  { view: "runtime", labelKey: "nav.runtime", icon: Activity },
+  { view: "models", labelKey: "nav.models", icon: Boxes, adminOnly: true },
+  { view: "providers", labelKey: "nav.providers", icon: Server, adminOnly: true },
 ];
 
 export function AppSidebar({ role, view, onNavigate }: AppSidebarProps) {

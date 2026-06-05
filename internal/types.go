@@ -10,7 +10,7 @@ import (
 var corsHeaders = map[string]string{
 	"Access-Control-Allow-Origin":  "*",
 	"Access-Control-Allow-Methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-	"Access-Control-Allow-Headers": "Content-Type, Authorization, x-goog-api-key",
+	"Access-Control-Allow-Headers": "Content-Type, Authorization",
 	"X-Proxy-Version":              "local-go-v1",
 }
 
@@ -28,18 +28,14 @@ type Config struct {
 		Timeout string `yaml:"timeout"`
 	} `yaml:"upstream"`
 	Database DatabaseConfig `yaml:"database"`
+	Redis    RedisConfig    `yaml:"redis"`
 	Auth     struct {
 		Tokens []AuthToken `yaml:"tokens"`
 	} `yaml:"auth"`
-	KeyAccounts map[string]string `yaml:"key_accounts"`
-	Models      struct {
-		Auto []string `yaml:"auto"`
-	} `yaml:"models"`
 	Retry struct {
 		MaxAttempts     int `yaml:"max_attempts"`
 		CooldownSeconds int `yaml:"cooldown_seconds"`
 	} `yaml:"retry"`
-	GeminiAPIKeys []APIKey `yaml:"gemini_api_keys"`
 }
 
 type AuthToken struct {
@@ -53,12 +49,13 @@ type AuthToken struct {
 
 type APIKey struct {
 	ID                   int64  `yaml:"-" json:"id"`
-	AccountID            int64  `yaml:"-" json:"account_id"`
+	ProviderID           int64  `yaml:"-" json:"provider_id,omitempty"`
+	ProviderName         string `yaml:"-" json:"provider_name,omitempty"`
+	ProviderType         string `yaml:"-" json:"provider_type,omitempty"`
+	ProviderKeyID        int64  `yaml:"-" json:"provider_key_id,omitempty"`
 	Name                 string `yaml:"name" json:"name"`
 	Key                  string `yaml:"key" json:"key,omitempty"`
 	Enabled              bool   `yaml:"-" json:"enabled"`
-	AccountEmail         string `yaml:"-" json:"account_email,omitempty"`
-	AccountPrefix        string `yaml:"-" json:"account_prefix,omitempty"`
 	DisabledStatus       int    `yaml:"-" json:"disabled_status,omitempty"`
 	DisabledErrorCode    string `yaml:"-" json:"disabled_error_code,omitempty"`
 	DisabledErrorMessage string `yaml:"-" json:"disabled_error_message,omitempty"`
@@ -80,53 +77,59 @@ type Stats struct {
 	ByUser      map[string]int64    `json:"by_user"`
 	ByKey       map[string]int64    `json:"by_key"`
 	Exhausted   map[string]string   `json:"exhausted"`
+	RPDLike     map[string]bool     `json:"rpd_like"`
 	KeyErrors   map[string]KeyError `json:"key_errors"`
 	LastUpdated time.Time           `json:"last_updated"`
 }
 
 type KeyState struct {
-	keys      []APIKey
-	next      int
-	cooldown  time.Duration
-	exhausted map[string]time.Time
-	errors    map[string]KeyError
-	mu        sync.Mutex
+	keys         []APIKey
+	next         int
+	cooldown     time.Duration
+	rpdCooldown  time.Duration
+	exhausted    map[string]time.Time
+	cooldownHits map[string]int
+	rpdLike      map[string]bool
+	errors       map[string]KeyError
+	mu           sync.Mutex
 }
 
 type Server struct {
-	cfg          Config
-	adminDir     string
-	store        *Store
-	upstream     *url.URL
-	client       *http.Client
-	authTokens   map[string]AuthToken
-	sessions     map[string]SessionUser
-	keyState     *KeyState
-	usageCh      chan UsageRecord
-	modelUsageCh chan UsageRecord
-	stats        Stats
-	statsMu      sync.Mutex
-	runtimeMu    sync.Mutex
+	cfg           Config
+	adminDir      string
+	store         *Store
+	runtimeCache  *RuntimeCache
+	adminAPI      http.Handler
+	upstream      *url.URL
+	client        *http.Client
+	providers     map[string]Provider
+	authTokens    map[string]AuthToken
+	sessions      map[string]SessionUser
+	routeNext     map[string]int
+	routeSessions map[string]RouteSession
+	keyState      *KeyState
+	usageCh       chan UsageRecord
+	stats         Stats
+	statsMu       sync.Mutex
+	routeMu       sync.Mutex
+	runtimeMu     sync.Mutex
+	toolSigMu     sync.Mutex
+	toolSigs      map[string]string
 }
 
 type AdminConfig struct {
-	Addr            string     `json:"addr"`
-	UpstreamBaseURL string     `json:"upstream_base_url"`
-	Timeout         string     `json:"timeout"`
-	MaxAttempts     int        `json:"max_attempts"`
-	CooldownSeconds int        `json:"cooldown_seconds"`
-	Models          []string   `json:"models"`
-	Keys            []AdminKey `json:"keys"`
-	Accounts        []Account  `json:"accounts"`
-	Tokens          []string   `json:"tokens"`
+	Addr            string   `json:"addr"`
+	UpstreamBaseURL string   `json:"upstream_base_url"`
+	Timeout         string   `json:"timeout"`
+	MaxAttempts     int      `json:"max_attempts"`
+	CooldownSeconds int      `json:"cooldown_seconds"`
+	Tokens          []string `json:"tokens"`
 }
 
 type AdminData struct {
-	Config      AdminConfig     `json:"config"`
-	Users       []AppUser       `json:"users"`
-	UserAPIKeys []AuthToken     `json:"user_api_keys"`
-	Accounts    []GoogleAccount `json:"accounts"`
-	Keys        []APIKey        `json:"keys"`
+	Config      AdminConfig `json:"config"`
+	Users       []AppUser   `json:"users"`
+	UserAPIKeys []AuthToken `json:"user_api_keys"`
 }
 
 type AppUser struct {
@@ -139,23 +142,4 @@ type AppUser struct {
 type LoginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
-}
-
-type Account struct {
-	Email  string `json:"email"`
-	Prefix string `json:"prefix"`
-}
-
-type GoogleAccount struct {
-	ID      int64  `json:"id"`
-	Email   string `json:"email"`
-	Prefix  string `json:"prefix"`
-	Enabled bool   `json:"enabled"`
-}
-
-type AdminKey struct {
-	Name          string `json:"name"`
-	Key           string `json:"key"`
-	AccountEmail  string `json:"account_email"`
-	AccountPrefix string `json:"account_prefix"`
 }

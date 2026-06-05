@@ -6,10 +6,13 @@ export const viewFromHash = (): View => {
       return "users";
     case "my-api-keys":
       return "myKeys";
-    case "google-accounts":
-      return "accounts";
-    case "runtime":
-      return "runtime";
+    case "providers":
+      return "providers";
+    case "provider-keys":
+      return "providers";
+    case "models":
+    case "hub":
+      return "models";
     default:
       return "dashboard";
   }
@@ -21,10 +24,10 @@ export const hashForView = (view: View) => {
       return "users";
     case "myKeys":
       return "my-api-keys";
-    case "accounts":
-      return "google-accounts";
-    case "runtime":
-      return "runtime";
+    case "providers":
+      return "providers";
+    case "models":
+      return "models";
     default:
       return "dashboard";
   }

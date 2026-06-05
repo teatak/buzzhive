@@ -11,7 +11,7 @@ The admin app is a Vite + React + Tailwind v4 + shadcn/ui surface.
 - `components/ui/`: shadcn-style primitives. Add copied shadcn components here.
 - `components/`: BuzzHive shared components built from `components/ui`.
 - `layout/`: shell/sidebar/topbar components.
-- `views/`: page-level views such as dashboard, accounts, runtime.
+- `views/`: page-level views such as dashboard, providers, and models.
 
 ## Theme
 

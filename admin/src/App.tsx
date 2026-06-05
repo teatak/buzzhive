@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   KeyRound,
 } from "lucide-react";
@@ -6,18 +6,21 @@ import { toast } from "sonner";
 import { request, storageKey } from "./api/client";
 import { LocaleToggle } from "./i18n/LocaleToggle";
 import { tNow, useLocale } from "./i18n/locale";
-import { fillUsageSeries, formatDate, modelUsagePath, naturalDayRange, usagePath } from "./lib/date";
+import { fillUsageSeries, naturalDayRange, usagePath } from "./lib/date";
 import { hashForView, viewFromHash } from "./router/views";
 import type {
   AdminConfig,
   AdminData,
-  AdminKey,
   AppUser,
-  GoogleAccount,
+  Model,
+  ModelPreset,
+  ModelRoute,
+  ProviderKey,
+  ProviderPreset,
+  ProviderRecord,
   Session,
   Stats,
   UsageSummary,
-  ModelUsageSummary,
   UserAPIKey,
   View,
 } from "./types/admin";
@@ -33,23 +36,19 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "./components/ui/alert-dialog";
-import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Field, FieldGroup, FieldLabel } from "./components/ui/field";
 import { Input } from "./components/ui/input";
-import { Label } from "./components/ui/label";
-import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
 import { ThemeToggle } from "./theme/ThemeToggle";
 import { AdminLayout } from "./layout/AdminLayout";
 import { DashboardPage } from "./views/DashboardPage";
 import { MyApiKeysPage } from "./views/MyApiKeysPage";
 import { UsersPage } from "./views/UsersPage";
-import { RuntimePage } from "./views/RuntimePage";
-import { AccountsPage } from "./views/AccountsPage";
+import { ProvidersPage } from "./views/ProvidersPage";
+import { ModelsPage } from "./views/ModelsPage";
 
 type ConfirmAction = {
   title: string;
@@ -58,6 +57,10 @@ type ConfirmAction = {
   successLabel: string;
   onConfirm: () => Promise<void>;
 };
+
+function asList<T>(value: T[] | null | undefined): T[] {
+  return value ?? [];
+}
 
 function fallbackCopyText(value: string) {
   const textarea = document.createElement("textarea");
@@ -88,11 +91,14 @@ export function App() {
   const [config, setConfig] = useState<AdminConfig | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
-  const [modelUsage, setModelUsage] = useState<ModelUsageSummary | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
   const [userAPIKeys, setUserAPIKeys] = useState<UserAPIKey[]>([]);
-  const [accounts, setAccounts] = useState<GoogleAccount[]>([]);
-  const [keys, setKeys] = useState<AdminKey[]>([]);
+  const [providers, setProviders] = useState<ProviderRecord[]>([]);
+  const [providerKeys, setProviderKeys] = useState<ProviderKey[]>([]);
+  const [providerPresets, setProviderPresets] = useState<ProviderPreset[]>([]);
+  const [models, setModels] = useState<Model[]>([]);
+  const [modelPresets, setModelPresets] = useState<ModelPreset[]>([]);
+  const [modelRoutes, setModelRoutes] = useState<ModelRoute[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [newUser, setNewUser] = useState({ username: "", password: "", role: "user" });
@@ -102,47 +108,97 @@ export function App() {
   const [revealedUserKeys, setRevealedUserKeys] = useState<Record<number, string>>({});
   const [copiedTarget, setCopiedTarget] = useState("");
   const copiedTimer = useRef<number | null>(null);
+  const viewRefreshSeq = useRef(0);
   const [showUserDialog, setShowUserDialog] = useState(false);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
-  const [newAccount, setNewAccount] = useState({ email: "" });
-  const [newKey, setNewKey] = useState({ account_id: "", key: "" });
-  const [keyAccountFilter, setKeyAccountFilter] = useState("all");
-  const [selectedKeyIds, setSelectedKeyIds] = useState<number[]>([]);
   const [usageFilter, setUsageFilter] = useState({
     key_id: "all",
-    ...naturalDayRange(),
-  });
-  const [modelUsageFilter, setModelUsageFilter] = useState({
-    key_id: "all",
+    model: "all",
     ...naturalDayRange(),
   });
 
   async function load(activeToken = token) {
-    const [nextSession, data, nextStats, nextUsage, nextModelUsage] = await Promise.all([
+    const [nextSession, data, nextStats] = await Promise.all([
       request<Session>("/admin/api/session", activeToken),
       request<AdminData>("/admin/api/data", activeToken),
       request<Stats>("/admin/api/stats", activeToken),
-      request<UsageSummary>(usagePath(usageFilter), activeToken),
-      request<ModelUsageSummary>(modelUsagePath(modelUsageFilter), activeToken),
     ]);
     setSession(nextSession);
     setConfig(data.config);
-    setUsers(data.users);
-    setUserAPIKeys(data.user_api_keys);
-    setAccounts(data.accounts);
-    setKeys(data.keys);
+    setUsers(asList(data.users));
+    setUserAPIKeys(asList(data.user_api_keys));
+    setStats(nextStats);
+  }
+
+  async function loadDashboard(activeToken = token) {
+    const [nextStats, nextUsage, nextUserAPIKeys, nextModels] = await Promise.all([
+      request<Stats>("/admin/api/stats", activeToken),
+      request<UsageSummary>(usagePath(usageFilter), activeToken),
+      request<UserAPIKey[]>("/admin/api/user-api-keys", activeToken),
+      request<Model[]>("/admin/api/models", activeToken),
+    ]);
     setStats(nextStats);
     setUsage(nextUsage);
-    setModelUsage(nextModelUsage);
+    setUserAPIKeys(asList(nextUserAPIKeys));
+    setModels(asList(nextModels));
   }
 
-  async function loadUsage(activeToken = token) {
-    setUsage(await request<UsageSummary>(usagePath(usageFilter), activeToken));
+  async function loadMyAPIKeys(activeToken = token) {
+    setUserAPIKeys(asList(await request<UserAPIKey[]>("/admin/api/user-api-keys", activeToken)));
   }
 
-  async function loadModelUsage(activeToken = token) {
-    setModelUsage(await request<ModelUsageSummary>(modelUsagePath(modelUsageFilter), activeToken));
+  async function loadUsers(activeToken = token) {
+    setUsers(asList(await request<AppUser[]>("/admin/api/users", activeToken)));
+  }
+
+  async function loadProviders(activeToken = token) {
+    const [nextProviders, nextProviderPresets, nextProviderKeys] = await Promise.all([
+      request<ProviderRecord[]>("/admin/api/providers", activeToken),
+      request<ProviderPreset[]>("/admin/api/provider-presets", activeToken),
+      request<ProviderKey[]>("/admin/api/provider-keys", activeToken),
+    ]);
+    setProviders(asList(nextProviders));
+    setProviderPresets(asList(nextProviderPresets));
+    setProviderKeys(asList(nextProviderKeys));
+  }
+
+  async function loadModels(activeToken = token) {
+    const [nextProviders, nextModels, nextModelPresets, nextModelRoutes] = await Promise.all([
+      request<ProviderRecord[]>("/admin/api/providers", activeToken),
+      request<Model[]>("/admin/api/models", activeToken),
+      request<ModelPreset[]>("/admin/api/model-presets", activeToken),
+      request<ModelRoute[]>("/admin/api/model-routes", activeToken),
+    ]);
+    setProviders(asList(nextProviders));
+    setModels(asList(nextModels));
+    setModelPresets(asList(nextModelPresets));
+    setModelRoutes(asList(nextModelRoutes));
+  }
+
+  async function loadView(activeView = view, activeToken = token) {
+    if (!activeToken) return;
+    if (activeView === "users" && session?.user.role !== "admin") return;
+    if (activeView === "providers" && session?.user.role !== "admin") return;
+    if (activeView === "models" && session?.user.role !== "admin") return;
+
+    switch (activeView) {
+      case "dashboard":
+        await loadDashboard(activeToken);
+        return;
+      case "myKeys":
+        await loadMyAPIKeys(activeToken);
+        return;
+      case "users":
+        await loadUsers(activeToken);
+        return;
+      case "providers":
+        await loadProviders(activeToken);
+        return;
+      case "models":
+        await loadModels(activeToken);
+        return;
+    }
   }
 
   async function login() {
@@ -170,16 +226,10 @@ export function App() {
     if (!token) return;
     setLoading(true);
     try {
-      await load();
+      await loadView();
     } finally {
       setLoading(false);
     }
-  }
-
-  async function flushCooling() {
-    await request("/admin/api/flush-exhausted", token, { method: "POST" });
-    await refresh();
-    toast.success(tNow("toast.cooling_cleared"));
   }
 
   async function createUser() {
@@ -240,54 +290,6 @@ export function App() {
     await refresh();
   }
 
-  async function createAccount() {
-    await request("/admin/api/google-accounts", token, {
-      method: "POST",
-      body: JSON.stringify({ email: newAccount.email, enabled: true }),
-    });
-    setNewAccount({ email: "" });
-    await refresh();
-    toast.success(tNow("accounts.added"));
-  }
-
-  async function updateGoogleAccount(account: GoogleAccount, enabled: boolean) {
-    await request("/admin/api/google-accounts", token, {
-      method: "PUT",
-      body: JSON.stringify({ ...account, enabled }),
-    });
-    await refresh();
-    toast.success(tNow(enabled ? "accounts.enabled" : "accounts.disabled"));
-  }
-
-  async function deleteGoogleAccount(account: GoogleAccount) {
-    await request(`/admin/api/google-accounts?id=${account.id}`, token, { method: "DELETE" });
-    await refresh();
-  }
-
-  async function createKey() {
-    const values = newKey.key.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
-    for (const value of values) {
-      await request("/admin/api/api-keys", token, {
-        method: "POST",
-        body: JSON.stringify({
-          account_id: Number(newKey.account_id),
-          key: value,
-          enabled: true,
-        }),
-      });
-    }
-    setNewKey({ account_id: "", key: "" });
-    await refresh();
-    toast.success(tNow("keys.gemini_added", { count: values.length }));
-  }
-
-  async function deleteAPIKeys(ids: number[]) {
-    if (!ids.length) return;
-    await request(`/admin/api/api-keys?ids=${ids.join(",")}`, token, { method: "DELETE" });
-    setSelectedKeyIds((current) => current.filter((id) => !ids.includes(id)));
-    await refresh();
-  }
-
   async function copyText(value: string, target = "copy") {
     await copyTextFromPromise(Promise.resolve(value), target);
   }
@@ -343,8 +345,6 @@ export function App() {
     setSession(null);
     setConfig(null);
     setStats(null);
-    setUsage(null);
-    setModelUsage(null);
   }
 
   async function changePassword() {
@@ -404,12 +404,28 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (token && session) loadUsage().catch(() => undefined);
-  }, [usageFilter.key_id, usageFilter.from, usageFilter.to]);
+    if (!token || !session || !config || !stats) return;
+    const seq = ++viewRefreshSeq.current;
+    setLoading(true);
+    loadView(view, token)
+      .catch((error) => {
+        if (error instanceof Error && error.message === "unauthorized") {
+          void logout();
+          return;
+        }
+        toast.error(error instanceof Error ? error.message : tNow("toast.action_failed"));
+      })
+      .finally(() => {
+        if (seq === viewRefreshSeq.current) setLoading(false);
+      });
+  }, [view, token, session?.user.id, session?.user.role]);
 
   useEffect(() => {
-    if (token && session) loadModelUsage().catch(() => undefined);
-  }, [modelUsageFilter.key_id, modelUsageFilter.from, modelUsageFilter.to]);
+    if (!token || !session || view !== "dashboard") return;
+    request<UsageSummary>(usagePath(usageFilter), token)
+      .then(setUsage)
+      .catch((error) => toast.error(error instanceof Error ? error.message : tNow("toast.action_failed")));
+  }, [usageFilter, token, session?.user.id, view]);
 
   function navigate(nextView: View) {
     const hash = hashForView(nextView);
@@ -420,10 +436,17 @@ export function App() {
   }
 
   useEffect(() => {
-    if (session && session.user.role !== "admin" && (view === "users" || view === "accounts")) {
+    if (session && session.user.role !== "admin" && (view === "users" || view === "providers" || view === "models")) {
       navigate("dashboard");
     }
   }, [session, view]);
+
+  const todayRange = naturalDayRange();
+  const usageIsToday = usageFilter.from === todayRange.from && usageFilter.to === todayRange.to;
+  const usageSeries = useMemo(
+    () => fillUsageSeries(usage?.series ?? [], usageFilter.from, usageFilter.to, usage?.bucket_minutes ?? 1),
+    [usage?.series, usage?.bucket_minutes, usageFilter.from, usageFilter.to],
+  );
 
   if (booting) {
     return (
@@ -506,98 +529,14 @@ export function App() {
     );
   }
 
-  const coolingKeys = Object.entries(stats.exhausted ?? {});
-  const byKey = stats.by_key ?? {};
-  const modelUsageTotals = modelUsage?.total_by_model ?? [];
-  const modelUsageSeries = modelUsage?.series ?? [];
-  const modelUsageAccountTotals = modelUsage?.account_totals ?? [];
-  const quotaSignals = modelUsage?.quota_signals ?? [];
-  const recentModelErrors = modelUsage?.recent_errors ?? [];
-  const filteredKeys = keyAccountFilter === "all" ? keys : keys.filter((key) => String(key.account_id) === keyAccountFilter);
-  const filteredKeyIds = filteredKeys.map((key) => key.id);
-  const allFilteredSelected = filteredKeyIds.length > 0 && filteredKeyIds.every((id) => selectedKeyIds.includes(id));
-  const keyCountByAccount = keys.reduce<Record<number, number>>((acc, key) => {
-    acc[key.account_id] = (acc[key.account_id] ?? 0) + 1;
-    return acc;
-  }, {});
-  const usageSeries = fillUsageSeries(usage?.series ?? [], usageFilter.from, usageFilter.to);
   const ownActiveKeys = userAPIKeys.filter((key) => key.valid);
-  const todayUsageRange = naturalDayRange();
-  const usageIsToday = usageFilter.from === todayUsageRange.from && usageFilter.to === todayUsageRange.to;
 
-  function selectUsageRange(from: string, to: string) {
-    if (from === usageFilter.from && to === usageFilter.to) return;
-    setUsageFilter({ ...usageFilter, from, to });
-  }
-
-  function resetUsageToToday() {
-    setUsageFilter({ ...usageFilter, ...naturalDayRange() });
-  }
-
-  function toggleKeySelection(id: number, checked: boolean) {
-    setSelectedKeyIds((current) => checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id));
-  }
-
-  function toggleAllFilteredKeys(checked: boolean) {
-    setSelectedKeyIds((current) => {
-      const currentSet = new Set(current);
-      for (const id of filteredKeyIds) {
-        if (checked) currentSet.add(id);
-        else currentSet.delete(id);
-      }
-      return Array.from(currentSet);
-    });
-  }
-
-  function keyStatus(key: AdminKey): ReactNode {
-    if (!key.enabled) {
-      const detail = key.disabled_error_message || key.disabled_error_body || key.disabled_error_code;
-      const label = key.disabled_status ? `${t("common.disabled")} ${key.disabled_status}` : t("common.disabled");
-      if (!detail) return <Badge variant="secondary">{label}</Badge>;
-      return (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Badge variant="secondary" className="cursor-help">{label}</Badge>
-          </TooltipTrigger>
-          <TooltipContent className="max-w-96">
-            <div className="grid gap-1 text-xs">
-              {key.disabled_error_code && <div>{key.disabled_error_code}</div>}
-              {key.disabled_at && <div>{formatDate(key.disabled_at)}</div>}
-              <div className="mono [overflow-wrap:anywhere]">{detail}</div>
-            </div>
-          </TooltipContent>
-        </Tooltip>
-      );
-    }
-    const cooling = Object.entries(stats!.exhausted ?? {}).find(([name]) => name.endsWith(`::${key.name}`));
-    if (cooling) return <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300">{t("keys.cooling", { time: formatDate(cooling[1]) })}</Badge>;
-    const error = Object.values(stats!.key_errors ?? {}).find((item) => item.key === key.name);
-    if (error) {
-      return (
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="ghost" className="h-auto p-0" type="button">
-              <Badge variant="destructive">{t("common.error")} {error.status || t("common.network")}</Badge>
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent align="start" className="w-96">
-            <div className="grid gap-2 text-sm">
-              <div>{t("model.model")}: <span className="mono">{error.model}</span></div>
-              <div>{t("model.time")}: {formatDate(error.updated_at)}</div>
-              <div className="mono [overflow-wrap:anywhere]">{error.message || "-"}</div>
-            </div>
-          </PopoverContent>
-        </Popover>
-      );
-    }
-    return <Badge variant="outline" className="border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">{t("common.active")}</Badge>;
-  }
   const title = {
     dashboard: t("nav.dashboard"),
     users: t("nav.users"),
     myKeys: t("nav.my_keys"),
-    accounts: t("nav.accounts"),
-    runtime: t("nav.runtime"),
+    providers: t("nav.providers"),
+    models: t("nav.models"),
   }[view];
 
   return (
@@ -617,10 +556,11 @@ export function App() {
               usageIsToday={usageIsToday}
               usageSeries={usageSeries}
               userAPIKeys={userAPIKeys}
+              models={models}
               ownActiveKeys={ownActiveKeys}
               onUsageFilterChange={setUsageFilter}
-              onResetUsageToToday={resetUsageToToday}
-              onSelectUsageRange={selectUsageRange}
+              onResetUsageToToday={() => setUsageFilter((current) => ({ ...current, ...naturalDayRange() }))}
+              onSelectUsageRange={(from, to) => setUsageFilter((current) => ({ ...current, from, to }))}
             />
           )}
 
@@ -637,6 +577,7 @@ export function App() {
               copiedTarget={copiedTarget}
               onNewUserKeyChange={setNewUserKey}
               onCreateUserAPIKey={() => void createUserAPIKey()}
+              onClearGeneratedUserKey={() => setGeneratedUserKey(null)}
               onCopyText={(value, target) => void copyText(value, target)}
               onCopyUserAPIKey={(key) => void copyUserAPIKey(key)}
               onToggleUserAPIKeyReveal={(key) => void toggleUserAPIKeyReveal(key)}
@@ -651,63 +592,45 @@ export function App() {
             />
           )}
 
-          {view === "accounts" && (
-            <AccountsPage
-              accounts={accounts}
-              keys={keys}
-              byKey={byKey}
-              newAccount={newAccount}
-              newKey={newKey}
-              keyAccountFilter={keyAccountFilter}
-              selectedKeyIds={selectedKeyIds}
-              filteredKeys={filteredKeys}
-              allFilteredSelected={allFilteredSelected}
-              keyCountByAccount={keyCountByAccount}
-              keyStatus={keyStatus}
-              onNewAccountChange={setNewAccount}
-              onNewKeyChange={setNewKey}
-              onKeyAccountFilterChange={setKeyAccountFilter}
-              onCreateAccount={() => void createAccount()}
-              onCreateKey={() => void createKey()}
-              onFlushCooling={() => void flushCooling()}
-              onUpdateGoogleAccount={(account, enabled) => void updateGoogleAccount(account, enabled)}
-              onRequestDeleteGoogleAccount={(account) => {
-                const count = keys.filter((key) => key.account_id === account.id).length;
-                setConfirmAction({
-                  title: t("accounts.delete_title"),
-                  description: t("accounts.delete_body", { email: account.email, count }),
-                  confirmLabel: t("common.delete"),
-                  successLabel: t("accounts.deleted"),
-                  onConfirm: () => deleteGoogleAccount(account),
-                });
-              }}
-              onRequestDeleteAPIKeys={(ids) => setConfirmAction({
-                title: ids.length > 1 ? t("keys.delete_selected_title") : t("keys.delete_gemini_title"),
-                description: ids.length > 1
-                  ? t("keys.delete_selected_body", { count: ids.length })
-                  : t("keys.delete_gemini_body", { name: keys.find((key) => key.id === ids[0])?.name ?? "" }),
+          {view === "providers" && session.user.role === "admin" && (
+            <ProvidersPage
+              token={token}
+              providers={providers}
+              providerKeys={providerKeys}
+              providerPresets={providerPresets}
+              onReload={() => loadProviders()}
+              onRequestDeleteProvider={(provider, onConfirm) => setConfirmAction({
+                title: t("common.delete"),
+                description: t("providers.delete_confirm", { name: provider.name }),
                 confirmLabel: t("common.delete"),
-                successLabel: ids.length > 1 ? t("keys.gemini_deleted_many") : t("keys.gemini_deleted"),
-                onConfirm: () => deleteAPIKeys(ids),
+                successLabel: t("common.delete"),
+                onConfirm,
               })}
-              onToggleKeySelection={toggleKeySelection}
-              onToggleAllFilteredKeys={toggleAllFilteredKeys}
+              onRequestDeleteProviderKey={(key, onConfirm) => setConfirmAction({
+                title: t("common.delete"),
+                description: t("provider_keys.delete_confirm", { name: key.name }),
+                confirmLabel: t("common.delete"),
+                successLabel: t("common.delete"),
+                onConfirm,
+              })}
             />
           )}
 
-          {view === "runtime" && (
-            <RuntimePage
-              stats={stats}
-              config={config}
-              coolingKeys={coolingKeys}
-              keys={keys}
-              modelUsageFilter={modelUsageFilter}
-              modelUsageTotals={modelUsageTotals}
-              modelUsageSeries={modelUsageSeries}
-              modelUsageAccountTotals={modelUsageAccountTotals}
-              quotaSignals={quotaSignals}
-              recentModelErrors={recentModelErrors}
-              onModelUsageFilterChange={setModelUsageFilter}
+          {view === "models" && session.user.role === "admin" && (
+            <ModelsPage
+              token={token}
+              providers={providers}
+              models={models}
+              modelPresets={modelPresets}
+              modelRoutes={modelRoutes}
+              onReload={() => loadModels()}
+              onRequestDeleteItem={(onConfirm) => setConfirmAction({
+                title: t("common.delete"),
+                description: t("models.delete_confirm"),
+                confirmLabel: t("common.delete"),
+                successLabel: t("common.delete"),
+                onConfirm,
+              })}
             />
           )}
         </div>
@@ -716,34 +639,42 @@ export function App() {
           <DialogHeader>
             <DialogTitle>{t("user.change_password")}</DialogTitle>
           </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="field">
-              <Label>{t("user.current_password")}</Label>
-              <Input
-                type="password"
-                value={passwordForm.current_password}
-                onChange={(event) => setPasswordForm({ ...passwordForm, current_password: event.target.value })}
-              />
-            </div>
-            <div className="field">
-              <Label>{t("user.new_password")}</Label>
-              <Input
-                type="password"
-                value={passwordForm.new_password}
-                onChange={(event) => setPasswordForm({ ...passwordForm, new_password: event.target.value })}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" type="button" onClick={() => setShowPasswordDialog(false)}>{t("common.cancel")}</Button>
-            <Button
-              type="button"
-              disabled={!passwordForm.current_password || !passwordForm.new_password}
-              onClick={changePassword}
-            >
-              {t("common.save")}
-            </Button>
-          </DialogFooter>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void changePassword();
+            }}
+          >
+            <FieldGroup className="gap-7 py-4">
+              <Field>
+                <FieldLabel htmlFor="current-password">{t("user.current_password")}</FieldLabel>
+                <Input
+                  id="current-password"
+                  type="password"
+                  value={passwordForm.current_password}
+                  onChange={(event) => setPasswordForm({ ...passwordForm, current_password: event.target.value })}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="new-password">{t("user.new_password")}</FieldLabel>
+                <Input
+                  id="new-password"
+                  type="password"
+                  value={passwordForm.new_password}
+                  onChange={(event) => setPasswordForm({ ...passwordForm, new_password: event.target.value })}
+                />
+              </Field>
+            </FieldGroup>
+            <DialogFooter>
+              <Button variant="outline" type="button" onClick={() => setShowPasswordDialog(false)}>{t("common.cancel")}</Button>
+              <Button
+                type="submit"
+                disabled={!passwordForm.current_password || !passwordForm.new_password}
+              >
+                {t("common.save")}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
       <Dialog open={showUserDialog} onOpenChange={setShowUserDialog}>
@@ -751,39 +682,43 @@ export function App() {
           <DialogHeader>
             <DialogTitle>{t("users.new_user")}</DialogTitle>
           </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="field">
-              <Label>{t("auth.username")}</Label>
-              <Input value={newUser.username} onChange={(event) => setNewUser({ ...newUser, username: event.target.value })} />
-            </div>
-            <div className="field">
-              <Label>{t("auth.password")}</Label>
-              <Input type="password" value={newUser.password} onChange={(event) => setNewUser({ ...newUser, password: event.target.value })} />
-            </div>
-            <div className="field">
-              <Label>{t("users.role")}</Label>
-              <Select value={newUser.role} onValueChange={(value) => setNewUser({ ...newUser, role: value })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="user">user</SelectItem>
-                  <SelectItem value="admin">admin</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" type="button" onClick={() => setShowUserDialog(false)}>{t("common.cancel")}</Button>
-            <Button
-              type="button"
-              disabled={!newUser.username || !newUser.password}
-              onClick={async () => {
-                await createUser();
-                setShowUserDialog(false);
-              }}
-            >
-              {t("common.create")}
-            </Button>
-          </DialogFooter>
+          <form
+            onSubmit={async (event) => {
+              event.preventDefault();
+              await createUser();
+              setShowUserDialog(false);
+            }}
+          >
+            <FieldGroup className="gap-7 py-4">
+              <Field>
+                <FieldLabel htmlFor="new-user-username">{t("auth.username")}</FieldLabel>
+                <Input id="new-user-username" value={newUser.username} onChange={(event) => setNewUser({ ...newUser, username: event.target.value })} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="new-user-password">{t("auth.password")}</FieldLabel>
+                <Input id="new-user-password" type="password" value={newUser.password} onChange={(event) => setNewUser({ ...newUser, password: event.target.value })} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="new-user-role">{t("users.role")}</FieldLabel>
+                <Select value={newUser.role} onValueChange={(value) => setNewUser({ ...newUser, role: value })}>
+                  <SelectTrigger id="new-user-role"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="user">user</SelectItem>
+                    <SelectItem value="admin">admin</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </FieldGroup>
+            <DialogFooter>
+              <Button variant="outline" type="button" onClick={() => setShowUserDialog(false)}>{t("common.cancel")}</Button>
+              <Button
+                type="submit"
+                disabled={!newUser.username || !newUser.password}
+              >
+                {t("common.create")}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
       <AlertDialog open={!!confirmAction} onOpenChange={(open) => !open && setConfirmAction(null)}>
@@ -795,7 +730,7 @@ export function App() {
           <AlertDialogFooter>
             <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-destructive/10 text-destructive hover:bg-destructive/20"
+              variant="destructive"
               onClick={(event) => {
                 event.preventDefault();
                 void runConfirmAction();

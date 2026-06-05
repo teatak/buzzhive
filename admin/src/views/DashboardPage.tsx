@@ -7,10 +7,11 @@ import { UsageByKeyTable } from "../features/usage/UsageByKeyTable";
 import { UsageChart } from "../features/usage/UsageChart";
 import { useLocale } from "../i18n/locale";
 import { displayMinute } from "../lib/date";
-import type { UsagePoint, UsageSummary, UserAPIKey } from "../types/admin";
+import type { Model, UsagePoint, UsageSummary, UserAPIKey } from "../types/admin";
 
 type UsageFilter = {
   key_id: string;
+  model: string;
   from: string;
   to: string;
 };
@@ -21,6 +22,7 @@ export function DashboardPage(props: {
   usageIsToday: boolean;
   usageSeries: UsagePoint[];
   userAPIKeys: UserAPIKey[];
+  models: Model[];
   ownActiveKeys: UserAPIKey[];
   onUsageFilterChange: (filter: UsageFilter) => void;
   onResetUsageToToday: () => void;
@@ -52,10 +54,11 @@ export function DashboardPage(props: {
         <Card>
           <CardContent className="metric-content">
             <div className="metric-label"><BarChart3 size={17} /> {t("dashboard.avg_latency")}</div>
-            <div className="metric-value">{`${Math.round(props.usage?.avg_latency_ms ?? 0)}ms`}</div>
+            <div className="metric-value">{Math.round(props.usage?.avg_latency_ms ?? 0)}ms</div>
           </CardContent>
         </Card>
       </section>
+
       <section className="dashboard-usage-grid">
         <Card>
           <CardHeader>
@@ -68,9 +71,7 @@ export function DashboardPage(props: {
             {!props.usageIsToday && (
               <CardAction className="row-span-1 self-center">
                 <Badge asChild variant="outline" className="cursor-pointer">
-                  <button type="button" onClick={props.onResetUsageToToday}>
-                    {t("common.today")}
-                  </button>
+                  <button type="button" onClick={props.onResetUsageToToday}>{t("common.today")}</button>
                 </Badge>
               </CardAction>
             )}
@@ -81,10 +82,28 @@ export function DashboardPage(props: {
                 value={props.usageFilter.key_id}
                 onValueChange={(value) => props.onUsageFilterChange({ ...props.usageFilter, key_id: value })}
               >
-                <SelectTrigger size="sm" className="w-full rounded-md px-2 text-xs"><SelectValue /></SelectTrigger>
+                <SelectTrigger size="sm" className="w-full rounded-md px-2 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">{t("usage.all_my_keys")}</SelectItem>
-                  {props.userAPIKeys.map((key) => <SelectItem key={key.id} value={String(key.id)}>{key.name}</SelectItem>)}
+                  {props.userAPIKeys.map((key) => (
+                    <SelectItem key={key.id} value={String(key.id)}>{key.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select
+                value={props.usageFilter.model}
+                onValueChange={(value) => props.onUsageFilterChange({ ...props.usageFilter, model: value })}
+              >
+                <SelectTrigger size="sm" className="w-full rounded-md px-2 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">{t("usage.all_models")}</SelectItem>
+                  {props.models.map((model) => (
+                    <SelectItem key={model.id} value={model.name}>{model.display_name || model.name}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Input
@@ -102,9 +121,10 @@ export function DashboardPage(props: {
                 onChange={(event) => props.onUsageFilterChange({ ...props.usageFilter, to: event.target.value })}
               />
             </div>
-            <UsageChart series={props.usageSeries} onRangeSelect={props.onSelectUsageRange} />
+            <UsageChart series={props.usageSeries} bucketMinutes={props.usage?.bucket_minutes ?? 1} onRangeSelect={props.onSelectUsageRange} />
           </CardContent>
         </Card>
+
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">

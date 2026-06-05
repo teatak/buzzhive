@@ -1,156 +1,268 @@
 package buzzhive
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/teatak/cart/v2"
 )
 
-func (s *Server) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
-	switch r.URL.Path {
+func (s *Server) newAdminAPI() http.Handler {
+	app := cart.New()
+	app.Use("/", cart.Recovery())
+	app.NotFound = func(c *cart.Context) error {
+		c.JSON(http.StatusNotFound, cart.H{"error": "not found"})
+		return nil
+	}
+	app.Use("/admin/api", s.adminSessionMiddleware())
+
+	api := app.Route("/admin/api")
+	api.Route("/setup-state").GET(s.handleSetupState)
+	api.Route("/setup").POST(s.handleSetup)
+	api.Route("/login").POST(s.handleLogin)
+
+	api.Route("/session").GET(s.handleSession)
+	api.Route("/logout").POST(s.handleLogout)
+	api.Route("/password").PUT(s.handlePassword)
+	api.Route("/stats").GET(s.handleStats)
+	api.Route("/usage").GET(s.handleUsage)
+	api.Route("/data").GET(s.handleData)
+	api.Route("/user-api-keys").
+		GET(s.handleUserAPIKeysAdmin).
+		POST(s.handleUserAPIKeysAdmin).
+		PUT(s.handleUserAPIKeysAdmin).
+		DELETE(s.handleUserAPIKeysAdmin)
+
+	s.adminOnlyRoute(api, "/config").GET(s.handleConfig)
+	s.adminOnlyRoute(api, "/users").GET(s.handleUsersAdmin).POST(s.handleUsersAdmin)
+	s.adminOnlyRoute(api, "/providers").
+		GET(s.handleProvidersAdmin).
+		POST(s.handleProvidersAdmin).
+		PUT(s.handleProvidersAdmin).
+		DELETE(s.handleProvidersAdmin)
+	s.adminOnlyRoute(api, "/provider-presets").
+		GET(s.handleProviderPresetsAdmin).
+		POST(s.handleProviderPresetsAdmin)
+	s.adminOnlyRoute(api, "/provider-keys").
+		GET(s.handleProviderKeysAdmin).
+		POST(s.handleProviderKeysAdmin).
+		PUT(s.handleProviderKeysAdmin).
+		DELETE(s.handleProviderKeysAdmin)
+	s.adminOnlyRoute(api, "/models").
+		GET(s.handleModelsAdmin).
+		POST(s.handleModelsAdmin).
+		PUT(s.handleModelsAdmin).
+		DELETE(s.handleModelsAdmin)
+	s.adminOnlyRoute(api, "/model-presets").
+		GET(s.handleModelPresetsAdmin).
+		POST(s.handleModelPresetsAdmin)
+	s.adminOnlyRoute(api, "/model-routes").
+		GET(s.handleModelRoutesAdmin).
+		POST(s.handleModelRoutesAdmin).
+		PUT(s.handleModelRoutesAdmin).
+		DELETE(s.handleModelRoutesAdmin)
+	s.adminOnlyRoute(api, "/flush-exhausted").POST(s.handleFlushExhausted)
+
+	return app
+}
+
+func (s *Server) adminOnlyRoute(r *cart.Router, path string) *cart.Router {
+	return r.Route(path).Use("", s.adminOnlyMiddleware())
+}
+
+func (s *Server) adminSessionMiddleware() cart.Handler {
+	return func(c *cart.Context, next cart.Next) {
+		if isPublicAdminAPI(c.Request.Method, c.Request.URL.Path) {
+			next()
+			return
+		}
+		user, ok := s.authenticateAdmin(c.Request)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, cart.H{"error": "unauthorized"})
+			return
+		}
+		c.Set("admin_user", user)
+		next()
+	}
+}
+
+func isPublicAdminAPI(method, path string) bool {
+	switch path {
 	case "/admin/api/setup-state":
-		required, err := s.store.SetupRequired()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]bool{"setup_required": required})
-		return
-	case "/admin/api/setup":
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-			return
-		}
-		var req LoginRequest
-		if !decodeJSON(w, r, &req) {
-			return
-		}
-		required, err := s.store.SetupRequired()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		if !required {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "setup already completed"})
-			return
-		}
-		user, err := s.store.CreateInitialAdmin(req.Username, req.Password)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		s.reloadRuntimeNoResponse()
-		token, err := s.createSession(user)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"token": token, "user": user})
-		return
-	case "/admin/api/login":
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-			return
-		}
-		var req LoginRequest
-		if !decodeJSON(w, r, &req) {
-			return
-		}
-		user, err := s.store.VerifyPassword(req.Username, req.Password)
-		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-		token, err := s.createSession(user)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"token": token, "user": user})
-		return
-	}
-
-	user, ok := s.authenticateAdmin(r)
-	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
-	}
-
-	switch r.URL.Path {
-	case "/admin/api/session":
-		writeJSON(w, http.StatusOK, map[string]any{"user": user})
-	case "/admin/api/logout":
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-			return
-		}
-		token := adminTokenFromRequest(r)
-		_ = s.store.DeleteSession(token)
-		s.runtimeMu.Lock()
-		delete(s.sessions, token)
-		s.runtimeMu.Unlock()
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	case "/admin/api/password":
-		if r.Method != http.MethodPut {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-			return
-		}
-		var req struct {
-			CurrentPassword string `json:"current_password"`
-			NewPassword     string `json:"new_password"`
-		}
-		if !decodeJSON(w, r, &req) {
-			return
-		}
-		if err := s.store.ChangePassword(user.ID, req.CurrentPassword, req.NewPassword); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	case "/admin/api/stats":
-		s.writeStats(w)
-	case "/admin/api/usage":
-		s.writeUsage(w, r, user)
-	case "/admin/api/model-usage":
-		s.writeModelUsage(w, r)
-	case "/admin/api/config":
-		writeJSON(w, http.StatusOK, s.adminConfig())
-	case "/admin/api/data":
-		s.writeAdminData(w, user)
-	case "/admin/api/users":
-		if user.Role != "admin" {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
-			return
-		}
-		s.handleUsers(w, r)
-	case "/admin/api/user-api-keys":
-		s.handleUserAPIKeys(w, r, user)
-	case "/admin/api/google-accounts":
-		if user.Role != "admin" {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
-			return
-		}
-		s.handleGoogleAccounts(w, r)
-	case "/admin/api/api-keys":
-		if user.Role != "admin" {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
-			return
-		}
-		s.handleAPIKeys(w, r)
-	case "/admin/api/flush-exhausted":
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-			return
-		}
-		s.keyState.Flush()
-		s.refreshKeyStateStats()
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return method == http.MethodGet
+	case "/admin/api/setup", "/admin/api/login":
+		return method == http.MethodPost
 	default:
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return false
 	}
+}
+
+func (s *Server) adminOnlyMiddleware() cart.Handler {
+	return func(c *cart.Context, next cart.Next) {
+		user := adminUser(c)
+		if user.Role != "admin" {
+			c.JSON(http.StatusForbidden, cart.H{"error": "forbidden"})
+			return
+		}
+		next()
+	}
+}
+
+func adminUser(c *cart.Context) AppUser {
+	user, _ := c.MustGet("admin_user").(AppUser)
+	return user
+}
+
+func jsonError(c *cart.Context, status int, err any) error {
+	switch value := err.(type) {
+	case error:
+		c.JSON(status, cart.H{"error": value.Error()})
+	case string:
+		c.JSON(status, cart.H{"error": value})
+	default:
+		c.JSON(status, cart.H{"error": value})
+	}
+	return nil
+}
+
+func jsonOK(c *cart.Context, body any) error {
+	c.JSON(http.StatusOK, body)
+	return nil
+}
+
+func (s *Server) handleSetupState(c *cart.Context) error {
+	required, err := s.store.SetupRequired()
+	if err != nil {
+		return jsonError(c, http.StatusInternalServerError, err)
+	}
+	return jsonOK(c, cart.H{"setup_required": required})
+}
+
+func (s *Server) handleSetup(c *cart.Context) error {
+	var req LoginRequest
+	if err := c.BindJSON(&req); err != nil {
+		return jsonError(c, http.StatusBadRequest, err)
+	}
+	required, err := s.store.SetupRequired()
+	if err != nil {
+		return jsonError(c, http.StatusInternalServerError, err)
+	}
+	if !required {
+		return jsonError(c, http.StatusConflict, "setup already completed")
+	}
+	user, err := s.store.CreateInitialAdmin(req.Username, req.Password)
+	if err != nil {
+		return jsonError(c, http.StatusBadRequest, err)
+	}
+	s.reloadRuntimeNoResponse()
+	token, err := s.createSession(user)
+	if err != nil {
+		return jsonError(c, http.StatusInternalServerError, err)
+	}
+	return jsonOK(c, cart.H{"token": token, "user": user})
+}
+
+func (s *Server) handleLogin(c *cart.Context) error {
+	var req LoginRequest
+	if err := c.BindJSON(&req); err != nil {
+		return jsonError(c, http.StatusBadRequest, err)
+	}
+	user, err := s.store.VerifyPassword(req.Username, req.Password)
+	if err != nil {
+		return jsonError(c, http.StatusUnauthorized, "unauthorized")
+	}
+	token, err := s.createSession(user)
+	if err != nil {
+		return jsonError(c, http.StatusInternalServerError, err)
+	}
+	return jsonOK(c, cart.H{"token": token, "user": user})
+}
+
+func (s *Server) handleSession(c *cart.Context) error {
+	return jsonOK(c, cart.H{"user": adminUser(c)})
+}
+
+func (s *Server) handleLogout(c *cart.Context) error {
+	token := adminTokenFromRequest(c.Request)
+	_ = s.deleteAdminSession(c.Request.Context(), token)
+	return jsonOK(c, cart.H{"status": "ok"})
+}
+
+func (s *Server) handlePassword(c *cart.Context) error {
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		return jsonError(c, http.StatusBadRequest, err)
+	}
+	if err := s.store.ChangePassword(adminUser(c).ID, req.CurrentPassword, req.NewPassword); err != nil {
+		return jsonError(c, http.StatusBadRequest, err)
+	}
+	return jsonOK(c, cart.H{"status": "ok"})
+}
+
+func (s *Server) handleStats(c *cart.Context) error {
+	user := adminUser(c)
+	if user.Role != "admin" {
+		return jsonOK(c, s.userStats())
+	}
+	return jsonOK(c, s.statsSnapshot())
+}
+
+func (s *Server) handleConfig(c *cart.Context) error {
+	return jsonOK(c, s.adminConfig())
+}
+
+func (s *Server) handleData(c *cart.Context) error {
+	data, status, err := s.adminData(adminUser(c))
+	if err != nil {
+		return jsonError(c, status, err)
+	}
+	return jsonOK(c, data)
+}
+
+func (s *Server) handleUsersAdmin(c *cart.Context) error {
+	return s.handleUsers(c)
+}
+
+func (s *Server) handleUserAPIKeysAdmin(c *cart.Context) error {
+	return s.handleUserAPIKeys(c, adminUser(c))
+}
+
+func (s *Server) handleProvidersAdmin(c *cart.Context) error {
+	return s.handleProviders(c)
+}
+
+func (s *Server) handleProviderPresetsAdmin(c *cart.Context) error {
+	return s.handleProviderPresets(c)
+}
+
+func (s *Server) handleProviderKeysAdmin(c *cart.Context) error {
+	return s.handleProviderKeys(c)
+}
+
+func (s *Server) handleModelsAdmin(c *cart.Context) error {
+	return s.handleModels(c)
+}
+
+func (s *Server) handleModelPresetsAdmin(c *cart.Context) error {
+	return s.handleModelPresets(c)
+}
+
+func (s *Server) handleModelRoutesAdmin(c *cart.Context) error {
+	return s.handleModelRoutes(c)
+}
+
+func (s *Server) handleFlushExhausted(c *cart.Context) error {
+	s.keyState.Flush()
+	s.refreshKeyStateStats()
+	return jsonOK(c, cart.H{"status": "ok"})
 }
 
 func (s *Server) authenticate(r *http.Request) (AuthToken, bool) {
@@ -161,17 +273,21 @@ func (s *Server) authenticate(r *http.Request) (AuthToken, bool) {
 		return AuthToken{Name: "local", UserName: "local", Valid: true}, true
 	}
 
-	token := ""
+	var tokens []string
 	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-		token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-	} else if key := r.URL.Query().Get("key"); key != "" {
-		token = key
-	} else if key := r.Header.Get("x-goog-api-key"); key != "" {
-		token = strings.TrimSpace(key)
+		tokens = append(tokens, strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")))
+	}
+	if key := r.URL.Query().Get("key"); key != "" {
+		tokens = append(tokens, strings.TrimSpace(key))
 	}
 
-	user, ok := s.authTokens[token]
-	return user, ok && user.Valid
+	for _, token := range tokens {
+		user, ok := s.authTokens[token]
+		if ok && user.Valid {
+			return user, true
+		}
+	}
+	return AuthToken{}, false
 }
 
 func (s *Server) authenticateAdmin(r *http.Request) (AppUser, bool) {
@@ -179,22 +295,39 @@ func (s *Server) authenticateAdmin(r *http.Request) (AppUser, bool) {
 	if token == "" {
 		return AppUser{}, false
 	}
+	sessionUser, ok := s.adminSessionByToken(r.Context(), token)
+	if !ok {
+		return AppUser{}, false
+	}
+	return sessionUser.User, true
+}
+
+func (s *Server) adminSessionByToken(ctx context.Context, token string) (SessionUser, bool) {
+	if s.runtimeCache.Enabled() {
+		sessionUser, err := s.runtimeCache.AdminSession(ctx, token)
+		if err != nil {
+			return SessionUser{}, false
+		}
+		sessionUser = s.renewAdminSessionIfNeeded(ctx, token, sessionUser)
+		return sessionUser, true
+	}
+
 	s.runtimeMu.Lock()
 	user, ok := s.sessions[token]
 	s.runtimeMu.Unlock()
 	if ok && user.User.Valid && time.Now().Before(user.ExpiresAt) {
-		user = s.renewAdminSessionIfNeeded(token, user)
-		return user.User, true
+		user = s.renewAdminSessionIfNeeded(ctx, token, user)
+		return user, true
 	}
 	sessionUser, err := s.store.UserBySession(token)
 	if err != nil {
-		return AppUser{}, false
+		return SessionUser{}, false
 	}
-	sessionUser = s.renewAdminSessionIfNeeded(token, sessionUser)
+	sessionUser = s.renewAdminSessionIfNeeded(ctx, token, sessionUser)
 	s.runtimeMu.Lock()
 	s.sessions[token] = sessionUser
 	s.runtimeMu.Unlock()
-	return sessionUser.User, true
+	return sessionUser, true
 }
 
 func adminTokenFromRequest(r *http.Request) string {
@@ -207,6 +340,13 @@ func adminTokenFromRequest(r *http.Request) string {
 func (s *Server) createSession(user AppUser) (string, error) {
 	token := randomHex(32)
 	expiresAt := time.Now().Add(adminSessionTTL)
+	sessionUser := SessionUser{User: user, ExpiresAt: expiresAt}
+	if s.runtimeCache.Enabled() {
+		if err := s.runtimeCache.SetAdminSession(context.Background(), token, sessionUser); err != nil {
+			return "", err
+		}
+		return token, nil
+	}
 	if err := s.store.DeleteExpiredSessions(); err != nil {
 		return "", err
 	}
@@ -214,25 +354,48 @@ func (s *Server) createSession(user AppUser) (string, error) {
 		return "", err
 	}
 	s.runtimeMu.Lock()
-	s.sessions[token] = SessionUser{User: user, ExpiresAt: expiresAt}
+	s.sessions[token] = sessionUser
 	s.runtimeMu.Unlock()
 	return token, nil
 }
 
-func (s *Server) renewAdminSessionIfNeeded(token string, sessionUser SessionUser) SessionUser {
+func (s *Server) renewAdminSessionIfNeeded(ctx context.Context, token string, sessionUser SessionUser) SessionUser {
 	if time.Until(sessionUser.ExpiresAt) > adminSessionRenewBefore {
 		return sessionUser
 	}
 	nextExpiresAt := time.Now().Add(adminSessionTTL)
+	nextSessionUser := SessionUser{User: sessionUser.User, ExpiresAt: nextExpiresAt}
+	if s.runtimeCache.Enabled() {
+		if err := s.runtimeCache.SetAdminSession(ctx, token, nextSessionUser); err != nil {
+			log.Printf("renew admin session: %v", err)
+			return sessionUser
+		}
+		return nextSessionUser
+	}
 	if err := s.store.RenewSession(token, nextExpiresAt); err != nil {
 		log.Printf("renew admin session: %v", err)
 		return sessionUser
 	}
-	sessionUser.ExpiresAt = nextExpiresAt
 	s.runtimeMu.Lock()
-	s.sessions[token] = sessionUser
+	s.sessions[token] = nextSessionUser
 	s.runtimeMu.Unlock()
-	return sessionUser
+	return nextSessionUser
+}
+
+func (s *Server) deleteAdminSession(ctx context.Context, token string) error {
+	if token == "" {
+		return nil
+	}
+	if s.runtimeCache.Enabled() {
+		return s.runtimeCache.DeleteAdminSession(ctx, token)
+	}
+	if err := s.store.DeleteSession(token); err != nil {
+		return err
+	}
+	s.runtimeMu.Lock()
+	delete(s.sessions, token)
+	s.runtimeMu.Unlock()
+	return nil
 }
 
 func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) bool {
@@ -248,6 +411,14 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) bool {
 		http.ServeFile(w, r, indexPath)
 		return true
 	}
+	if r.URL.Path == "/admin/favicon.svg" || r.URL.Path == "/favicon.svg" {
+		faviconPath := s.adminDir + "/favicon.svg"
+		if _, err := os.Stat(faviconPath); err != nil {
+			return false
+		}
+		http.ServeFile(w, r, faviconPath)
+		return true
+	}
 	if strings.HasPrefix(r.URL.Path, "/admin/assets/") {
 		filePath := strings.TrimPrefix(r.URL.Path, "/admin/")
 		if _, err := os.Stat(s.adminDir + "/" + filePath); err != nil {
@@ -260,23 +431,8 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (s *Server) adminConfig() AdminConfig {
-	keys, _ := s.store.AllAPIKeys()
-	accounts, _ := s.store.GoogleAccounts()
 	users, _ := s.store.Users()
 
-	adminKeys := make([]AdminKey, 0, len(keys))
-	for _, key := range keys {
-		adminKeys = append(adminKeys, AdminKey{
-			Name:          key.Name,
-			Key:           maskSecret(key.Key),
-			AccountEmail:  key.AccountEmail,
-			AccountPrefix: key.AccountPrefix,
-		})
-	}
-	adminAccounts := make([]Account, 0, len(accounts))
-	for _, account := range accounts {
-		adminAccounts = append(adminAccounts, Account{Email: account.Email, Prefix: account.Prefix})
-	}
 	tokens := make([]string, 0, len(users))
 	for _, user := range users {
 		if user.Valid {
@@ -289,93 +445,85 @@ func (s *Server) adminConfig() AdminConfig {
 		Timeout:         s.cfg.Upstream.Timeout,
 		MaxAttempts:     s.cfg.Retry.MaxAttempts,
 		CooldownSeconds: s.cfg.Retry.CooldownSeconds,
-		Models:          append([]string(nil), s.cfg.Models.Auto...),
-		Keys:            adminKeys,
-		Accounts:        adminAccounts,
 		Tokens:          tokens,
 	}
 }
 
-func (s *Server) writeAdminData(w http.ResponseWriter, actor AppUser) {
+func (s *Server) adminData(actor AppUser) (AdminData, int, error) {
+	if actor.Role != "admin" {
+		userAPIKeys, err := s.store.UserAPIKeys()
+		if err != nil {
+			return AdminData{}, http.StatusInternalServerError, err
+		}
+		return AdminData{
+			Config: AdminConfig{
+				Timeout:         s.cfg.Upstream.Timeout,
+				CooldownSeconds: s.cfg.Retry.CooldownSeconds,
+			},
+			UserAPIKeys: maskUsers(filterUserAPIKeys(userAPIKeys, actor)),
+		}, http.StatusOK, nil
+	}
+
 	users, err := s.store.Users()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		return AdminData{}, http.StatusInternalServerError, err
 	}
 	userAPIKeys, err := s.store.UserAPIKeys()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		return AdminData{}, http.StatusInternalServerError, err
 	}
-	accounts, err := s.store.GoogleAccounts()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	keys, err := s.store.AllAPIKeys()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, AdminData{
+	return AdminData{
 		Config:      s.adminConfig(),
 		Users:       users,
 		UserAPIKeys: maskUsers(filterUserAPIKeys(userAPIKeys, actor)),
-		Accounts:    accounts,
-		Keys:        maskAPIKeys(keys),
-	})
+	}, http.StatusOK, nil
 }
 
-func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
+func (s *Server) handleUsers(c *cart.Context) error {
+	switch c.Request.Method {
 	case http.MethodGet:
 		users, err := s.store.Users()
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
+			return jsonError(c, http.StatusInternalServerError, err)
 		}
-		writeJSON(w, http.StatusOK, users)
+		return jsonOK(c, users)
 	case http.MethodPost:
 		var req struct {
 			Username string `json:"username"`
 			Password string `json:"password"`
 			Role     string `json:"role"`
 		}
-		if !decodeJSON(w, r, &req) {
-			return
+		if err := c.BindJSON(&req); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
 		}
 		if _, err := s.store.CreateAppUser(req.Username, req.Password, req.Role); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
+			return jsonError(c, http.StatusBadRequest, err)
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return jsonOK(c, cart.H{"status": "ok"})
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return jsonError(c, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
-func (s *Server) handleUserAPIKeys(w http.ResponseWriter, r *http.Request, actor AppUser) {
-	switch r.Method {
+func (s *Server) handleUserAPIKeys(c *cart.Context, actor AppUser) error {
+	switch c.Request.Method {
 	case http.MethodGet:
-		if id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64); id != 0 {
+		if id, _ := strconv.ParseInt(c.Request.URL.Query().Get("id"), 10, 64); id != 0 {
 			key, err := s.store.UserAPIKey(id, actor.ID)
 			if err != nil {
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-				return
+				return jsonError(c, http.StatusNotFound, "not found")
 			}
-			writeJSON(w, http.StatusOK, key)
-			return
+			return jsonOK(c, key)
 		}
 		keys, err := s.store.UserAPIKeys()
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
+			return jsonError(c, http.StatusInternalServerError, err)
 		}
-		writeJSON(w, http.StatusOK, maskUsers(filterUserAPIKeys(keys, actor)))
+		return jsonOK(c, maskUsers(filterUserAPIKeys(keys, actor)))
 	case http.MethodPost:
 		var key AuthToken
-		if !decodeJSON(w, r, &key) {
-			return
+		if err := c.BindJSON(&key); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
 		}
 		key.UserID = actor.ID
 		key.Valid = true
@@ -384,146 +532,525 @@ func (s *Server) handleUserAPIKeys(w http.ResponseWriter, r *http.Request, actor
 		}
 		created, err := s.store.CreateUserAPIKey(key)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
+			return jsonError(c, http.StatusBadRequest, err)
 		}
 		if err := s.reloadRuntimeState(); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
+			return jsonError(c, http.StatusInternalServerError, err)
 		}
-		writeJSON(w, http.StatusOK, created)
+		return jsonOK(c, created)
 	case http.MethodPut:
 		var key AuthToken
-		if !decodeJSON(w, r, &key) {
-			return
+		if err := c.BindJSON(&key); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
 		}
 		if err := s.store.SetUserAPIKeyValid(key.ID, actor.ID, key.Valid); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
+			return jsonError(c, http.StatusBadRequest, err)
 		}
-		s.reloadRuntime(w)
+		return s.reloadRuntime(c)
 	case http.MethodDelete:
-		id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+		id, _ := strconv.ParseInt(c.Request.URL.Query().Get("id"), 10, 64)
 		if err := s.store.DeleteUserAPIKey(id, actor.ID); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
+			return jsonError(c, http.StatusBadRequest, err)
 		}
-		s.reloadRuntime(w)
+		return s.reloadRuntime(c)
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return jsonError(c, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
-func (s *Server) handleGoogleAccounts(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
+type providerWriteRequest struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	PresetID string `json:"preset_id"`
+	BaseURL  string `json:"base_url"`
+	Enabled  *bool  `json:"enabled"`
+}
+
+type providerKeyWriteRequest struct {
+	ID         int64    `json:"id"`
+	ProviderID int64    `json:"provider_id"`
+	Name       string   `json:"name"`
+	Secret     string   `json:"secret"`
+	Secrets    []string `json:"secrets"`
+	Enabled    *bool    `json:"enabled"`
+	Priority   *int     `json:"priority"`
+	Weight     *int     `json:"weight"`
+	Labels     string   `json:"labels"`
+}
+
+type modelWriteRequest struct {
+	ID              int64  `json:"id"`
+	Name            string `json:"name"`
+	DisplayName     string `json:"display_name"`
+	Description     string `json:"description"`
+	ContextWindow   int64  `json:"context_window"`
+	MaxInputTokens  int64  `json:"max_input_tokens"`
+	MaxOutputTokens int64  `json:"max_output_tokens"`
+	Capabilities    string `json:"capabilities"`
+	SelectionPolicy string `json:"selection_policy"`
+	Enabled         *bool  `json:"enabled"`
+}
+
+type modelRouteWriteRequest struct {
+	ID            int64  `json:"id"`
+	ModelID       int64  `json:"model_id"`
+	ProviderID    int64  `json:"provider_id"`
+	UpstreamModel string `json:"upstream_model"`
+	QuotaFamily   string `json:"quota_family"`
+	Enabled       *bool  `json:"enabled"`
+	Priority      *int   `json:"priority"`
+	Weight        *int   `json:"weight"`
+}
+
+func (s *Server) handleProviders(c *cart.Context) error {
+	switch c.Request.Method {
 	case http.MethodGet:
-		accounts, err := s.store.GoogleAccounts()
+		providers, err := s.store.Providers()
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
+			return jsonError(c, http.StatusInternalServerError, err)
 		}
-		writeJSON(w, http.StatusOK, accounts)
+		return jsonOK(c, providers)
 	case http.MethodPost:
-		var account GoogleAccount
-		if !decodeJSON(w, r, &account) {
-			return
+		var req providerWriteRequest
+		if err := c.BindJSON(&req); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
 		}
-		if err := s.store.CreateGoogleAccount(account); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
+		created, err := s.store.CreateProvider(ProviderRecord{
+			Name:     req.Name,
+			Type:     req.Type,
+			PresetID: req.PresetID,
+			BaseURL:  req.BaseURL,
+			Enabled:  boolWithDefault(req.Enabled, true),
+		})
+		if err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
 		}
-		s.reloadRuntime(w)
+		if err := s.reloadRuntimeState(); err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+		return jsonOK(c, created)
 	case http.MethodPut:
-		var account GoogleAccount
-		if !decodeJSON(w, r, &account) {
-			return
+		var req providerWriteRequest
+		if err := c.BindJSON(&req); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
 		}
-		if err := s.store.UpdateGoogleAccount(account); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
+		existing, err := s.store.Provider(req.ID)
+		if err != nil {
+			return jsonError(c, http.StatusNotFound, "not found")
 		}
-		s.reloadRuntime(w)
+		if req.Name != "" {
+			existing.Name = req.Name
+		}
+		if req.Type != "" {
+			existing.Type = req.Type
+		}
+		if req.PresetID != "" {
+			existing.PresetID = req.PresetID
+		}
+		if req.BaseURL != "" {
+			existing.BaseURL = req.BaseURL
+		}
+		if req.Enabled != nil {
+			existing.Enabled = *req.Enabled
+		}
+		updated, err := s.store.UpdateProvider(existing)
+		if err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		if err := s.reloadRuntimeState(); err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+		return jsonOK(c, updated)
 	case http.MethodDelete:
-		id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
-		if err := s.store.DeleteGoogleAccount(id); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
+		id, _ := strconv.ParseInt(c.Request.URL.Query().Get("id"), 10, 64)
+		if err := s.store.DeleteProvider(id); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
 		}
-		s.reloadRuntime(w)
+		return s.reloadRuntime(c)
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return jsonError(c, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
-func (s *Server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
+func (s *Server) handleProviderPresets(c *cart.Context) error {
+	switch c.Request.Method {
 	case http.MethodGet:
-		keys, err := s.store.AllAPIKeys()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, maskAPIKeys(keys))
+		return jsonOK(c, providerPresets())
 	case http.MethodPost:
-		var key APIKey
-		if !decodeJSON(w, r, &key) {
-			return
+		var req struct {
+			ID string `json:"id"`
 		}
-		if err := s.store.CreateAPIKey(key); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
+		if err := c.BindJSON(&req); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
 		}
-		s.reloadRuntime(w)
+		preset, ok := findProviderPreset(req.ID)
+		if !ok {
+			return jsonError(c, http.StatusNotFound, "preset not found")
+		}
+		providers, err := s.store.Providers()
+		if err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+		for _, provider := range providers {
+			if strings.EqualFold(provider.Name, preset.Name) {
+				return jsonError(c, http.StatusConflict, "provider already exists")
+			}
+		}
+		created, err := s.store.CreateProvider(preset.Provider())
+		if err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		if err := s.reloadRuntimeState(); err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+		return jsonOK(c, created)
+	default:
+		return jsonError(c, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleProviderKeys(c *cart.Context) error {
+	switch c.Request.Method {
+	case http.MethodGet:
+		query := c.Request.URL.Query()
+		reveal := query.Get("reveal") == "1"
+		if id, _ := strconv.ParseInt(query.Get("id"), 10, 64); id != 0 {
+			key, err := s.store.ProviderKey(id, reveal)
+			if err != nil {
+				return jsonError(c, http.StatusNotFound, "not found")
+			}
+			return jsonOK(c, key)
+		}
+		providerID, _ := strconv.ParseInt(query.Get("provider_id"), 10, 64)
+		keys, err := s.store.ProviderKeys(providerID, reveal)
+		if err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+		return jsonOK(c, keys)
+	case http.MethodPost:
+		var req providerKeyWriteRequest
+		if err := c.BindJSON(&req); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		secrets := compactSecrets(append([]string{req.Secret}, req.Secrets...))
+		if len(secrets) == 0 {
+			return jsonError(c, http.StatusBadRequest, "secret is required")
+		}
+		created := make([]ProviderKey, 0, len(secrets))
+		for _, secret := range secrets {
+			name := req.Name
+			if len(secrets) > 1 {
+				name = ""
+			}
+			key := ProviderKey{
+				ProviderID: req.ProviderID,
+				Name:       name,
+				Secret:     secret,
+				Enabled:    boolWithDefault(req.Enabled, true),
+				Priority:   intWithDefault(req.Priority, 0),
+				Weight:     intWithDefault(req.Weight, 1),
+				Labels:     req.Labels,
+			}
+			item, err := s.store.CreateProviderKey(key)
+			if err != nil {
+				return jsonError(c, http.StatusBadRequest, err)
+			}
+			created = append(created, item)
+		}
+		if err := s.reloadRuntimeState(); err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+		if len(created) == 1 {
+			return jsonOK(c, created[0])
+		}
+		return jsonOK(c, created)
 	case http.MethodPut:
-		var key APIKey
-		if !decodeJSON(w, r, &key) {
-			return
+		var req providerKeyWriteRequest
+		if err := c.BindJSON(&req); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
 		}
-		if strings.Contains(key.Key, "...") {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "full api key is required when updating"})
-			return
+		key, err := s.store.ProviderKey(req.ID, false)
+		if err != nil {
+			return jsonError(c, http.StatusNotFound, "not found")
 		}
-		if err := s.store.UpdateAPIKey(key); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
+		if req.ProviderID != 0 {
+			key.ProviderID = req.ProviderID
 		}
-		s.reloadRuntime(w)
+		if req.Name != "" {
+			key.Name = req.Name
+		}
+		key.Secret = req.Secret
+		if req.Enabled != nil {
+			key.Enabled = *req.Enabled
+		}
+		if req.Priority != nil {
+			key.Priority = *req.Priority
+		}
+		if req.Weight != nil {
+			key.Weight = *req.Weight
+		}
+		key.Labels = req.Labels
+		updated, err := s.store.UpdateProviderKey(key)
+		if err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		if err := s.reloadRuntimeState(); err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+		return jsonOK(c, updated)
 	case http.MethodDelete:
-		ids := parseIDs(r.URL.Query().Get("ids"))
+		ids := parseIDs(c.Request.URL.Query().Get("ids"))
 		if len(ids) == 0 {
-			if id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64); id != 0 {
+			if id, _ := strconv.ParseInt(c.Request.URL.Query().Get("id"), 10, 64); id != 0 {
 				ids = append(ids, id)
 			}
 		}
-		if len(ids) == 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
-			return
+		if err := s.store.DeleteProviderKeys(ids); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
 		}
-		if err := s.store.DeleteAPIKeys(ids); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		s.reloadRuntime(w)
+		return s.reloadRuntime(c)
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return jsonError(c, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
-func (s *Server) reloadRuntime(w http.ResponseWriter) {
-	if err := s.reloadRuntimeState(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+func (s *Server) handleModels(c *cart.Context) error {
+	switch c.Request.Method {
+	case http.MethodGet:
+		models, err := s.store.Models()
+		if err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+		return jsonOK(c, models)
+	case http.MethodPost:
+		var req modelWriteRequest
+		if err := c.BindJSON(&req); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		created, err := s.store.CreateModel(Model{
+			Name:            req.Name,
+			DisplayName:     req.DisplayName,
+			Description:     req.Description,
+			ContextWindow:   req.ContextWindow,
+			MaxInputTokens:  req.MaxInputTokens,
+			MaxOutputTokens: req.MaxOutputTokens,
+			Capabilities:    req.Capabilities,
+			SelectionPolicy: req.SelectionPolicy,
+			Enabled:         boolWithDefault(req.Enabled, true),
+		})
+		if err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		return jsonOK(c, created)
+	case http.MethodPut:
+		var req modelWriteRequest
+		if err := c.BindJSON(&req); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		model, err := s.store.Model(req.ID)
+		if err != nil {
+			return jsonError(c, http.StatusNotFound, "not found")
+		}
+		if req.Name != "" {
+			model.Name = req.Name
+		}
+		model.DisplayName = req.DisplayName
+		model.Description = req.Description
+		model.ContextWindow = req.ContextWindow
+		model.MaxInputTokens = req.MaxInputTokens
+		model.MaxOutputTokens = req.MaxOutputTokens
+		if req.Capabilities != "" {
+			model.Capabilities = req.Capabilities
+		}
+		if req.SelectionPolicy != "" {
+			model.SelectionPolicy = req.SelectionPolicy
+		}
+		if req.Enabled != nil {
+			model.Enabled = *req.Enabled
+		}
+		updated, err := s.store.UpdateModel(model)
+		if err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		return jsonOK(c, updated)
+	case http.MethodDelete:
+		id, _ := strconv.ParseInt(c.Request.URL.Query().Get("id"), 10, 64)
+		if err := s.store.DeleteModel(id); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		return jsonOK(c, cart.H{"status": "ok"})
+	default:
+		return jsonError(c, http.StatusMethodNotAllowed, "method not allowed")
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleModelPresets(c *cart.Context) error {
+	switch c.Request.Method {
+	case http.MethodGet:
+		return jsonOK(c, modelPresets())
+	case http.MethodPost:
+		var req struct {
+			ID  string   `json:"id"`
+			IDs []string `json:"ids"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		ids := req.IDs
+		if req.ID != "" {
+			ids = append(ids, req.ID)
+		}
+		if len(ids) == 0 {
+			return jsonError(c, http.StatusBadRequest, "preset id required")
+		}
+		models, err := s.store.Models()
+		if err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+		existing := make(map[string]bool, len(models))
+		for _, model := range models {
+			existing[model.Name] = true
+		}
+		created := make([]Model, 0, len(ids))
+		for _, id := range ids {
+			preset, ok := findModelPreset(id)
+			if !ok {
+				return jsonError(c, http.StatusNotFound, "preset not found")
+			}
+			if existing[preset.Name] {
+				return jsonError(c, http.StatusConflict, "model already exists")
+			}
+			model, err := s.store.CreateModel(preset.Model())
+			if err != nil {
+				return jsonError(c, http.StatusBadRequest, err)
+			}
+			existing[model.Name] = true
+			created = append(created, model)
+		}
+		return jsonOK(c, created)
+	default:
+		return jsonError(c, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleModelRoutes(c *cart.Context) error {
+	switch c.Request.Method {
+	case http.MethodGet:
+		modelID, _ := strconv.ParseInt(c.Request.URL.Query().Get("model_id"), 10, 64)
+		routes, err := s.store.ModelRoutes(modelID)
+		if err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+		return jsonOK(c, routes)
+	case http.MethodPost:
+		var req modelRouteWriteRequest
+		if err := c.BindJSON(&req); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		created, err := s.store.CreateModelRoute(ModelRoute{
+			ModelID:       req.ModelID,
+			ProviderID:    req.ProviderID,
+			UpstreamModel: req.UpstreamModel,
+			QuotaFamily:   req.QuotaFamily,
+			Enabled:       boolWithDefault(req.Enabled, true),
+			Priority:      intWithDefault(req.Priority, 0),
+			Weight:        intWithDefault(req.Weight, 1),
+		})
+		if err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		return jsonOK(c, created)
+	case http.MethodPut:
+		var req modelRouteWriteRequest
+		if err := c.BindJSON(&req); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		route, err := s.store.ModelRoute(req.ID)
+		if err != nil {
+			return jsonError(c, http.StatusNotFound, "not found")
+		}
+		if req.ModelID != 0 {
+			route.ModelID = req.ModelID
+		}
+		if req.ProviderID != 0 {
+			route.ProviderID = req.ProviderID
+		}
+		if req.UpstreamModel != "" {
+			route.UpstreamModel = req.UpstreamModel
+		}
+		if req.QuotaFamily != "" {
+			route.QuotaFamily = req.QuotaFamily
+		}
+		if req.Enabled != nil {
+			route.Enabled = *req.Enabled
+		}
+		if req.Priority != nil {
+			route.Priority = *req.Priority
+		}
+		if req.Weight != nil {
+			route.Weight = *req.Weight
+		}
+		updated, err := s.store.UpdateModelRoute(route)
+		if err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		return jsonOK(c, updated)
+	case http.MethodDelete:
+		id, _ := strconv.ParseInt(c.Request.URL.Query().Get("id"), 10, 64)
+		if err := s.store.DeleteModelRoute(id); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		return jsonOK(c, cart.H{"status": "ok"})
+	default:
+		return jsonError(c, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func boolWithDefault(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func intWithDefault(value *int, fallback int) int {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func compactSecrets(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func (s *Server) reloadRuntime(c *cart.Context) error {
+	if err := s.reloadRuntimeState(); err != nil {
+		return jsonError(c, http.StatusInternalServerError, err)
+	}
+	return jsonOK(c, cart.H{"status": "ok"})
 }
 
 func (s *Server) reloadRuntimeState() error {
-	tokens, keys, err := s.store.ReloadRuntime()
+	tokens, providerRecords, keys, err := s.store.ReloadRuntime()
+	if err != nil {
+		return err
+	}
+	providers, err := newProviderRegistry(providerRecords, s.upstream, s.client)
 	if err != nil {
 		return err
 	}
 	s.runtimeMu.Lock()
 	s.authTokens = tokens
+	s.providers = providers
 	s.runtimeMu.Unlock()
 	s.keyState.Replace(keys)
 	s.refreshKeyStateStats()
@@ -531,24 +1058,21 @@ func (s *Server) reloadRuntimeState() error {
 }
 
 func (s *Server) reloadRuntimeNoResponse() {
-	tokens, keys, err := s.store.ReloadRuntime()
+	tokens, providerRecords, keys, err := s.store.ReloadRuntime()
 	if err != nil {
 		log.Printf("reload runtime: %v", err)
 		return
 	}
+	providers, err := newProviderRegistry(providerRecords, s.upstream, s.client)
+	if err != nil {
+		log.Printf("reload runtime providers: %v", err)
+		return
+	}
 	s.runtimeMu.Lock()
 	s.authTokens = tokens
+	s.providers = providers
 	s.runtimeMu.Unlock()
 	s.keyState.Replace(keys)
-}
-
-func maskAPIKeys(keys []APIKey) []APIKey {
-	out := make([]APIKey, 0, len(keys))
-	for _, key := range keys {
-		key.Key = maskSecret(key.Key)
-		out = append(out, key)
-	}
-	return out
 }
 
 func maskUsers(users []AuthToken) []AuthToken {

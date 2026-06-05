@@ -108,6 +108,28 @@ func copyResponseHeaders(dst, src http.Header) {
 	}
 }
 
+func copyResponseBody(w http.ResponseWriter, r io.Reader) error {
+	flusher, _ := w.(http.Flusher)
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			if _, err := w.Write(buf[:n]); err != nil {
+				return err
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+}
+
 func setCORS(h http.Header) {
 	for k, v := range corsHeaders {
 		h.Set(k, v)

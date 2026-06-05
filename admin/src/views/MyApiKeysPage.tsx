@@ -1,11 +1,13 @@
+import { useState } from "react";
 import { Check, Copy, Eye, EyeOff, KeyRound, Trash2 } from "lucide-react";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
+import { EnabledToggleButton } from "../components/enabled-toggle-button";
 import { useLocale } from "../i18n/locale";
 import type { UserAPIKey } from "../types/admin";
 
@@ -17,6 +19,7 @@ export function MyApiKeysPage(props: {
   copiedTarget: string;
   onNewUserKeyChange: (value: { name: string; token: string }) => void;
   onCreateUserAPIKey: () => void;
+  onClearGeneratedUserKey: () => void;
   onCopyText: (value: string, target: string) => void;
   onCopyUserAPIKey: (key: UserAPIKey) => void;
   onToggleUserAPIKeyReveal: (key: UserAPIKey) => void;
@@ -24,47 +27,62 @@ export function MyApiKeysPage(props: {
   onRequestDeleteUserAPIKey: (key: UserAPIKey) => void;
 }) {
   const { t } = useLocale();
+  const [createOpen, setCreateOpen] = useState(false);
+
+  function setCreateDialogOpen(open: boolean) {
+    setCreateOpen(open);
+    if (open) {
+      props.onNewUserKeyChange({ name: "", token: "" });
+      props.onClearGeneratedUserKey();
+    }
+  }
 
   return (
-    <Card className="keys-card">
-      <CardHeader>
+    <div className="stack">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <CardTitle>{t("nav.my_keys")}</CardTitle>
-          <Badge variant="secondary">{props.userAPIKeys.length} {t("accounts.keys")}</Badge>
+          <h2 className="text-2xl font-semibold tracking-tight">{t("nav.my_keys")}</h2>
+          <Badge variant="secondary">{props.userAPIKeys.length} {t("keys.count")}</Badge>
         </div>
-      </CardHeader>
-      <CardContent>
-        <div className="key-create-panel">
+        <Button type="button" onClick={() => setCreateDialogOpen(true)}><KeyRound size={15} /> {t("keys.generate")}</Button>
+      </div>
+      <Dialog open={createOpen} onOpenChange={setCreateDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("keys.generate")}</DialogTitle>
+          </DialogHeader>
           <Input
-            className="key-create-input"
             placeholder={t("keys.key_name")}
             value={props.newUserKey.name}
             onChange={(event) => props.onNewUserKeyChange({ ...props.newUserKey, name: event.target.value })}
           />
-          <Button type="button" onClick={props.onCreateUserAPIKey}><KeyRound size={15} /> {t("keys.generate")}</Button>
-        </div>
-        {props.generatedUserKey && (
-          <Alert className="generated-key-alert">
-            <AlertDescription className="mono [overflow-wrap:anywhere]">{props.generatedUserKey.token}</AlertDescription>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  type="button"
-                  aria-label={t("common.copy")}
-                  onClick={() => props.onCopyText(props.generatedUserKey!.token, "generated-user-key")}
-                >
-                  {props.copiedTarget === "generated-user-key" ? <Check className="text-emerald-600 dark:text-emerald-400" size={15} /> : <Copy size={15} />}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{t("common.copy")}</TooltipContent>
-            </Tooltip>
-          </Alert>
-        )}
-        <div className="keys-table-scroll">
-          <div className="keys-table-inner">
-            <Table className="keys-table">
+          {props.generatedUserKey && (
+            <Alert className="generated-key-alert">
+              <AlertDescription className="mono [overflow-wrap:anywhere]">{props.generatedUserKey.token}</AlertDescription>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    type="button"
+                    aria-label={t("common.copy")}
+                    onClick={() => props.onCopyText(props.generatedUserKey!.token, "generated-user-key")}
+                  >
+                    {props.copiedTarget === "generated-user-key" ? <Check className="text-emerald-600 dark:text-emerald-400" size={15} /> : <Copy size={15} />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t("common.copy")}</TooltipContent>
+              </Tooltip>
+            </Alert>
+          )}
+          <DialogFooter>
+            <Button variant="outline" type="button" onClick={() => setCreateDialogOpen(false)}>{t("common.cancel")}</Button>
+            <Button type="button" disabled={!props.newUserKey.name.trim()} onClick={props.onCreateUserAPIKey}><KeyRound size={15} /> {t("keys.generate")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <div className="data-table-card">
+            <Table className="keys-table keys-table-inner">
               <TableHeader>
                 <TableRow>
                   <TableHead>{t("keys.name")}</TableHead>
@@ -108,14 +126,13 @@ export function MyApiKeysPage(props: {
                   </TableCell>
                   <TableCell className="right">
                     <div className="key-actions">
-                      <Button size="sm" variant="outline" type="button" onClick={() => props.onUpdateUserAPIKey(key, !key.valid)}>
-                        {key.valid ? t("common.disable") : t("common.enable")}
-                      </Button>
+                      <EnabledToggleButton enabled={key.valid} onClick={() => props.onUpdateUserAPIKey(key, !key.valid)} />
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
                             variant="ghost"
                             size="icon-sm"
+                            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                             type="button"
                             aria-label={t("common.delete")}
                             onClick={() => props.onRequestDeleteUserAPIKey(key)}
@@ -130,9 +147,7 @@ export function MyApiKeysPage(props: {
                 </TableRow>
               ))}</TableBody>
             </Table>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

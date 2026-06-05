@@ -3,9 +3,16 @@ module github.com/teatak/buzzhive
 go 1.25.1
 
 require (
+	github.com/lib/pq v1.12.3
 	github.com/mattn/go-sqlite3 v1.14.44
-	golang.org/x/crypto v0.36.0
+	golang.org/x/crypto v0.46.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-require github.com/lib/pq v1.12.3
+require github.com/teatak/cart/v2 v2.1.8
+
+require (
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/redis/go-redis/v9 v9.20.0 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
+)

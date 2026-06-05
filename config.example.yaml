@@ -4,3 +4,7 @@ server:
 database:
   driver: postgres
   url: postgres://buzzhive:buzzhive@127.0.0.1:5432/buzzhive?sslmode=disable
+
+# Optional. Docker install sets BUZZHIVE_REDIS_ADDR=redis:6379.
+# redis:
+#   addr: 127.0.0.1:6379

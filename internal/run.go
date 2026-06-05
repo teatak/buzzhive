@@ -26,7 +26,7 @@ func Run(configPath, adminDir string) error {
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 
-	log.Printf("local Gemini proxy listening on http://%s", cfg.Server.Addr)
+	log.Printf("BuzzHive listening on http://%s", cfg.Server.Addr)
 	return httpServer.ListenAndServe()
 }
 

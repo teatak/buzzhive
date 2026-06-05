@@ -261,18 +261,25 @@ p,
   line-height: 1;
 }
 
-.dashboard-usage-grid {
+.models-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.5fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   align-items: start;
 }
 
-.runtime-grid {
+.dashboard-usage-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.12fr) minmax(360px, 0.88fr);
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 0.8fr);
   gap: 14px;
   align-items: start;
+}
+
+.usage-filters {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.9fr) minmax(150px, 0.9fr) minmax(150px, 0.65fr) minmax(150px, 0.65fr);
+  gap: 8px;
+  align-items: center;
 }
 
 .stack {
@@ -342,12 +349,6 @@ td.right > * + * {
   border-radius: 11px;
 }
 
-.field {
-  display: grid;
-  gap: 8px;
-  margin: 18px 0 12px;
-}
-
 .form-row {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) auto;
@@ -381,22 +382,6 @@ td.right > * + * {
   min-width: 0;
 }
 
-.key-create-panel {
-  display: grid;
-  grid-template-columns: minmax(220px, 420px) auto;
-  align-items: center;
-  justify-content: start;
-  gap: 8px;
-  margin-bottom: 14px;
-  padding: 10px;
-  border-radius: 10px;
-  background: color-mix(in oklab, var(--muted) 62%, transparent);
-}
-
-.key-create-input {
-  background: var(--background);
-}
-
 .generated-key-alert {
   display: flex;
   align-items: center;
@@ -415,6 +400,16 @@ td.right > * + * {
   width: 100%;
   min-width: 0;
   overflow-x: auto;
+}
+
+.data-table-card {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--card-foreground);
 }
 
 .keys-table-inner {
@@ -447,9 +442,7 @@ td.right > * + * {
   align-items: center;
   max-width: min(560px, 46vw);
   overflow: hidden;
-  padding: 4px 4px 4px 8px;
-  border-radius: var(--radius);
-  background: var(--muted);
+  padding: 0;
   color: var(--foreground);
   vertical-align: middle;
 }
@@ -483,23 +476,15 @@ td.right > * + * {
   margin-bottom: 12px;
 }
 
-.usage-filters {
-  display: grid;
-  grid-template-columns: minmax(170px, 1fr) minmax(170px, 190px) minmax(170px, 190px);
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
 @media (max-width: 1100px) {
+  .models-grid,
   .dashboard-usage-grid,
-  .runtime-grid,
+  .usage-filters,
   .form-row,
   .form-row.account-form,
   .form-row.user-form,
   .form-row.key-form,
-  .filter-row,
-  .key-create-panel,
-  .usage-filters {
+  .filter-row {
     grid-template-columns: 1fr;
   }
 

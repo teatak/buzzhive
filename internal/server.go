@@ -23,15 +23,21 @@ func newServer(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := store.Seed(cfg); err != nil {
+	runtimeCache, err := OpenRuntimeCache(cfg.Redis)
+	if err != nil {
+		_ = store.Close()
 		return nil, err
 	}
 	authTokens, err := store.AuthTokens()
 	if err != nil {
+		_ = runtimeCache.Close()
+		_ = store.Close()
 		return nil, err
 	}
-	apiKeys, err := store.APIKeys()
+	apiKeys, err := store.RuntimeProviderAPIKeys()
 	if err != nil {
+		_ = runtimeCache.Close()
+		_ = store.Close()
 		return nil, err
 	}
 
@@ -44,31 +50,53 @@ func newServer(cfg Config) (*Server, error) {
 		KeepAlive: 30 * time.Second,
 	}).DialContext
 
+	client := &http.Client{Timeout: timeout, Transport: transport}
+	providerRecords, err := store.EnabledProviders()
+	if err != nil {
+		_ = runtimeCache.Close()
+		_ = store.Close()
+		return nil, err
+	}
+	providers, err := newProviderRegistry(providerRecords, upstream, client)
+	if err != nil {
+		_ = runtimeCache.Close()
+		_ = store.Close()
+		return nil, err
+	}
+
 	srv := &Server{
-		cfg:          cfg,
-		store:        store,
-		upstream:     upstream,
-		client:       &http.Client{Timeout: timeout, Transport: transport},
-		authTokens:   authTokens,
-		sessions:     make(map[string]SessionUser),
-		usageCh:      make(chan UsageRecord, 4096),
-		modelUsageCh: make(chan UsageRecord, 4096),
+		cfg:           cfg,
+		store:         store,
+		runtimeCache:  runtimeCache,
+		upstream:      upstream,
+		client:        client,
+		providers:     providers,
+		authTokens:    authTokens,
+		sessions:      make(map[string]SessionUser),
+		routeNext:     make(map[string]int),
+		routeSessions: make(map[string]RouteSession),
+		toolSigs:      make(map[string]string),
+		usageCh:       make(chan UsageRecord, 1024),
 		keyState: &KeyState{
-			keys:      apiKeys,
-			cooldown:  time.Duration(cfg.Retry.CooldownSeconds) * time.Second,
-			exhausted: make(map[string]time.Time),
-			errors:    make(map[string]KeyError),
+			keys:         apiKeys,
+			cooldown:     time.Duration(cfg.Retry.CooldownSeconds) * time.Second,
+			rpdCooldown:  time.Hour,
+			exhausted:    make(map[string]time.Time),
+			cooldownHits: make(map[string]int),
+			rpdLike:      make(map[string]bool),
+			errors:       make(map[string]KeyError),
 		},
 		stats: Stats{
 			StartedAt: time.Now(),
 			ByUser:    make(map[string]int64),
 			ByKey:     make(map[string]int64),
 			Exhausted: make(map[string]string),
+			RPDLike:   make(map[string]bool),
 			KeyErrors: make(map[string]KeyError),
 		},
 	}
+	srv.adminAPI = srv.newAdminAPI()
 	go srv.usageWriter()
-	go srv.modelUsageWriter()
 	return srv, nil
 }
 
@@ -84,7 +112,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.URL.Path == "/admin" || r.URL.Path == "/admin/" || strings.HasPrefix(r.URL.Path, "/admin/assets/") {
+	if r.URL.Path == "/admin" ||
+		r.URL.Path == "/admin/" ||
+		r.URL.Path == "/admin/favicon.svg" ||
+		r.URL.Path == "/favicon.svg" ||
+		strings.HasPrefix(r.URL.Path, "/admin/assets/") {
 		if s.serveAdmin(w, r) {
 			return
 		}
@@ -93,7 +125,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.HasPrefix(r.URL.Path, "/admin/api/") {
-		s.handleAdminAPI(w, r)
+		s.adminAPI.ServeHTTP(w, r)
 		return
 	}
 
@@ -102,12 +134,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	case "/stats":
-		s.writeStats(w)
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	case "/flush-exhausted":
-		s.keyState.Flush()
-		s.refreshKeyStateStats()
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
 
@@ -117,21 +147,33 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model := parseModel(r.URL.Path, r.URL.Query().Get("model"))
-	if model == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing model in path"})
+	if strings.HasPrefix(r.URL.Path, "/v1/") {
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			body, ok := readRequestBody(w, r)
+			if !ok {
+				return
+			}
+			s.handleOpenAIChatCompletions(w, r, body, user)
+		case "/v1/models":
+			s.handleOpenAIModels(w, r, user)
+		default:
+			writeOpenAIError(w, http.StatusNotFound, "not_found", "OpenAI endpoint not found")
+		}
 		return
 	}
 
-	var body []byte
-	if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
-		var err error
-		body, err = io.ReadAll(r.Body)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-	}
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+}
 
-	s.proxy(w, r, body, user, model)
+func readRequestBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	if r.Body == nil || r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return nil, true
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return nil, false
+	}
+	return body, true
 }
