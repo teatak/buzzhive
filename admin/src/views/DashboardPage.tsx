@@ -153,7 +153,7 @@ function RangeShortcut(props: { label: string; active: boolean; onClick: () => v
       type="button"
       variant="outline"
       size="sm"
-      className={cn(props.active && "bg-muted text-foreground hover:bg-muted")}
+      className={cn(props.active && "bg-muted text-foreground hover:bg-muted dark:bg-input/50 dark:hover:bg-input/50")}
       onClick={props.onClick}
     >
       {props.label}
