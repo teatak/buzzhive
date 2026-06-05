@@ -44,6 +44,23 @@ export function naturalDayRange(date = new Date()): { from: string; to: string }
   return { from: isoMinute(from), to: isoMinute(to) };
 }
 
+export function naturalWeekRange(date = new Date()): { from: string; to: string } {
+  const from = new Date(date);
+  from.setHours(0, 0, 0, 0);
+  const day = from.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  from.setDate(from.getDate() + mondayOffset);
+  const to = new Date(from);
+  to.setDate(to.getDate() + 7);
+  return { from: isoMinute(from), to: isoMinute(to) };
+}
+
+export function naturalMonthRange(date = new Date()): { from: string; to: string } {
+  const from = new Date(date.getFullYear(), date.getMonth(), 1);
+  const to = new Date(date.getFullYear(), date.getMonth() + 1, 1);
+  return { from: isoMinute(from), to: isoMinute(to) };
+}
+
 export function usagePath(filter: { key_id: string; model: string; from: string; to: string }) {
   const params = new URLSearchParams({ from: filter.from, to: filter.to });
   if (filter.key_id !== "all") params.set("key_id", filter.key_id);

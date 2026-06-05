@@ -43,10 +43,22 @@ func TestUsageStatsRollupAndSummary(t *testing.T) {
 		t.Fatalf("short summary = %+v, want 1m logs with 2 requests and 1 error", shortSummary)
 	}
 
-	longSummary, err := store.UsageSummary(UsageQuery{
+	midSummary, err := store.UsageSummary(UsageQuery{
 		UserID: 1,
 		From:   time.Date(2026, 6, 5, 9, 0, 0, 0, time.Local),
 		To:     time.Date(2026, 6, 5, 12, 0, 0, 0, time.Local),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if midSummary.BucketMinutes != 5 || midSummary.Requests != 3 || midSummary.Errors != 1 {
+		t.Fatalf("mid summary = %+v, want 5m logs with 3 requests and 1 error", midSummary)
+	}
+
+	longSummary, err := store.UsageSummary(UsageQuery{
+		UserID: 1,
+		From:   time.Date(2026, 6, 5, 9, 0, 0, 0, time.Local),
+		To:     time.Date(2026, 6, 5, 15, 0, 0, 0, time.Local),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -62,5 +74,32 @@ func TestUsageStatsRollupAndSummary(t *testing.T) {
 	}
 	if longSummary.Series[0].Date != "2026-06-05T09:00" || longSummary.Series[0].Requests != 2 || longSummary.Series[0].Errors != 1 {
 		t.Fatalf("first hourly point = %+v", longSummary.Series[0])
+	}
+
+	fourDaySummary, err := store.UsageSummary(UsageQuery{
+		UserID: 1,
+		From:   time.Date(2026, 6, 5, 0, 0, 0, 0, time.Local),
+		To:     time.Date(2026, 6, 9, 0, 0, 0, 0, time.Local),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fourDaySummary.BucketMinutes != 60 || fourDaySummary.Requests != 3 || fourDaySummary.Errors != 1 {
+		t.Fatalf("four day summary = %+v, want hourly stats with 3 requests and 1 error", fourDaySummary)
+	}
+
+	dailySummary, err := store.UsageSummary(UsageQuery{
+		UserID: 1,
+		From:   time.Date(2026, 6, 5, 0, 0, 0, 0, time.Local),
+		To:     time.Date(2026, 6, 10, 0, 0, 0, 0, time.Local),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dailySummary.BucketMinutes != 1440 || dailySummary.Requests != 3 || dailySummary.Errors != 1 {
+		t.Fatalf("daily summary = %+v, want daily stats with 3 requests and 1 error", dailySummary)
+	}
+	if len(dailySummary.Series) != 1 || dailySummary.Series[0].Date != "2026-06-05T00:00" {
+		t.Fatalf("daily series = %+v, want one daily point", dailySummary.Series)
 	}
 }

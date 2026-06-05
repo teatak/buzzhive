@@ -456,16 +456,8 @@ func usageBucketMinutes(from, to time.Time) int {
 	switch {
 	case span <= time.Hour:
 		return 1
-	case span <= 6*time.Hour:
-		return 5
-	case span <= 24*time.Hour:
-		return 15
-	case span <= 72*time.Hour:
-		return 30
-	case span <= 14*24*time.Hour:
-		return 60
 	default:
-		return 1440
+		return 5
 	}
 }
 
@@ -474,10 +466,10 @@ func usageStatsSource(query UsageQuery) (string, int, bool) {
 		return "", 0, false
 	}
 	span := query.To.Sub(query.From)
-	if span <= 2*time.Hour {
+	if span <= 5*time.Hour {
 		return "", 0, false
 	}
-	if span <= 14*24*time.Hour {
+	if span <= 4*24*time.Hour {
 		return "usage_stats_hourly", 60, true
 	}
 	return "usage_stats_daily", 1440, true
