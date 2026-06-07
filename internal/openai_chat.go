@@ -13,19 +13,25 @@ import (
 	"strings"
 )
 
-var errUnsupportedOpenAIContent = errors.New("only text and data URL image chat content are supported in this version")
+var errUnsupportedOpenAIContent = errors.New("only text, data URL image, and input_audio chat content are supported in this version")
 
 type openAIChatRequest struct {
-	Model           string          `json:"model"`
-	Messages        []openAIMessage `json:"messages"`
-	Stream          bool            `json:"stream"`
-	Tools           json.RawMessage `json:"tools,omitempty"`
-	ToolChoice      json.RawMessage `json:"tool_choice,omitempty"`
-	Temperature     *float64        `json:"temperature,omitempty"`
-	TopP            *float64        `json:"top_p,omitempty"`
-	MaxTokens       *int            `json:"max_tokens,omitempty"`
-	MaxOutputTokens *int            `json:"max_completion_tokens,omitempty"`
-	Stop            any             `json:"stop,omitempty"`
+	Model           string               `json:"model"`
+	Messages        []openAIMessage      `json:"messages"`
+	Stream          bool                 `json:"stream"`
+	Tools           json.RawMessage      `json:"tools,omitempty"`
+	ToolChoice      json.RawMessage      `json:"tool_choice,omitempty"`
+	Temperature     *float64             `json:"temperature,omitempty"`
+	TopP            *float64             `json:"top_p,omitempty"`
+	MaxTokens       *int                 `json:"max_tokens,omitempty"`
+	MaxOutputTokens *int                 `json:"max_completion_tokens,omitempty"`
+	Stop            any                  `json:"stop,omitempty"`
+	ResponseFormat  json.RawMessage      `json:"response_format,omitempty"`
+	StreamOptions   *openAIStreamOptions `json:"stream_options,omitempty"`
+}
+
+type openAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
 type openAIMessage struct {
@@ -41,7 +47,7 @@ type openAIChatResponse struct {
 	Created int64          `json:"created"`
 	Model   string         `json:"model"`
 	Choices []openAIChoice `json:"choices"`
-	Usage   openAIUsage    `json:"usage,omitempty"`
+	Usage   *openAIUsage   `json:"usage,omitempty"`
 }
 
 type openAIChoice struct {
@@ -137,10 +143,12 @@ type geminiFunctionCallingConfig struct {
 }
 
 type geminiGenerationConfig struct {
-	Temperature     *float64 `json:"temperature,omitempty"`
-	TopP            *float64 `json:"topP,omitempty"`
-	MaxOutputTokens *int     `json:"maxOutputTokens,omitempty"`
-	StopSequences   []string `json:"stopSequences,omitempty"`
+	Temperature      *float64        `json:"temperature,omitempty"`
+	TopP             *float64        `json:"topP,omitempty"`
+	MaxOutputTokens  *int            `json:"maxOutputTokens,omitempty"`
+	StopSequences    []string        `json:"stopSequences,omitempty"`
+	ResponseMimeType string          `json:"responseMimeType,omitempty"`
+	ResponseSchema   json.RawMessage `json:"responseSchema,omitempty"`
 }
 
 type geminiGenerateResponse struct {
@@ -149,9 +157,11 @@ type geminiGenerateResponse struct {
 		FinishReason string        `json:"finishReason"`
 	} `json:"candidates"`
 	UsageMetadata struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
-		TotalTokenCount      int `json:"totalTokenCount"`
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		TotalTokenCount         int `json:"totalTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount"`
+		ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
 	} `json:"usageMetadata"`
 }
 
@@ -208,7 +218,7 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 	}
 
 	if req.Stream {
-		s.proxyOpenAIChatStream(w, r, geminiBody, user, req.Model, targets)
+		s.proxyOpenAIChatStream(w, r, geminiBody, user, req.Model, targets, req.StreamOptions != nil && req.StreamOptions.IncludeUsage)
 		return
 	}
 	s.proxyOpenAIChat(w, r, geminiBody, user, req.Model, targets)
@@ -254,6 +264,12 @@ func openAIMessageParts(raw json.RawMessage) ([]canonicalPart, error) {
 				return nil, err
 			}
 			out = append(out, canonicalPart{Type: "image", MimeType: mimeType, Data: data})
+		case "input_audio":
+			mimeType, data, err := parseOpenAIInputAudio(part.InputAudio.Data, part.InputAudio.Format)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, canonicalPart{Type: "audio", MimeType: mimeType, Data: data})
 		default:
 			return nil, errUnsupportedOpenAIContent
 		}
@@ -267,6 +283,10 @@ type openAIContentPart struct {
 	ImageURL struct {
 		URL string `json:"url"`
 	} `json:"image_url"`
+	InputAudio struct {
+		Data   string `json:"data"`
+		Format string `json:"format"`
+	} `json:"input_audio"`
 }
 
 func parseOpenAIImageDataURL(value string) (string, string, error) {
@@ -291,6 +311,34 @@ func parseOpenAIImageDataURL(value string) (string, string, error) {
 		return "", "", errUnsupportedOpenAIContent
 	}
 	return mimeType, data, nil
+}
+
+func parseOpenAIInputAudio(data string, format string) (string, string, error) {
+	data = strings.TrimSpace(data)
+	format = strings.ToLower(strings.TrimSpace(format))
+	if data == "" || format == "" {
+		return "", "", errUnsupportedOpenAIContent
+	}
+	if _, err := base64.StdEncoding.DecodeString(data); err != nil {
+		return "", "", errUnsupportedOpenAIContent
+	}
+	mimeType, ok := openAIAudioMimeTypes[format]
+	if !ok {
+		return "", "", errUnsupportedOpenAIContent
+	}
+	return mimeType, data, nil
+}
+
+var openAIAudioMimeTypes = map[string]string{
+	"wav":  "audio/wav",
+	"mp3":  "audio/mpeg",
+	"mpeg": "audio/mpeg",
+	"mpga": "audio/mpeg",
+	"webm": "audio/webm",
+	"ogg":  "audio/ogg",
+	"flac": "audio/flac",
+	"m4a":  "audio/mp4",
+	"aac":  "audio/aac",
 }
 
 func (s *Server) proxyOpenAIChat(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken, model string, targets []RouteTarget) {
@@ -328,6 +376,7 @@ func (s *Server) proxyOpenAIChat(w http.ResponseWriter, r *http.Request, body []
 		s.recordProviderResultUsage(user, model, result, http.StatusBadGateway)
 		return
 	}
+	usage := tokenUsageFromGeminiResponseBody(raw, geminiResp)
 
 	canonicalResp := geminiToCanonicalChatResponse(geminiResp, model, result.RequestID, startedAt)
 	if canonicalResp.FinishReason == "length" {
@@ -338,7 +387,7 @@ func (s *Server) proxyOpenAIChat(w http.ResponseWriter, r *http.Request, body []
 	w.Header().Set("X-Proxy-Debug", strings.Join(result.Chain, " -> "))
 	w.Header().Set("X-Proxy-Key", key.Name)
 	writeJSON(w, http.StatusOK, out)
-	s.recordProviderResultUsage(user, model, result, http.StatusOK)
+	s.recordProviderResultUsage(user, model, result, http.StatusOK, usage)
 }
 
 func (s *Server) proxyOpenAIRaw(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken, model string, targets []RouteTarget) {
@@ -367,8 +416,10 @@ func (s *Server) proxyOpenAIRaw(w http.ResponseWriter, r *http.Request, body []b
 	if resp.StatusCode >= 400 {
 		logOpenAIDiagnostic(result, model, reqDiag, resp.StatusCode, "", nil)
 	}
+	usage := TokenUsage{}
 	if !reqDiag.Stream && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "application/json") {
 		raw := drain(resp.Body, 8*1024*1024)
+		usage = tokenUsageFromOpenAIResponseBody(raw)
 		logOpenAIDiagnosticResponse(result, model, reqDiag, resp.StatusCode, raw)
 		resp.Body = io.NopCloser(bytes.NewReader(raw))
 	}
@@ -376,11 +427,15 @@ func (s *Server) proxyOpenAIRaw(w http.ResponseWriter, r *http.Request, body []b
 	w.Header().Set("X-Proxy-Debug", strings.Join(result.Chain, " -> "))
 	w.Header().Set("X-Proxy-Key", result.Key.Name)
 	w.WriteHeader(resp.StatusCode)
-	_ = copyResponseBody(w, resp.Body)
-	s.recordProviderResultUsage(user, model, result, resp.StatusCode)
+	if reqDiag.Stream && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		usage = copyOpenAIStreamResponseBody(w, resp.Body)
+	} else {
+		_ = copyResponseBody(w, resp.Body)
+	}
+	s.recordProviderResultUsage(user, model, result, resp.StatusCode, usage)
 }
 
-func (s *Server) proxyOpenAIChatStream(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken, model string, targets []RouteTarget) {
+func (s *Server) proxyOpenAIChatStream(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken, model string, targets []RouteTarget, includeUsage bool) {
 	result := s.doProviderTargetLoop(r.Context(), user, model, targets, func(target RouteTarget) ProviderRequest {
 		return ProviderRequest{
 			ProviderName:    target.ProviderName,
@@ -426,6 +481,7 @@ func (s *Server) proxyOpenAIChatStream(w http.ResponseWriter, r *http.Request, b
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	usage := TokenUsage{}
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data:") {
@@ -439,20 +495,58 @@ func (s *Server) proxyOpenAIChatStream(w http.ResponseWriter, r *http.Request, b
 		if err := json.Unmarshal([]byte(payload), &geminiResp); err != nil {
 			continue
 		}
+		if chunkUsage := tokenUsageFromGeminiResponseBody([]byte(payload), geminiResp); !chunkUsage.IsZero() {
+			usage = chunkUsage
+		}
 		event := geminiToCanonicalStreamEvent(geminiResp, result.RequestID)
 		s.rememberToolSignatures(event.ToolCalls)
 		if event.FinishReason == "length" {
 			logOpenAIDiagnostic(result, model, openAIDiagnosticRequest{Stream: true}, http.StatusOK, "length", nil)
 		}
 		if event.Text != "" || len(event.ToolCalls) > 0 || event.FinishReason != "" {
-			writeOpenAIStreamChunk(w, flusher, canonicalToOpenAIStreamChunk(event, "chatcmpl-"+result.RequestID, created, model))
+			writeOpenAIStreamChunk(w, flusher, canonicalToOpenAIStreamChunk(event, "chatcmpl-"+result.RequestID, created, model, includeUsage))
 		}
 	}
 	io.WriteString(w, "data: [DONE]\n\n")
 	if flusher != nil {
 		flusher.Flush()
 	}
-	s.recordProviderResultUsage(user, model, result, http.StatusOK)
+	s.recordProviderResultUsage(user, model, result, http.StatusOK, usage)
+}
+
+func copyOpenAIStreamResponseBody(w http.ResponseWriter, r io.Reader) TokenUsage {
+	reader := bufio.NewReader(r)
+	flusher, _ := w.(http.Flusher)
+	usage := TokenUsage{}
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			if _, writeErr := w.Write(line); writeErr != nil {
+				return usage
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+			if chunkUsage := tokenUsageFromOpenAIStreamLine(line); !chunkUsage.IsZero() {
+				usage = chunkUsage
+			}
+		}
+		if err != nil {
+			return usage
+		}
+	}
+}
+
+func tokenUsageFromOpenAIStreamLine(line []byte) TokenUsage {
+	trimmed := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(trimmed, []byte("data:")) {
+		return TokenUsage{}
+	}
+	payload := bytes.TrimSpace(bytes.TrimPrefix(trimmed, []byte("data:")))
+	if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+		return TokenUsage{}
+	}
+	return tokenUsageFromOpenAIResponseBody(payload)
 }
 
 func isOpenAIProviderType(providerType string) bool {

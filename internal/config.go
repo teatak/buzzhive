@@ -26,10 +26,7 @@ func loadConfig(path string) (Config, error) {
 		cfg.Upstream.Timeout = "10m"
 	}
 	if cfg.Database.Driver == "" {
-		cfg.Database.Driver = "sqlite"
-	}
-	if cfg.Database.Driver == "sqlite" && cfg.Database.Path == "" {
-		cfg.Database.Path = "data/buzzhive.db"
+		cfg.Database.Driver = "postgres"
 	}
 	if envURL := os.Getenv("BUZZHIVE_DATABASE_URL"); envURL != "" {
 		cfg.Database.Driver = "postgres"

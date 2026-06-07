@@ -2,12 +2,13 @@ package buzzhive
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -17,10 +18,7 @@ import (
 func createGeminiRouteTestStore(t *testing.T, baseURL, publicModel, upstreamModel, keySecret string) (*Store, []APIKey) {
 	t.Helper()
 
-	store, err := OpenStore(DatabaseConfig{Path: filepath.Join(t.TempDir(), "buzzhive.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := openTestStore(t)
 	provider, err := store.CreateProvider(ProviderRecord{
 		Name:    providerGemini,
 		Type:    providerGemini,
@@ -64,6 +62,24 @@ func createGeminiRouteTestStore(t *testing.T, baseURL, publicModel, upstreamMode
 		t.Fatal(err)
 	}
 	return store, keys
+}
+
+func compactJSONStringForTest(t *testing.T, raw string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, []byte(raw)); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
+}
+
+func compactJSONRawForTest(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
 }
 
 func TestOpenAIErrorTypeAndCodeMapsUpstreamStatuses(t *testing.T) {
@@ -175,7 +191,9 @@ func TestOpenAIChatCompletionsRoutesToGemini(t *testing.T) {
 			"usageMetadata": {
 				"promptTokenCount": 3,
 				"candidatesTokenCount": 4,
-				"totalTokenCount": 7
+				"totalTokenCount": 7,
+				"cachedContentTokenCount": 1,
+				"thoughtsTokenCount": 2
 			}
 		}`))
 	}))
@@ -251,8 +269,165 @@ func TestOpenAIChatCompletionsRoutesToGemini(t *testing.T) {
 	if got.Choices[0].Message.Content == nil || *got.Choices[0].Message.Content != "hello from gemini" {
 		t.Fatalf("content = %v", got.Choices[0].Message.Content)
 	}
-	if got.Usage.TotalTokens != 7 {
+	if got.Usage == nil || got.Usage.TotalTokens != 7 {
 		t.Fatalf("usage = %+v", got.Usage)
+	}
+	usage, err := store.UsageSummary(UsageQuery{
+		Model: "gemini-3.5-flash",
+		From:  time.Now().Add(-time.Minute),
+		To:    time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Requests != 1 || usage.Errors != 0 {
+		t.Fatalf("usage summary = %+v", usage)
+	}
+	if usage.ByKey["alice-key"] != 1 {
+		t.Fatalf("usage by key = %+v", usage.ByKey)
+	}
+	if usage.PromptTokens != 3 || usage.CompletionTokens != 4 || usage.TotalTokens != 7 || usage.CachedTokens != 1 || usage.ReasoningTokens != 2 {
+		t.Fatalf("usage tokens = %+v", usage)
+	}
+
+	var usageProviderName, usageProviderKeyName, usageModel, usageUpstreamModel string
+	var usageStatus int
+	var promptTokens, completionTokens, totalTokens, cachedTokens, reasoningTokens int64
+	var rawUsage string
+	if err := store.db.QueryRow(`
+		SELECT provider_name, provider_key_name, model, upstream_model, status, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, raw_usage
+		FROM usage_logs
+		LIMIT 1`,
+	).Scan(&usageProviderName, &usageProviderKeyName, &usageModel, &usageUpstreamModel, &usageStatus, &promptTokens, &completionTokens, &totalTokens, &cachedTokens, &reasoningTokens, &rawUsage); err != nil {
+		t.Fatal(err)
+	}
+	if usageProviderName != "gemini" || usageProviderKeyName != "ga-1" || usageModel != "gemini-3.5-flash" || usageUpstreamModel != "gemini-3.5-flash" || usageStatus != http.StatusOK {
+		t.Fatalf("usage log = provider %q key %q model %q upstream %q status %d", usageProviderName, usageProviderKeyName, usageModel, usageUpstreamModel, usageStatus)
+	}
+	if promptTokens != 3 || completionTokens != 4 || totalTokens != 7 || cachedTokens != 1 || reasoningTokens != 2 {
+		t.Fatalf("usage log tokens = prompt %d completion %d total %d cached %d reasoning %d", promptTokens, completionTokens, totalTokens, cachedTokens, reasoningTokens)
+	}
+	if !strings.Contains(rawUsage, `"cachedContentTokenCount":1`) || !strings.Contains(rawUsage, `"thoughtsTokenCount":2`) {
+		t.Fatalf("raw usage = %s", rawUsage)
+	}
+}
+
+func TestOpenAIChatResponseFormatRoutesToGemini(t *testing.T) {
+	tests := []struct {
+		name           string
+		responseFormat string
+		wantMimeType   string
+		wantSchema     string
+	}{
+		{
+			name:           "json object",
+			responseFormat: `{"type":"json_object"}`,
+			wantMimeType:   "application/json",
+		},
+		{
+			name:           "json schema",
+			responseFormat: `{"type":"json_schema","json_schema":{"name":"answer","schema":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}}}`,
+			wantMimeType:   "application/json",
+			wantSchema:     `{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var upstreamBody geminiGenerateRequest
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+					t.Fatal(err)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{
+					"candidates": [{
+						"content": {"role": "model", "parts": [{"text": "ok"}]},
+						"finishReason": "STOP"
+					}]
+				}`))
+			}))
+			defer upstream.Close()
+
+			upstreamURL, err := url.Parse(upstream.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store, keys := createGeminiRouteTestStore(t, upstream.URL, "gemini-3.5-flash", "gemini-3.5-flash", "AIza-secret")
+			defer store.Close()
+			srv := &Server{
+				store:    store,
+				upstream: upstreamURL,
+				client:   upstream.Client(),
+				providers: map[string]Provider{
+					providerGemini: NewGeminiProvider(upstreamURL, upstream.Client()),
+				},
+				authTokens: map[string]AuthToken{
+					"bh_valid": {Name: "alice-key", UserName: "alice", Valid: true},
+				},
+				keyState: &KeyState{
+					keys:         keys,
+					cooldown:     time.Minute,
+					rpdCooldown:  time.Hour,
+					exhausted:    make(map[string]time.Time),
+					cooldownHits: make(map[string]int),
+					rpdLike:      make(map[string]bool),
+					errors:       make(map[string]KeyError),
+				},
+				stats: Stats{
+					StartedAt: time.Now(),
+					Exhausted: make(map[string]string),
+					RPDLike:   make(map[string]bool),
+					KeyErrors: make(map[string]KeyError),
+				},
+			}
+			srv.cfg.Retry.MaxAttempts = 2
+
+			body := `{
+				"model": "gemini-3.5-flash",
+				"messages": [{"role": "user", "content": "hi"}],
+				"response_format": ` + tt.responseFormat + `
+			}`
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+			req.Header.Set("Authorization", "Bearer bh_valid")
+			rr := httptest.NewRecorder()
+
+			srv.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+			}
+			if upstreamBody.GenerationConfig == nil {
+				t.Fatal("generationConfig is nil")
+			}
+			if got := upstreamBody.GenerationConfig.ResponseMimeType; got != tt.wantMimeType {
+				t.Fatalf("responseMimeType = %q, want %q", got, tt.wantMimeType)
+			}
+			if tt.wantSchema == "" {
+				if len(upstreamBody.GenerationConfig.ResponseSchema) != 0 {
+					t.Fatalf("responseSchema = %s", upstreamBody.GenerationConfig.ResponseSchema)
+				}
+				return
+			}
+			if got := compactJSONRawForTest(t, upstreamBody.GenerationConfig.ResponseSchema); got != compactJSONStringForTest(t, tt.wantSchema) {
+				t.Fatalf("responseSchema = %s, want %s", got, tt.wantSchema)
+			}
+		})
+	}
+}
+
+func TestOpenAIChatRejectsUnsupportedResponseFormat(t *testing.T) {
+	_, err := openAIToCanonicalChatRequest(openAIChatRequest{
+		Model: "gemini-3.5-flash",
+		Messages: []openAIMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hi"`),
+		}},
+		ResponseFormat: json.RawMessage(`{"type":"xml"}`),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported response_format") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -748,6 +923,33 @@ func TestOpenAIChatReplaysGeminiThoughtSignature(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatReplaysGeminiThoughtSignatureByFunctionArguments(t *testing.T) {
+	srv := &Server{}
+	srv.rememberToolSignatures([]canonicalToolCall{{
+		ID:        "call_old",
+		Name:      "search",
+		Arguments: `{"b":2,"a":1}`,
+		Signature: "sig-abc",
+	}})
+	req := &canonicalChatRequest{
+		Messages: []canonicalMessage{{
+			Role: "assistant",
+			Parts: []canonicalPart{{
+				Type:       "tool_call",
+				ToolCallID: "call_new",
+				Name:       "search",
+				Arguments:  json.RawMessage(`{"a":1,"b":2}`),
+			}},
+		}},
+	}
+
+	srv.applyToolSignatures(req)
+
+	if got := req.Messages[0].Parts[0].Signature; got != "sig-abc" {
+		t.Fatalf("thought signature = %q", got)
+	}
+}
+
 func TestOpenAIChatToolResultConvertsToGeminiFunctionResponse(t *testing.T) {
 	req := openAIChatRequest{
 		Model: "gemini-3.5-flash",
@@ -1053,6 +1255,139 @@ func TestOpenAIChatToolsStreamTranslatesGeminiFunctionCall(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatToolsStreamStoresThoughtSignatureForNextTurn(t *testing.T) {
+	var upstreamBodies []geminiGenerateRequest
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var upstreamBody geminiGenerateRequest
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Fatal(err)
+		}
+		upstreamBodies = append(upstreamBodies, upstreamBody)
+
+		if len(upstreamBodies) == 1 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"search","args":{"query":"hello"}},"thoughtSignature":"sig-stream"}]},"finishReason":"STOP"}]}` + "\n\n"))
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"candidates": [{
+				"content": {"role": "model", "parts": [{"text": "done"}]},
+				"finishReason": "STOP"
+			}]
+		}`))
+	}))
+	defer upstream.Close()
+
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, keys := createGeminiRouteTestStore(t, upstream.URL, "gemini-3.5-flash", "gemini-3.5-flash", "AIza-secret")
+	defer store.Close()
+	srv := &Server{
+		store:    store,
+		upstream: upstreamURL,
+		client:   upstream.Client(),
+		providers: map[string]Provider{
+			providerGemini: NewGeminiProvider(upstreamURL, upstream.Client()),
+		},
+		authTokens: map[string]AuthToken{
+			"bh_valid": {Name: "alice-key", UserName: "alice", Valid: true},
+		},
+		keyState: &KeyState{
+			keys:         keys,
+			cooldown:     time.Minute,
+			rpdCooldown:  time.Hour,
+			exhausted:    make(map[string]time.Time),
+			cooldownHits: make(map[string]int),
+			rpdLike:      make(map[string]bool),
+			errors:       make(map[string]KeyError),
+		},
+		stats: Stats{
+			StartedAt: time.Now(),
+			Exhausted: make(map[string]string),
+			RPDLike:   make(map[string]bool),
+			KeyErrors: make(map[string]KeyError),
+		},
+	}
+	srv.cfg.Retry.MaxAttempts = 2
+
+	firstBody := `{
+		"model": "gemini-3.5-flash",
+		"stream": true,
+		"messages": [{"role": "user", "content": "hi"}],
+		"tools": [{"type": "function", "function": {"name": "search", "parameters": {"type": "object"}}}]
+	}`
+	firstReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(firstBody))
+	firstReq.Header.Set("Authorization", "Bearer bh_valid")
+	firstRR := httptest.NewRecorder()
+
+	srv.ServeHTTP(firstRR, firstReq)
+
+	if firstRR.Code != http.StatusOK {
+		t.Fatalf("first status = %d, body = %s", firstRR.Code, firstRR.Body.String())
+	}
+
+	var streamedCall openAIToolCall
+	for _, line := range strings.Split(firstRR.Body.String(), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") || line == "data: [DONE]" {
+			continue
+		}
+		var chunk openAIChatResponse
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &chunk); err != nil {
+			t.Fatal(err)
+		}
+		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta != nil && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
+			streamedCall = chunk.Choices[0].Delta.ToolCalls[0]
+			break
+		}
+	}
+	if streamedCall.ID == "" {
+		t.Fatalf("stream missing tool call id: %s", firstRR.Body.String())
+	}
+
+	secondBody := fmt.Sprintf(`{
+		"model": "gemini-3.5-flash",
+		"messages": [
+			{"role": "user", "content": "hi"},
+			{
+				"role": "assistant",
+				"content": null,
+				"tool_calls": [{
+					"id": %q,
+					"type": "function",
+					"function": {
+						"name": "search",
+						"arguments": "{\"query\":\"hello\"}"
+					}
+				}]
+			},
+			{"role": "tool", "tool_call_id": %q, "content": "{\"result\":\"world\"}"}
+		],
+		"tools": [{"type": "function", "function": {"name": "search", "parameters": {"type": "object"}}}]
+	}`, streamedCall.ID, streamedCall.ID)
+	secondReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(secondBody))
+	secondReq.Header.Set("Authorization", "Bearer bh_valid")
+	secondRR := httptest.NewRecorder()
+
+	srv.ServeHTTP(secondRR, secondReq)
+
+	if secondRR.Code != http.StatusOK {
+		t.Fatalf("second status = %d, body = %s", secondRR.Code, secondRR.Body.String())
+	}
+	if len(upstreamBodies) != 2 {
+		t.Fatalf("upstream request count = %d", len(upstreamBodies))
+	}
+	if got := upstreamBodies[1].Contents[1].Parts[0].ThoughtSignature; got != "sig-stream" {
+		t.Fatalf("thought signature = %q", got)
+	}
+}
+
 func TestOpenAIChatImageDataURLPartRoutesToGemini(t *testing.T) {
 	var upstreamBody geminiGenerateRequest
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1132,6 +1467,85 @@ func TestOpenAIChatImageDataURLPartRoutesToGemini(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatInputAudioPartRoutesToGemini(t *testing.T) {
+	var upstreamBody geminiGenerateRequest
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"candidates": [{
+				"content": {"role": "model", "parts": [{"text": "ok"}]},
+				"finishReason": "STOP"
+			}]
+		}`))
+	}))
+	defer upstream.Close()
+
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, keys := createGeminiRouteTestStore(t, upstream.URL, "gemini-3.5-flash", "gemini-3.5-flash", "AIza-secret")
+	defer store.Close()
+	srv := &Server{
+		store:    store,
+		upstream: upstreamURL,
+		client:   upstream.Client(),
+		providers: map[string]Provider{
+			providerGemini: NewGeminiProvider(upstreamURL, upstream.Client()),
+		},
+		authTokens: map[string]AuthToken{
+			"bh_valid": {Name: "alice-key", UserName: "alice", Valid: true},
+		},
+		keyState: &KeyState{
+			keys:         keys,
+			cooldown:     time.Minute,
+			rpdCooldown:  time.Hour,
+			exhausted:    make(map[string]time.Time),
+			cooldownHits: make(map[string]int),
+			rpdLike:      make(map[string]bool),
+			errors:       make(map[string]KeyError),
+		},
+		stats: Stats{
+			StartedAt: time.Now(),
+			Exhausted: make(map[string]string),
+			RPDLike:   make(map[string]bool),
+			KeyErrors: make(map[string]KeyError),
+		},
+	}
+	srv.cfg.Retry.MaxAttempts = 2
+
+	body := `{
+		"model": "gemini-3.5-flash",
+		"messages": [{
+			"role": "user",
+			"content": [
+				{"type": "text", "text": "transcribe"},
+				{"type": "input_audio", "input_audio": {"data": "aGVsbG8=", "format": "wav"}}
+			]
+		}]
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer bh_valid")
+	rr := httptest.NewRecorder()
+
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if len(upstreamBody.Contents) != 1 || len(upstreamBody.Contents[0].Parts) != 2 {
+		t.Fatalf("contents = %+v", upstreamBody.Contents)
+	}
+	audioPart := upstreamBody.Contents[0].Parts[1]
+	if audioPart.InlineData == nil || audioPart.InlineData.MimeType != "audio/wav" || audioPart.InlineData.Data != "aGVsbG8=" {
+		t.Fatalf("audio part = %+v", audioPart)
+	}
+}
+
 func TestOpenAIChatRejectsRemoteImageURLPart(t *testing.T) {
 	_, err := openAIToCanonicalChatRequest(openAIChatRequest{
 		Model: "gemini-3.5-flash",
@@ -1146,11 +1560,7 @@ func TestOpenAIChatRejectsRemoteImageURLPart(t *testing.T) {
 }
 
 func TestOpenAIChatRejectsUnconfiguredModelRoute(t *testing.T) {
-	store, err := OpenStore(DatabaseConfig{Path: filepath.Join(t.TempDir(), "buzzhive.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openTestStore(t)
 
 	srv := &Server{store: store}
 	body := `{"model":"missing-model","messages":[{"role":"user","content":"hi"}]}`
@@ -1186,11 +1596,7 @@ func TestOpenAIChatUsesModelRouteUpstreamModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := OpenStore(DatabaseConfig{Path: filepath.Join(t.TempDir(), "buzzhive.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openTestStore(t)
 	provider, err := store.CreateProvider(ProviderRecord{
 		Name:    providerGemini,
 		Type:    providerGemini,
@@ -1209,7 +1615,7 @@ func TestOpenAIChatUsesModelRouteUpstreamModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	providerID := provider.ID
-	now := time.Now().Format(time.RFC3339)
+	now := storeNow()
 	modelID, err := store.insertReturningID(
 		`INSERT INTO models (name, selection_policy, enabled, created_at, updated_at) VALUES (?, ?, 1, ?, ?)`,
 		"public-model", "round_robin", now, now,
@@ -1346,15 +1752,86 @@ func TestOpenAIChatStreamTranslatesGeminiSSE(t *testing.T) {
 			t.Fatalf("stream missing %q: %s", want, bodyText)
 		}
 	}
+	if strings.Contains(bodyText, `"usage"`) {
+		t.Fatalf("stream should not include usage without stream_options.include_usage: %s", bodyText)
+	}
+}
+
+func TestOpenAIChatStreamIncludesUsageWhenRequested(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2,"totalTokenCount":5,"cachedContentTokenCount":1,"thoughtsTokenCount":1}}` + "\n\n"))
+	}))
+	defer upstream.Close()
+
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, keys := createGeminiRouteTestStore(t, upstream.URL, "gemini-3.5-flash", "gemini-3.5-flash", "AIza-secret")
+	defer store.Close()
+	srv := &Server{
+		store:    store,
+		upstream: upstreamURL,
+		client:   upstream.Client(),
+		providers: map[string]Provider{
+			providerGemini: NewGeminiProvider(upstreamURL, upstream.Client()),
+		},
+		authTokens: map[string]AuthToken{
+			"bh_valid": {Name: "alice-key", UserName: "alice", Valid: true},
+		},
+		keyState: &KeyState{
+			keys:         keys,
+			cooldown:     time.Minute,
+			rpdCooldown:  time.Hour,
+			exhausted:    make(map[string]time.Time),
+			cooldownHits: make(map[string]int),
+			rpdLike:      make(map[string]bool),
+			errors:       make(map[string]KeyError),
+		},
+		stats: Stats{
+			StartedAt: time.Now(),
+			Exhausted: make(map[string]string),
+			RPDLike:   make(map[string]bool),
+			KeyErrors: make(map[string]KeyError),
+		},
+	}
+	srv.cfg.Retry.MaxAttempts = 2
+
+	body := `{"model":"gemini-3.5-flash","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer bh_valid")
+	rr := httptest.NewRecorder()
+
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	bodyText := rr.Body.String()
+	for _, want := range []string{
+		`"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}`,
+		`"content":"ok"`,
+		"data: [DONE]",
+	} {
+		if !strings.Contains(bodyText, want) {
+			t.Fatalf("stream missing %q: %s", want, bodyText)
+		}
+	}
 }
 
 func TestOpenAIChatPassesThroughOpenAICompatibleProvider(t *testing.T) {
 	var upstreamPath string
+	var upstreamRawQuery string
 	var upstreamAuth string
+	var upstreamXGoog string
 	var upstreamBody map[string]any
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamPath = r.URL.Path
+		upstreamRawQuery = r.URL.RawQuery
 		upstreamAuth = r.Header.Get("Authorization")
+		upstreamXGoog = r.Header.Get("x-goog-api-key")
 		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
 			t.Fatal(err)
 		}
@@ -1368,16 +1845,12 @@ func TestOpenAIChatPassesThroughOpenAICompatibleProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := OpenStore(DatabaseConfig{Path: filepath.Join(t.TempDir(), "buzzhive.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openTestStore(t)
 
-	now := time.Now().Format(time.RFC3339)
+	now := storeNow()
 	providerID, err := store.insertReturningID(
 		`INSERT INTO providers (name, type, preset_id, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		"openrouter", "openai-compatible", "openrouter", upstream.URL, now, now,
+		"openrouter", "openai-compatible", "openrouter", upstream.URL+"/v1", now, now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1445,8 +1918,9 @@ func TestOpenAIChatPassesThroughOpenAICompatibleProvider(t *testing.T) {
 		"messages":[{"role":"user","content":"hi"}],
 		"tools":[{"type":"function","function":{"name":"search","parameters":{"type":"object"}}}]
 	}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?key=client-query&trace=1", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer bh_valid")
+	req.Header.Set("x-goog-api-key", "should-not-forward")
 	rr := httptest.NewRecorder()
 
 	srv.ServeHTTP(rr, req)
@@ -1457,8 +1931,17 @@ func TestOpenAIChatPassesThroughOpenAICompatibleProvider(t *testing.T) {
 	if upstreamPath != "/v1/chat/completions" {
 		t.Fatalf("upstream path = %q", upstreamPath)
 	}
+	if strings.Contains(upstreamRawQuery, "key=") {
+		t.Fatalf("upstream query forwarded client key: %q", upstreamRawQuery)
+	}
+	if !strings.Contains(upstreamRawQuery, "trace=1") {
+		t.Fatalf("upstream query = %q", upstreamRawQuery)
+	}
 	if upstreamAuth != "Bearer sk-secret" {
 		t.Fatalf("upstream auth = %q", upstreamAuth)
+	}
+	if upstreamXGoog != "" {
+		t.Fatalf("upstream x-goog-api-key = %q", upstreamXGoog)
 	}
 	if upstreamBody["model"] != "gpt-upstream" {
 		t.Fatalf("upstream model = %v", upstreamBody["model"])
@@ -1486,7 +1969,8 @@ func TestOpenAICompatibleStreamPassThroughFlushesChunks(t *testing.T) {
 			flusher.Flush()
 		}
 		<-releaseSecond
-		fmt.Fprint(w, "data: second\n\n")
+		fmt.Fprint(w, `data: {"id":"chatcmpl-upstream","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":11,"completion_tokens":13,"total_tokens":24,"prompt_tokens_details":{"cached_tokens":5},"completion_tokens_details":{"reasoning_tokens":7}}}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
 		}
@@ -1497,13 +1981,9 @@ func TestOpenAICompatibleStreamPassThroughFlushesChunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := OpenStore(DatabaseConfig{Path: filepath.Join(t.TempDir(), "buzzhive.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openTestStore(t)
 
-	now := time.Now().Format(time.RFC3339)
+	now := storeNow()
 	providerID, err := store.insertReturningID(
 		`INSERT INTO providers (name, type, preset_id, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
 		"openrouter", "openai-compatible", "openrouter", upstream.URL, now, now,
@@ -1616,14 +2096,28 @@ func TestOpenAICompatibleStreamPassThroughFlushesChunks(t *testing.T) {
 	}
 
 	releaseSecondOnce.Do(func() { close(releaseSecond) })
-}
-
-func TestOpenAIModelsListsEnabledModels(t *testing.T) {
-	store, err := OpenStore(DatabaseConfig{Path: filepath.Join(t.TempDir(), "buzzhive.db")})
+	rest, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	if !strings.Contains(string(rest), `"usage":{"prompt_tokens":11`) {
+		t.Fatalf("stream rest missing usage: %s", string(rest))
+	}
+	summary, err := store.UsageSummary(UsageQuery{
+		Model: "public-gpt",
+		From:  time.Now().Add(-time.Hour),
+		To:    time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.PromptTokens != 11 || summary.CompletionTokens != 13 || summary.TotalTokens != 24 || summary.CachedTokens != 5 || summary.ReasoningTokens != 7 {
+		t.Fatalf("usage summary = %+v", summary)
+	}
+}
+
+func TestOpenAIModelsListsEnabledModels(t *testing.T) {
+	store := openTestStore(t)
 
 	if _, err := store.CreateModel(Model{Name: "enabled-model", Enabled: true}); err != nil {
 		t.Fatal(err)
@@ -1636,6 +2130,13 @@ func TestOpenAIModelsListsEnabledModels(t *testing.T) {
 		authTokens: map[string]AuthToken{
 			"bh_valid": {Name: "alice-key", UserName: "alice", Valid: true},
 		},
+	}
+
+	unauthorizedReq := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	unauthorizedRR := httptest.NewRecorder()
+	srv.ServeHTTP(unauthorizedRR, unauthorizedReq)
+	if unauthorizedRR.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d, body = %s", unauthorizedRR.Code, unauthorizedRR.Body.String())
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -1657,11 +2158,7 @@ func TestOpenAIModelsListsEnabledModels(t *testing.T) {
 }
 
 func TestNonOpenAIEndpointIsNotExposed(t *testing.T) {
-	store, err := OpenStore(DatabaseConfig{Path: filepath.Join(t.TempDir(), "buzzhive.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openTestStore(t)
 
 	srv := &Server{store: store}
 	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/missing-model:generateContent", strings.NewReader(`{"contents":[]}`))
@@ -1704,11 +2201,7 @@ func TestOpenAIChatSwitchesModelRoutesWhenRouteKeysCooling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := OpenStore(DatabaseConfig{Path: filepath.Join(t.TempDir(), "buzzhive.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openTestStore(t)
 	provider, err := store.CreateProvider(ProviderRecord{
 		Name:    providerGemini,
 		Type:    providerGemini,
@@ -1727,7 +2220,7 @@ func TestOpenAIChatSwitchesModelRoutesWhenRouteKeysCooling(t *testing.T) {
 		}
 	}
 	providerID := provider.ID
-	now := time.Now().Format(time.RFC3339)
+	now := storeNow()
 	modelID, err := store.insertReturningID(
 		`INSERT INTO models (name, selection_policy, enabled, created_at, updated_at) VALUES (?, ?, 1, ?, ?)`,
 		"public-model", "round_robin", now, now,

@@ -75,7 +75,7 @@ export function UsageChart(props: { series: UsagePoint[]; bucketMinutes?: number
     const end = Math.max(dragStart, dragEnd);
     if (start !== end) {
       preserveTooltipSuppression.current = true;
-      props.onRangeSelect?.(props.series[start].date, isoMinute(addMinutes(new Date(props.series[end].date), props.bucketMinutes ?? 1)));
+      props.onRangeSelect?.(isoMinute(new Date(props.series[start].date)), isoMinute(addMinutes(new Date(props.series[end].date), props.bucketMinutes ?? 1)));
     } else {
       setSuppressTooltip(false);
     }
@@ -116,29 +116,30 @@ export function UsageChart(props: { series: UsagePoint[]; bucketMinutes?: number
       )}
       <ChartContainer
         className="h-60 w-full"
-        config={{ requests: { label: tNow("dashboard.requests"), color: "var(--primary)" } }}
+        config={{
+          requests: { label: tNow("dashboard.requests"), color: "var(--primary)" },
+        }}
       >
         <AreaChart key={chartStateKey} data={props.series} margin={{ left: 8, right: 8, top: 12, bottom: 0 }}>
           <CartesianGrid vertical={false} />
-          <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={32} />
+          <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={32} />
           <YAxis tickLine={false} axisLine={false} width={28} allowDecimals={false} />
           <ChartTooltip
+            isAnimationActive={false}
+            animationDuration={0}
             active={hideTooltip ? false : undefined}
             cursor={hideTooltip ? false : undefined}
             wrapperStyle={{ transition: "none", visibility: hideTooltip ? "hidden" : undefined }}
-            content={<ChartTooltipContent />}
+            content={
+              <ChartTooltipContent
+                labelFormatter={(_, payload) => {
+                  const point = payload?.[0]?.payload as UsagePoint | undefined;
+                  return point?.tooltip ?? point?.label ?? "";
+                }}
+              />
+            }
           />
-          <Area
-            dataKey="requests"
-            type="monotone"
-            activeDot={hideTooltip ? false : undefined}
-            animationDuration={180}
-            animationEasing="ease-out"
-            fill="var(--color-requests)"
-            fillOpacity={0.18}
-            stroke="var(--color-requests)"
-            strokeWidth={2}
-          />
+          <Area dataKey="requests" type="monotone" fill="var(--color-requests)" fillOpacity={0.12} stroke="var(--color-requests)" strokeWidth={2} animationDuration={180} />
         </AreaChart>
       </ChartContainer>
     </div>

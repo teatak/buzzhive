@@ -16,6 +16,7 @@ type canonicalChatRequest struct {
 	TopP            *float64
 	MaxOutputTokens *int
 	StopSequences   []string
+	ResponseFormat  *canonicalResponseFormat
 	Tools           []canonicalTool
 	ToolChoice      *canonicalToolChoice
 }
@@ -48,6 +49,11 @@ type canonicalToolChoice struct {
 	AllowedFunctionNames []string
 }
 
+type canonicalResponseFormat struct {
+	MimeType string
+	Schema   json.RawMessage
+}
+
 type canonicalToolCall struct {
 	ID        string
 	Name      string
@@ -76,6 +82,7 @@ type canonicalStreamEvent struct {
 	Text         string
 	ToolCalls    []canonicalToolCall
 	FinishReason string
+	Usage        canonicalUsage
 }
 
 func openAIToCanonicalChatRequest(req openAIChatRequest) (canonicalChatRequest, error) {
@@ -101,6 +108,11 @@ func openAIToCanonicalChatRequest(req openAIChatRequest) (canonicalChatRequest, 
 		return canonicalChatRequest{}, err
 	}
 	out.ToolChoice = toolChoice
+	responseFormat, err := openAIResponseFormatToCanonical(req.ResponseFormat)
+	if err != nil {
+		return canonicalChatRequest{}, err
+	}
+	out.ResponseFormat = responseFormat
 	hasConversationMessage := false
 	toolCallNames := make(map[string]string)
 	for _, message := range req.Messages {
@@ -390,6 +402,37 @@ func openAIToolChoiceToCanonical(raw json.RawMessage, tools []canonicalTool) (*c
 	return &canonicalToolChoice{Mode: "ANY", AllowedFunctionNames: []string{name}}, nil
 }
 
+func openAIResponseFormatToCanonical(raw json.RawMessage) (*canonicalResponseFormat, error) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return nil, nil
+	}
+	var format struct {
+		Type       string `json:"type"`
+		JSONSchema struct {
+			Schema json.RawMessage `json:"schema"`
+		} `json:"json_schema"`
+	}
+	if err := json.Unmarshal(raw, &format); err != nil {
+		return nil, errors.New("response_format must be an object")
+	}
+	switch format.Type {
+	case "", "text":
+		return nil, nil
+	case "json_object":
+		return &canonicalResponseFormat{MimeType: "application/json"}, nil
+	case "json_schema":
+		if len(format.JSONSchema.Schema) == 0 || strings.TrimSpace(string(format.JSONSchema.Schema)) == "null" {
+			return nil, errors.New("response_format json_schema.schema is required")
+		}
+		return &canonicalResponseFormat{
+			MimeType: "application/json",
+			Schema:   format.JSONSchema.Schema,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported response_format type %q", format.Type)
+	}
+}
+
 func canonicalToolExists(tools []canonicalTool, name string) bool {
 	for _, tool := range tools {
 		if tool.Name == name {
@@ -446,7 +489,7 @@ func canonicalPartsToGeminiParts(parts []canonicalPart) ([]geminiPart, error) {
 		switch part.Type {
 		case "text":
 			out = append(out, geminiPart{Text: part.Text})
-		case "image":
+		case "image", "audio":
 			out = append(out, geminiPart{
 				InlineData: &geminiInlineData{
 					MimeType: part.MimeType,
@@ -477,12 +520,17 @@ func canonicalPartsToGeminiParts(parts []canonicalPart) ([]geminiPart, error) {
 
 func canonicalToGeminiGenerationConfig(req canonicalChatRequest) *geminiGenerationConfig {
 	cfg := &geminiGenerationConfig{
-		Temperature:     req.Temperature,
-		TopP:            req.TopP,
-		MaxOutputTokens: req.MaxOutputTokens,
-		StopSequences:   req.StopSequences,
+		Temperature:      req.Temperature,
+		TopP:             req.TopP,
+		MaxOutputTokens:  req.MaxOutputTokens,
+		StopSequences:    req.StopSequences,
+		ResponseMimeType: "",
 	}
-	if cfg.Temperature == nil && cfg.TopP == nil && cfg.MaxOutputTokens == nil && len(cfg.StopSequences) == 0 {
+	if req.ResponseFormat != nil {
+		cfg.ResponseMimeType = req.ResponseFormat.MimeType
+		cfg.ResponseSchema = req.ResponseFormat.Schema
+	}
+	if cfg.Temperature == nil && cfg.TopP == nil && cfg.MaxOutputTokens == nil && len(cfg.StopSequences) == 0 && cfg.ResponseMimeType == "" && len(cfg.ResponseSchema) == 0 {
 		return nil
 	}
 	return cfg
@@ -528,12 +576,16 @@ func canonicalToOpenAIChatResponse(resp canonicalChatResponse) openAIChatRespons
 			Message:      message,
 			FinishReason: &finishReason,
 		}},
-		Usage: openAIUsage{
+		Usage: &openAIUsage{
 			PromptTokens:     resp.Usage.PromptTokens,
 			CompletionTokens: resp.Usage.CompletionTokens,
 			TotalTokens:      resp.Usage.TotalTokens,
 		},
 	}
+}
+
+func (usage canonicalUsage) isZero() bool {
+	return usage.PromptTokens == 0 && usage.CompletionTokens == 0 && usage.TotalTokens == 0
 }
 
 func geminiResponseToolCalls(resp geminiGenerateResponse, requestID string) []canonicalToolCall {
@@ -604,10 +656,15 @@ func geminiToCanonicalStreamEvent(resp geminiGenerateResponse, requestID string)
 		Text:         geminiResponseText(resp),
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
+		Usage: canonicalUsage{
+			PromptTokens:     resp.UsageMetadata.PromptTokenCount,
+			CompletionTokens: resp.UsageMetadata.CandidatesTokenCount,
+			TotalTokens:      resp.UsageMetadata.TotalTokenCount,
+		},
 	}
 }
 
-func canonicalToOpenAIStreamChunk(event canonicalStreamEvent, id string, created int64, model string) openAIChatResponse {
+func canonicalToOpenAIStreamChunk(event canonicalStreamEvent, id string, created int64, model string, includeUsage bool) openAIChatResponse {
 	choice := openAIChoice{Index: 0, Delta: &openAIStreamDelta{}}
 	if event.Text != "" {
 		choice.Delta.Content = event.Text
@@ -618,11 +675,19 @@ func canonicalToOpenAIStreamChunk(event canonicalStreamEvent, id string, created
 	if event.FinishReason != "" {
 		choice.FinishReason = &event.FinishReason
 	}
-	return openAIChatResponse{
+	resp := openAIChatResponse{
 		ID:      id,
 		Object:  "chat.completion.chunk",
 		Created: created,
 		Model:   model,
 		Choices: []openAIChoice{choice},
 	}
+	if includeUsage && !event.Usage.isZero() {
+		resp.Usage = &openAIUsage{
+			PromptTokens:     event.Usage.PromptTokens,
+			CompletionTokens: event.Usage.CompletionTokens,
+			TotalTokens:      event.Usage.TotalTokens,
+		}
+	}
+	return resp
 }

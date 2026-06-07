@@ -5,17 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestProviderAPIKeysUseProviderTables(t *testing.T) {
-	store, err := OpenStore(DatabaseConfig{Path: filepath.Join(t.TempDir(), "buzzhive.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openTestStore(t)
 
 	provider, err := store.CreateProvider(ProviderRecord{
 		Name:    providerGemini,
@@ -72,13 +68,9 @@ func TestProviderAPIKeysUseProviderTables(t *testing.T) {
 }
 
 func TestDisableProviderKey(t *testing.T) {
-	store, err := OpenStore(DatabaseConfig{Path: filepath.Join(t.TempDir(), "buzzhive.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openTestStore(t)
 
-	now := "2026-01-01T00:00:00Z"
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	providerID, err := store.insertReturningID(
 		`INSERT INTO providers (name, type, preset_id, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
 		"openrouter", "openai-compatible", "openrouter", "https://openrouter.example.test/v1", now, now,
@@ -114,11 +106,7 @@ func TestDisableProviderKey(t *testing.T) {
 }
 
 func TestProviderManagementCRUD(t *testing.T) {
-	store, err := OpenStore(DatabaseConfig{Path: filepath.Join(t.TempDir(), "buzzhive.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openTestStore(t)
 
 	provider, err := store.CreateProvider(ProviderRecord{
 		Name:    "openrouter",

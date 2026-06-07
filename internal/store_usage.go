@@ -29,8 +29,14 @@ func (s *Store) InsertUsageBatch(records []UsageRecord) error {
 			upstream_model,
 			status,
 			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			cached_tokens,
+			reasoning_tokens,
+			raw_usage,
 			created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return err
@@ -52,7 +58,9 @@ func (s *Store) InsertUsageBatch(records []UsageRecord) error {
 	for _, record := range records {
 		createdAt := record.CreatedAt
 		if createdAt.IsZero() {
-			createdAt = time.Now()
+			createdAt = time.Now().UTC()
+		} else {
+			createdAt = createdAt.UTC()
 		}
 		if _, err := stmt.Exec(
 			record.UserID,
@@ -67,7 +75,13 @@ func (s *Store) InsertUsageBatch(records []UsageRecord) error {
 			record.UpstreamModel,
 			record.Status,
 			record.LatencyMS,
-			createdAt.Format(time.RFC3339Nano),
+			record.PromptTokens,
+			record.CompletionTokens,
+			record.TotalTokens,
+			record.CachedTokens,
+			record.ReasoningTokens,
+			record.RawUsage,
+			createdAt,
 		); err != nil {
 			_ = tx.Rollback()
 			return err
@@ -95,17 +109,27 @@ func usageStatsUpsertSQL(table string) string {
 			model,
 			requests,
 			errors,
-			latency_ms_sum
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			latency_ms_sum,
+			prompt_tokens_sum,
+			completion_tokens_sum,
+			total_tokens_sum,
+			cached_tokens_sum,
+			reasoning_tokens_sum
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(bucket_start, user_id, user_api_key_id, model) DO UPDATE SET
 			user_name = excluded.user_name,
 			user_api_key_name = excluded.user_api_key_name,
 			requests = ` + table + `.requests + excluded.requests,
 			errors = ` + table + `.errors + excluded.errors,
-			latency_ms_sum = ` + table + `.latency_ms_sum + excluded.latency_ms_sum`
+			latency_ms_sum = ` + table + `.latency_ms_sum + excluded.latency_ms_sum,
+			prompt_tokens_sum = ` + table + `.prompt_tokens_sum + excluded.prompt_tokens_sum,
+			completion_tokens_sum = ` + table + `.completion_tokens_sum + excluded.completion_tokens_sum,
+			total_tokens_sum = ` + table + `.total_tokens_sum + excluded.total_tokens_sum,
+			cached_tokens_sum = ` + table + `.cached_tokens_sum + excluded.cached_tokens_sum,
+			reasoning_tokens_sum = ` + table + `.reasoning_tokens_sum + excluded.reasoning_tokens_sum`
 }
 
-func insertUsageStats(stmt *sql.Stmt, record UsageRecord, bucketStart string) error {
+func insertUsageStats(stmt *sql.Stmt, record UsageRecord, bucketStart time.Time) error {
 	errors := 0
 	if record.Status >= 400 {
 		errors = 1
@@ -120,122 +144,49 @@ func insertUsageStats(stmt *sql.Stmt, record UsageRecord, bucketStart string) er
 		1,
 		errors,
 		record.LatencyMS,
+		record.PromptTokens,
+		record.CompletionTokens,
+		record.TotalTokens,
+		record.CachedTokens,
+		record.ReasoningTokens,
 	)
 	return err
-}
-
-func (s *Store) backfillUsageStatsIfEmpty() error {
-	var hourlyCount, dailyCount int64
-	if err := s.queryRow(`SELECT COUNT(1) FROM usage_stats_hourly`).Scan(&hourlyCount); err != nil {
-		return err
-	}
-	if err := s.queryRow(`SELECT COUNT(1) FROM usage_stats_daily`).Scan(&dailyCount); err != nil {
-		return err
-	}
-	if hourlyCount != 0 || dailyCount != 0 {
-		return nil
-	}
-	rows, err := s.query(`
-		SELECT
-			user_id,
-			user_name,
-			user_api_key_id,
-			user_api_key_name,
-			model,
-			status,
-			latency_ms,
-			created_at
-		FROM usage_logs
-		ORDER BY created_at`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	type usageBackfillRecord struct {
-		record  UsageRecord
-		created time.Time
-	}
-	var records []usageBackfillRecord
-	for rows.Next() {
-		var record UsageRecord
-		var createdAt string
-		if err := rows.Scan(
-			&record.UserID,
-			&record.UserName,
-			&record.UserAPIKeyID,
-			&record.UserAPIKeyName,
-			&record.Model,
-			&record.Status,
-			&record.LatencyMS,
-			&createdAt,
-		); err != nil {
-			return err
-		}
-		created, err := parseStoredUsageTime(createdAt)
-		if err != nil {
-			continue
-		}
-		records = append(records, usageBackfillRecord{record: record, created: created})
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if len(records) == 0 {
-		return nil
-	}
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	hourlyStmt, err := s.prepareTx(tx, usageStatsUpsertSQL("usage_stats_hourly"))
-	if err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	defer hourlyStmt.Close()
-	dailyStmt, err := s.prepareTx(tx, usageStatsUpsertSQL("usage_stats_daily"))
-	if err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	defer dailyStmt.Close()
-
-	for _, item := range records {
-		if err := insertUsageStats(hourlyStmt, item.record, usageHourBucket(item.created)); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-		if err := insertUsageStats(dailyStmt, item.record, usageDayBucket(item.created)); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-	}
-	return tx.Commit()
 }
 
 func (s *Store) UsageSummary(query UsageQuery) (UsageSummary, error) {
 	if table, bucketMinutes, ok := usageStatsSource(query); ok {
 		return s.usageSummaryFromStats(query, table, bucketMinutes)
 	}
+	loc := usageQueryLocation(query)
 	where, args := usageWhere(query)
 	var summary UsageSummary
 	var errors sql.NullInt64
 	var avg sql.NullFloat64
+	var promptTokens, completionTokens, totalTokens, cachedTokens, reasoningTokens sql.NullInt64
 	if err := s.queryRow(`
 		SELECT
 			COUNT(1),
 			COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0),
-			COALESCE(AVG(latency_ms), 0)
+			COALESCE(AVG(latency_ms), 0),
+			COALESCE(SUM(prompt_tokens), 0),
+			COALESCE(SUM(completion_tokens), 0),
+			COALESCE(SUM(total_tokens), 0),
+			COALESCE(SUM(cached_tokens), 0),
+			COALESCE(SUM(reasoning_tokens), 0)
 		FROM usage_logs
 		WHERE `+where,
 		args...,
-	).Scan(&summary.Requests, &errors, &avg); err != nil {
+	).Scan(&summary.Requests, &errors, &avg, &promptTokens, &completionTokens, &totalTokens, &cachedTokens, &reasoningTokens); err != nil {
 		return UsageSummary{}, err
 	}
 	summary.Errors = errors.Int64
 	summary.AvgLatencyMS = avg.Float64
+	summary.PromptTokens = promptTokens.Int64
+	summary.CompletionTokens = completionTokens.Int64
+	summary.TotalTokens = totalTokens.Int64
+	summary.CachedTokens = cachedTokens.Int64
+	summary.ReasoningTokens = reasoningTokens.Int64
+	summary.TimeZone = loc.String()
 
 	byKey, err := s.usageByKey(where, args)
 	if err != nil {
@@ -244,7 +195,7 @@ func (s *Store) UsageSummary(query UsageQuery) (UsageSummary, error) {
 	summary.ByKey = byKey
 
 	summary.BucketMinutes = usageBucketMinutes(query.From, query.To)
-	series, err := s.usageSeries(where, args, summary.BucketMinutes)
+	series, err := s.usageSeries(where, args, summary.BucketMinutes, loc)
 	if err != nil {
 		return UsageSummary{}, err
 	}
@@ -253,33 +204,46 @@ func (s *Store) UsageSummary(query UsageQuery) (UsageSummary, error) {
 }
 
 func (s *Store) usageSummaryFromStats(query UsageQuery, table string, bucketMinutes int) (UsageSummary, error) {
+	loc := usageQueryLocation(query)
 	where, args := usageStatsWhere(query, bucketMinutes)
 	var summary UsageSummary
 	var requests sql.NullInt64
 	var errors sql.NullInt64
 	var latencySum sql.NullInt64
+	var promptTokens, completionTokens, totalTokens, cachedTokens, reasoningTokens sql.NullInt64
 	if err := s.queryRow(`
 		SELECT
 			COALESCE(SUM(requests), 0),
 			COALESCE(SUM(errors), 0),
-			COALESCE(SUM(latency_ms_sum), 0)
+			COALESCE(SUM(latency_ms_sum), 0),
+			COALESCE(SUM(prompt_tokens_sum), 0),
+			COALESCE(SUM(completion_tokens_sum), 0),
+			COALESCE(SUM(total_tokens_sum), 0),
+			COALESCE(SUM(cached_tokens_sum), 0),
+			COALESCE(SUM(reasoning_tokens_sum), 0)
 		FROM `+table+`
 		WHERE `+where,
 		args...,
-	).Scan(&requests, &errors, &latencySum); err != nil {
+	).Scan(&requests, &errors, &latencySum, &promptTokens, &completionTokens, &totalTokens, &cachedTokens, &reasoningTokens); err != nil {
 		return UsageSummary{}, err
 	}
 	summary.Requests = requests.Int64
 	summary.Errors = errors.Int64
+	summary.PromptTokens = promptTokens.Int64
+	summary.CompletionTokens = completionTokens.Int64
+	summary.TotalTokens = totalTokens.Int64
+	summary.CachedTokens = cachedTokens.Int64
+	summary.ReasoningTokens = reasoningTokens.Int64
 	if summary.Requests > 0 {
 		summary.AvgLatencyMS = float64(latencySum.Int64) / float64(summary.Requests)
 	}
+	summary.TimeZone = loc.String()
 	byKey, err := s.usageByKeyFromStats(table, where, args)
 	if err != nil {
 		return UsageSummary{}, err
 	}
 	summary.ByKey = byKey
-	series, err := s.usageSeriesFromStats(table, where, args)
+	series, err := s.usageSeriesFromStats(table, where, args, bucketMinutes, loc)
 	if err != nil {
 		return UsageSummary{}, err
 	}
@@ -348,13 +312,18 @@ func (s *Store) usageByKeyFromStats(table, where string, args []any) (map[string
 	return out, rows.Err()
 }
 
-func (s *Store) usageSeriesFromStats(table, where string, args []any) ([]UsagePoint, error) {
+func (s *Store) usageSeriesFromStats(table, where string, args []any, bucketMinutes int, loc *time.Location) ([]UsagePoint, error) {
 	rows, err := s.query(`
 		SELECT
 			bucket_start,
 			COALESCE(SUM(requests), 0),
 			COALESCE(SUM(errors), 0),
-			COALESCE(SUM(latency_ms_sum), 0)
+			COALESCE(SUM(latency_ms_sum), 0),
+			COALESCE(SUM(prompt_tokens_sum), 0),
+			COALESCE(SUM(completion_tokens_sum), 0),
+			COALESCE(SUM(total_tokens_sum), 0),
+			COALESCE(SUM(cached_tokens_sum), 0),
+			COALESCE(SUM(reasoning_tokens_sum), 0)
 		FROM `+table+`
 		WHERE `+where+`
 		GROUP BY bucket_start
@@ -366,27 +335,47 @@ func (s *Store) usageSeriesFromStats(table, where string, args []any) ([]UsagePo
 	}
 	defer rows.Close()
 
-	var out []UsagePoint
+	buckets := make(map[string]usageBucketAgg)
 	for rows.Next() {
-		var point UsagePoint
+		var bucketStart time.Time
 		var latencySum int64
-		if err := rows.Scan(&point.Date, &point.Requests, &point.Errors, &latencySum); err != nil {
+		var agg usageBucketAgg
+		if err := rows.Scan(
+			&bucketStart,
+			&agg.requests,
+			&agg.errors,
+			&latencySum,
+			&agg.promptTokens,
+			&agg.completionTokens,
+			&agg.totalTokens,
+			&agg.cachedTokens,
+			&agg.reasoningTokens,
+		); err != nil {
 			return nil, err
 		}
-		if point.Requests > 0 {
-			point.AvgLatencyMS = float64(latencySum) / float64(point.Requests)
-		}
-		out = append(out, point)
+		agg.latencySum = latencySum
+		key := formatUsageBucket(floorUsageBucketInLocation(bucketStart, bucketMinutes, loc))
+		existing := buckets[key]
+		addUsageAgg(&existing, agg)
+		buckets[key] = existing
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return usagePointsFromBuckets(buckets, bucketMinutes, loc)
 }
 
-func (s *Store) usageSeries(where string, args []any, bucketMinutes int) ([]UsagePoint, error) {
+func (s *Store) usageSeries(where string, args []any, bucketMinutes int, loc *time.Location) ([]UsagePoint, error) {
 	rows, err := s.query(`
 		SELECT
 			created_at,
 			status,
-			latency_ms
+			latency_ms,
+			prompt_tokens,
+			completion_tokens,
+			total_tokens,
+			cached_tokens,
+			reasoning_tokens
 		FROM usage_logs
 		WHERE `+where+`
 		ORDER BY created_at`,
@@ -397,55 +386,34 @@ func (s *Store) usageSeries(where string, args []any, bucketMinutes int) ([]Usag
 	}
 	defer rows.Close()
 
-	type bucketAgg struct {
-		requests   int64
-		errors     int64
-		latencySum int64
-	}
-	buckets := make(map[string]bucketAgg)
+	buckets := make(map[string]usageBucketAgg)
 	for rows.Next() {
-		var createdAt string
+		var createdAt time.Time
 		var status int
 		var latency int64
-		if err := rows.Scan(&createdAt, &status, &latency); err != nil {
+		var promptTokens, completionTokens, totalTokens, cachedTokens, reasoningTokens int64
+		if err := rows.Scan(&createdAt, &status, &latency, &promptTokens, &completionTokens, &totalTokens, &cachedTokens, &reasoningTokens); err != nil {
 			return nil, err
 		}
-		created, err := parseStoredUsageTime(createdAt)
-		if err != nil {
-			continue
-		}
-		key := formatUsageBucket(floorUsageBucket(created, bucketMinutes))
+		key := formatUsageBucket(floorUsageBucketInLocation(createdAt, bucketMinutes, loc))
 		agg := buckets[key]
 		agg.requests++
 		if status >= 400 {
 			agg.errors++
 		}
 		agg.latencySum += latency
+		agg.promptTokens += promptTokens
+		agg.completionTokens += completionTokens
+		agg.totalTokens += totalTokens
+		agg.cachedTokens += cachedTokens
+		agg.reasoningTokens += reasoningTokens
 		buckets[key] = agg
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	keys := make([]string, 0, len(buckets))
-	for key := range buckets {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	out := make([]UsagePoint, 0, len(keys))
-	for _, key := range keys {
-		agg := buckets[key]
-		point := UsagePoint{
-			Date:     key,
-			Requests: agg.requests,
-			Errors:   agg.errors,
-		}
-		if agg.requests > 0 {
-			point.AvgLatencyMS = float64(agg.latencySum) / float64(agg.requests)
-		}
-		out = append(out, point)
-	}
-	return out, nil
+	return usagePointsFromBuckets(buckets, bucketMinutes, loc)
 }
 
 func usageBucketMinutes(from, to time.Time) int {
@@ -488,40 +456,151 @@ func usageStatsWhere(query UsageQuery, bucketMinutes int) (string, []any) {
 	}
 	if !query.From.IsZero() {
 		clauses = append(clauses, "bucket_start >= ?")
-		args = append(args, formatUsageBucket(floorUsageBucket(query.From, bucketMinutes)))
+		args = append(args, floorUsageBucketInLocation(query.From, 60, time.UTC))
 	}
 	if !query.To.IsZero() {
 		clauses = append(clauses, "bucket_start < ?")
-		args = append(args, formatUsageBucket(query.To))
+		args = append(args, ceilUsageBucketInLocation(query.To, 60, time.UTC))
 	}
 	return strings.Join(clauses, " AND "), args
 }
 
-func floorUsageBucket(value time.Time, bucketMinutes int) time.Time {
-	if bucketMinutes <= 1 {
-		return value.Truncate(time.Minute)
+type usageBucketAgg struct {
+	requests         int64
+	errors           int64
+	latencySum       int64
+	promptTokens     int64
+	completionTokens int64
+	totalTokens      int64
+	cachedTokens     int64
+	reasoningTokens  int64
+}
+
+func usageQueryLocation(query UsageQuery) *time.Location {
+	if query.Location != nil {
+		return query.Location
 	}
-	bucket := time.Duration(bucketMinutes) * time.Minute
-	return value.Truncate(bucket)
+	return time.UTC
+}
+
+func addUsageAgg(dst *usageBucketAgg, src usageBucketAgg) {
+	dst.requests += src.requests
+	dst.errors += src.errors
+	dst.latencySum += src.latencySum
+	dst.promptTokens += src.promptTokens
+	dst.completionTokens += src.completionTokens
+	dst.totalTokens += src.totalTokens
+	dst.cachedTokens += src.cachedTokens
+	dst.reasoningTokens += src.reasoningTokens
+}
+
+func floorUsageBucketInLocation(value time.Time, bucketMinutes int, loc *time.Location) time.Time {
+	if loc == nil {
+		loc = time.UTC
+	}
+	local := value.In(loc)
+	if bucketMinutes >= 1440 {
+		return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc).UTC()
+	}
+	step := bucketMinutes
+	if step < 1 {
+		step = 1
+	}
+	local = local.Truncate(time.Minute)
+	local = local.Add(-time.Duration(local.Minute()%step) * time.Minute)
+	return local.UTC()
+}
+
+func ceilUsageBucketInLocation(value time.Time, bucketMinutes int, loc *time.Location) time.Time {
+	floor := floorUsageBucketInLocation(value, bucketMinutes, loc)
+	if value.UTC().Equal(floor) {
+		return floor
+	}
+	step := bucketMinutes
+	if step < 1 {
+		step = 1
+	}
+	return floor.Add(time.Duration(step) * time.Minute)
+}
+
+func usagePointsFromBuckets(buckets map[string]usageBucketAgg, bucketMinutes int, loc *time.Location) ([]UsagePoint, error) {
+	keys := make([]string, 0, len(buckets))
+	for key := range buckets {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	out := make([]UsagePoint, 0, len(keys))
+	for _, key := range keys {
+		bucket, err := parseStoredUsageTime(key)
+		if err != nil {
+			continue
+		}
+		out = append(out, usagePointFromBucket(bucket, bucketMinutes, loc, buckets[key]))
+	}
+	return out, nil
+}
+
+func usagePointFromBucket(bucket time.Time, bucketMinutes int, loc *time.Location, agg usageBucketAgg) UsagePoint {
+	point := UsagePoint{
+		Date:             formatUsageBucket(bucket),
+		Label:            formatUsageLabel(bucket, bucketMinutes, loc),
+		Tooltip:          formatUsageTooltip(bucket, bucketMinutes, loc),
+		Requests:         agg.requests,
+		Errors:           agg.errors,
+		PromptTokens:     agg.promptTokens,
+		CompletionTokens: agg.completionTokens,
+		TotalTokens:      agg.totalTokens,
+		CachedTokens:     agg.cachedTokens,
+		ReasoningTokens:  agg.reasoningTokens,
+	}
+	if agg.requests > 0 {
+		point.AvgLatencyMS = float64(agg.latencySum) / float64(agg.requests)
+	}
+	return point
+}
+
+func formatUsageLabel(bucket time.Time, bucketMinutes int, loc *time.Location) string {
+	if loc == nil {
+		loc = time.UTC
+	}
+	local := bucket.In(loc)
+	if bucketMinutes >= 1440 {
+		return local.Format("2006/01/02")
+	}
+	return local.Format("2006/01/02 15:04")
+}
+
+func formatUsageTooltip(bucket time.Time, bucketMinutes int, loc *time.Location) string {
+	return formatUsageLabel(bucket, bucketMinutes, loc)
 }
 
 func formatUsageBucket(value time.Time) string {
-	return value.Format("2006-01-02T15:04")
+	return value.UTC().Format(time.RFC3339)
 }
 
-func usageHourBucket(value time.Time) string {
-	return formatUsageBucket(floorUsageBucket(value, 60))
+func formatStoredUsageTime(value time.Time) string {
+	return value.UTC().Format(time.RFC3339Nano)
 }
 
-func usageDayBucket(value time.Time) string {
-	return formatUsageBucket(time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, value.Location()))
+func usageHourBucket(value time.Time) time.Time {
+	return floorUsageBucketInLocation(value, 60, time.UTC)
+}
+
+func usageDayBucket(value time.Time) time.Time {
+	utc := value.UTC()
+	return time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 func parseStoredUsageTime(value string) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
-		return t, nil
+		return t.UTC(), nil
 	}
-	return time.Parse(time.RFC3339, value)
+	t, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return t.UTC(), nil
 }
 
 func usageWhere(query UsageQuery) (string, []any) {
@@ -537,11 +616,11 @@ func usageWhere(query UsageQuery) (string, []any) {
 	}
 	if !query.From.IsZero() {
 		clauses = append(clauses, "created_at >= ?")
-		args = append(args, query.From.Format(time.RFC3339Nano))
+		args = append(args, query.From.UTC())
 	}
 	if !query.To.IsZero() {
 		clauses = append(clauses, "created_at < ?")
-		args = append(args, query.To.Format(time.RFC3339Nano))
+		args = append(args, query.To.UTC())
 	}
 	return strings.Join(clauses, " AND "), args
 }

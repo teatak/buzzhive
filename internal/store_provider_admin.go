@@ -21,10 +21,13 @@ func (s *Store) Providers() ([]ProviderRecord, error) {
 	for rows.Next() {
 		var item ProviderRecord
 		var enabled int
-		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.PresetID, &item.BaseURL, &enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.PresetID, &item.BaseURL, &enabled, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		item.Enabled = enabled != 0
+		item.CreatedAt = formatStoreTime(createdAt)
+		item.UpdatedAt = formatStoreTime(updatedAt)
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -33,13 +36,16 @@ func (s *Store) Providers() ([]ProviderRecord, error) {
 func (s *Store) Provider(id int64) (ProviderRecord, error) {
 	var item ProviderRecord
 	var enabled int
+	var createdAt, updatedAt time.Time
 	err := s.queryRow(`
 		SELECT id, name, type, preset_id, base_url, enabled, created_at, updated_at
 		FROM providers
 		WHERE id = ?`,
 		id,
-	).Scan(&item.ID, &item.Name, &item.Type, &item.PresetID, &item.BaseURL, &enabled, &item.CreatedAt, &item.UpdatedAt)
+	).Scan(&item.ID, &item.Name, &item.Type, &item.PresetID, &item.BaseURL, &enabled, &createdAt, &updatedAt)
 	item.Enabled = enabled != 0
+	item.CreatedAt = formatStoreTime(createdAt)
+	item.UpdatedAt = formatStoreTime(updatedAt)
 	return item, err
 }
 
@@ -50,7 +56,7 @@ func (s *Store) CreateProvider(provider ProviderRecord) (ProviderRecord, error) 
 	if provider.PresetID == "" {
 		provider.PresetID = provider.Type
 	}
-	now := time.Now().Format(time.RFC3339)
+	now := storeNow()
 	id, err := s.insertReturningID(
 		`INSERT INTO providers (name, type, preset_id, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		provider.Name, provider.Type, provider.PresetID, provider.BaseURL, boolInt(provider.Enabled), now, now,
@@ -70,7 +76,7 @@ func (s *Store) UpdateProvider(provider ProviderRecord) (ProviderRecord, error) 
 	}
 	_, err := s.exec(
 		`UPDATE providers SET name = ?, type = ?, preset_id = ?, base_url = ?, enabled = ?, updated_at = ? WHERE id = ?`,
-		provider.Name, provider.Type, provider.PresetID, provider.BaseURL, boolInt(provider.Enabled), time.Now().Format(time.RFC3339), provider.ID,
+		provider.Name, provider.Type, provider.PresetID, provider.BaseURL, boolInt(provider.Enabled), storeNow(), provider.ID,
 	)
 	if err != nil {
 		return ProviderRecord{}, err
@@ -148,6 +154,7 @@ func (s *Store) providerKeysByFilter(id, providerID int64, reveal bool) ([]Provi
 	for rows.Next() {
 		var item ProviderKey
 		var enabled int
+		var disabledAt sql.NullTime
 		if err := rows.Scan(
 			&item.ID,
 			&item.ProviderID,
@@ -163,11 +170,12 @@ func (s *Store) providerKeysByFilter(id, providerID int64, reveal bool) ([]Provi
 			&item.DisabledErrorCode,
 			&item.DisabledMessage,
 			&item.DisabledBody,
-			&item.DisabledAt,
+			&disabledAt,
 		); err != nil {
 			return nil, err
 		}
 		item.Enabled = enabled != 0
+		item.DisabledAt = formatNullStoreTime(disabledAt)
 		if !reveal {
 			item.Secret = maskSecret(item.Secret)
 		}
@@ -193,7 +201,7 @@ func (s *Store) CreateProviderKey(key ProviderKey) (ProviderKey, error) {
 	if key.Weight == 0 {
 		key.Weight = 1
 	}
-	now := time.Now().Format(time.RFC3339)
+	now := storeNow()
 	id, err := s.insertReturningID(
 		`INSERT INTO provider_keys (provider_id, name, secret, secret_hint, enabled, priority, weight, labels, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		key.ProviderID, key.Name, key.Secret, secretHint(key.Secret), boolInt(key.Enabled), key.Priority, key.Weight, key.Labels, now, now,
@@ -214,16 +222,16 @@ func (s *Store) UpdateProviderKey(key ProviderKey) (ProviderKey, error) {
 	if key.Weight == 0 {
 		key.Weight = 1
 	}
-	now := time.Now().Format(time.RFC3339)
+	now := storeNow()
 	var err error
 	if key.Secret == "" {
 		_, err = s.exec(
-			`UPDATE provider_keys SET provider_id = ?, name = ?, enabled = ?, priority = ?, weight = ?, labels = ?, disabled_status = CASE WHEN ? = 1 THEN 0 ELSE disabled_status END, disabled_error_code = CASE WHEN ? = 1 THEN '' ELSE disabled_error_code END, disabled_error_message = CASE WHEN ? = 1 THEN '' ELSE disabled_error_message END, disabled_error_body = CASE WHEN ? = 1 THEN '' ELSE disabled_error_body END, disabled_at = CASE WHEN ? = 1 THEN '' ELSE disabled_at END, updated_at = ? WHERE id = ?`,
+			`UPDATE provider_keys SET provider_id = ?, name = ?, enabled = ?, priority = ?, weight = ?, labels = ?, disabled_status = CASE WHEN ? = 1 THEN 0 ELSE disabled_status END, disabled_error_code = CASE WHEN ? = 1 THEN '' ELSE disabled_error_code END, disabled_error_message = CASE WHEN ? = 1 THEN '' ELSE disabled_error_message END, disabled_error_body = CASE WHEN ? = 1 THEN '' ELSE disabled_error_body END, disabled_at = CASE WHEN ? = 1 THEN NULL ELSE disabled_at END, updated_at = ? WHERE id = ?`,
 			key.ProviderID, key.Name, boolInt(key.Enabled), key.Priority, key.Weight, key.Labels, boolInt(key.Enabled), boolInt(key.Enabled), boolInt(key.Enabled), boolInt(key.Enabled), boolInt(key.Enabled), now, key.ID,
 		)
 	} else {
 		_, err = s.exec(
-			`UPDATE provider_keys SET provider_id = ?, name = ?, secret = ?, secret_hint = ?, enabled = ?, priority = ?, weight = ?, labels = ?, disabled_status = CASE WHEN ? = 1 THEN 0 ELSE disabled_status END, disabled_error_code = CASE WHEN ? = 1 THEN '' ELSE disabled_error_code END, disabled_error_message = CASE WHEN ? = 1 THEN '' ELSE disabled_error_message END, disabled_error_body = CASE WHEN ? = 1 THEN '' ELSE disabled_error_body END, disabled_at = CASE WHEN ? = 1 THEN '' ELSE disabled_at END, updated_at = ? WHERE id = ?`,
+			`UPDATE provider_keys SET provider_id = ?, name = ?, secret = ?, secret_hint = ?, enabled = ?, priority = ?, weight = ?, labels = ?, disabled_status = CASE WHEN ? = 1 THEN 0 ELSE disabled_status END, disabled_error_code = CASE WHEN ? = 1 THEN '' ELSE disabled_error_code END, disabled_error_message = CASE WHEN ? = 1 THEN '' ELSE disabled_error_message END, disabled_error_body = CASE WHEN ? = 1 THEN '' ELSE disabled_error_body END, disabled_at = CASE WHEN ? = 1 THEN NULL ELSE disabled_at END, updated_at = ? WHERE id = ?`,
 			key.ProviderID, key.Name, key.Secret, secretHint(key.Secret), boolInt(key.Enabled), key.Priority, key.Weight, key.Labels, boolInt(key.Enabled), boolInt(key.Enabled), boolInt(key.Enabled), boolInt(key.Enabled), boolInt(key.Enabled), now, key.ID,
 		)
 	}
@@ -261,10 +269,13 @@ func (s *Store) Models() ([]Model, error) {
 	for rows.Next() {
 		var item Model
 		var enabled int
-		if err := rows.Scan(&item.ID, &item.Name, &item.DisplayName, &item.Description, &item.ContextWindow, &item.MaxInputTokens, &item.MaxOutputTokens, &item.Capabilities, &item.SelectionPolicy, &enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&item.ID, &item.Name, &item.DisplayName, &item.Description, &item.ContextWindow, &item.MaxInputTokens, &item.MaxOutputTokens, &item.Capabilities, &item.SelectionPolicy, &enabled, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		item.Enabled = enabled != 0
+		item.CreatedAt = formatStoreTime(createdAt)
+		item.UpdatedAt = formatStoreTime(updatedAt)
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -273,13 +284,16 @@ func (s *Store) Models() ([]Model, error) {
 func (s *Store) Model(id int64) (Model, error) {
 	var item Model
 	var enabled int
+	var createdAt, updatedAt time.Time
 	err := s.queryRow(`
 		SELECT id, name, display_name, description, context_window, max_input_tokens, max_output_tokens, capabilities, selection_policy, enabled, created_at, updated_at
 		FROM models
 		WHERE id = ?`,
 		id,
-	).Scan(&item.ID, &item.Name, &item.DisplayName, &item.Description, &item.ContextWindow, &item.MaxInputTokens, &item.MaxOutputTokens, &item.Capabilities, &item.SelectionPolicy, &enabled, &item.CreatedAt, &item.UpdatedAt)
+	).Scan(&item.ID, &item.Name, &item.DisplayName, &item.Description, &item.ContextWindow, &item.MaxInputTokens, &item.MaxOutputTokens, &item.Capabilities, &item.SelectionPolicy, &enabled, &createdAt, &updatedAt)
 	item.Enabled = enabled != 0
+	item.CreatedAt = formatStoreTime(createdAt)
+	item.UpdatedAt = formatStoreTime(updatedAt)
 	return item, err
 }
 
@@ -296,7 +310,7 @@ func (s *Store) CreateModel(model Model) (Model, error) {
 	if model.SelectionPolicy == "" {
 		model.SelectionPolicy = "round_robin"
 	}
-	now := time.Now().Format(time.RFC3339)
+	now := storeNow()
 	id, err := s.insertReturningID(
 		`INSERT INTO models (name, display_name, description, context_window, max_input_tokens, max_output_tokens, capabilities, selection_policy, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		model.Name, model.DisplayName, model.Description, model.ContextWindow, model.MaxInputTokens, model.MaxOutputTokens, model.Capabilities, model.SelectionPolicy, boolInt(model.Enabled), now, now,
@@ -319,7 +333,7 @@ func (s *Store) UpdateModel(model Model) (Model, error) {
 	}
 	_, err := s.exec(
 		`UPDATE models SET name = ?, display_name = ?, description = ?, context_window = ?, max_input_tokens = ?, max_output_tokens = ?, capabilities = ?, selection_policy = ?, enabled = ?, updated_at = ? WHERE id = ?`,
-		model.Name, model.DisplayName, model.Description, model.ContextWindow, model.MaxInputTokens, model.MaxOutputTokens, model.Capabilities, model.SelectionPolicy, boolInt(model.Enabled), time.Now().Format(time.RFC3339), model.ID,
+		model.Name, model.DisplayName, model.Description, model.ContextWindow, model.MaxInputTokens, model.MaxOutputTokens, model.Capabilities, model.SelectionPolicy, boolInt(model.Enabled), storeNow(), model.ID,
 	)
 	if err != nil {
 		return Model{}, err
@@ -419,7 +433,7 @@ func (s *Store) CreateModelRoute(route ModelRoute) (ModelRoute, error) {
 	if route.Weight == 0 {
 		route.Weight = 1
 	}
-	now := time.Now().Format(time.RFC3339)
+	now := storeNow()
 	id, err := s.insertReturningID(
 		`INSERT INTO model_routes (model_id, provider_id, upstream_model, quota_family, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		route.ModelID, route.ProviderID, route.UpstreamModel, route.QuotaFamily, boolInt(route.Enabled), route.Priority, route.Weight, now, now,
@@ -445,7 +459,7 @@ func (s *Store) UpdateModelRoute(route ModelRoute) (ModelRoute, error) {
 	}
 	_, err := s.exec(
 		`UPDATE model_routes SET model_id = ?, provider_id = ?, upstream_model = ?, quota_family = ?, enabled = ?, priority = ?, weight = ?, updated_at = ? WHERE id = ?`,
-		route.ModelID, route.ProviderID, route.UpstreamModel, route.QuotaFamily, boolInt(route.Enabled), route.Priority, route.Weight, time.Now().Format(time.RFC3339), route.ID,
+		route.ModelID, route.ProviderID, route.UpstreamModel, route.QuotaFamily, boolInt(route.Enabled), route.Priority, route.Weight, storeNow(), route.ID,
 	)
 	if err != nil {
 		return ModelRoute{}, err

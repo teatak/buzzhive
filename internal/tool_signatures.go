@@ -1,5 +1,10 @@
 package buzzhive
 
+import (
+	"encoding/json"
+	"strings"
+)
+
 func (s *Server) rememberToolSignatures(toolCalls []canonicalToolCall) {
 	if len(toolCalls) == 0 {
 		return
@@ -10,8 +15,14 @@ func (s *Server) rememberToolSignatures(toolCalls []canonicalToolCall) {
 		s.toolSigs = make(map[string]string)
 	}
 	for _, call := range toolCalls {
-		if call.ID != "" && call.Signature != "" {
-			s.toolSigs[call.ID] = call.Signature
+		if call.Signature == "" {
+			continue
+		}
+		if id := strings.TrimSpace(call.ID); id != "" {
+			s.toolSigs[toolSignatureIDKey(id)] = call.Signature
+		}
+		if name := strings.TrimSpace(call.Name); name != "" {
+			s.toolSigs[toolSignatureFunctionKey(name, call.Arguments)] = call.Signature
 		}
 	}
 }
@@ -25,10 +36,42 @@ func (s *Server) applyToolSignatures(req *canonicalChatRequest) {
 	for messageIndex := range req.Messages {
 		for partIndex := range req.Messages[messageIndex].Parts {
 			part := &req.Messages[messageIndex].Parts[partIndex]
-			if part.Type != "tool_call" || part.Signature != "" || part.ToolCallID == "" {
+			if part.Type != "tool_call" || part.Signature != "" {
 				continue
 			}
-			part.Signature = s.toolSigs[part.ToolCallID]
+			if id := strings.TrimSpace(part.ToolCallID); id != "" {
+				if signature := s.toolSigs[toolSignatureIDKey(id)]; signature != "" {
+					part.Signature = signature
+					continue
+				}
+			}
+			if name := strings.TrimSpace(part.Name); name != "" {
+				part.Signature = s.toolSigs[toolSignatureFunctionKey(name, string(part.Arguments))]
+			}
 		}
 	}
+}
+
+func toolSignatureIDKey(id string) string {
+	return "id:" + strings.TrimSpace(id)
+}
+
+func toolSignatureFunctionKey(name, args string) string {
+	return "fn:" + strings.TrimSpace(name) + ":" + normalizeToolSignatureArgs(args)
+}
+
+func normalizeToolSignatureArgs(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "{}"
+	}
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return raw
+	}
+	normalized, err := json.Marshal(value)
+	if err != nil {
+		return raw
+	}
+	return string(normalized)
 }

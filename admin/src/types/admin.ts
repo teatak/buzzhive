@@ -108,14 +108,27 @@ export type UsageSummary = {
   requests: number;
   errors: number;
   avg_latency_ms: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cached_tokens: number;
+  reasoning_tokens: number;
   by_key: Record<string, number>;
   series: UsagePoint[];
   bucket_minutes: number;
+  time_zone?: string;
 };
 
 export type UsagePoint = {
   date: string;
+  label?: string;
+  tooltip?: string;
   requests: number;
   errors: number;
   avg_latency_ms: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cached_tokens: number;
+  reasoning_tokens: number;
 };

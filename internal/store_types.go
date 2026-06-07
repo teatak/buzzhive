@@ -6,13 +6,11 @@ import (
 )
 
 type Store struct {
-	db      *sql.DB
-	dialect string
+	db *sql.DB
 }
 
 type DatabaseConfig struct {
 	Driver string `yaml:"driver"`
-	Path   string `yaml:"path"`
 	URL    string `yaml:"url"`
 }
 
@@ -24,35 +22,54 @@ type RedisConfig struct {
 }
 
 type UsageRecord struct {
-	UserID          int64
-	UserName        string
-	UserAPIKeyID    int64
-	UserAPIKeyName  string
-	ProviderID      int64
-	ProviderName    string
-	ProviderKeyID   int64
-	ProviderKeyName string
-	Model           string
-	UpstreamModel   string
-	Status          int
-	LatencyMS       int64
-	CreatedAt       time.Time
+	UserID           int64
+	UserName         string
+	UserAPIKeyID     int64
+	UserAPIKeyName   string
+	ProviderID       int64
+	ProviderName     string
+	ProviderKeyID    int64
+	ProviderKeyName  string
+	Model            string
+	UpstreamModel    string
+	Status           int
+	LatencyMS        int64
+	PromptTokens     int64
+	CompletionTokens int64
+	TotalTokens      int64
+	CachedTokens     int64
+	ReasoningTokens  int64
+	RawUsage         string
+	CreatedAt        time.Time
 }
 
 type UsageSummary struct {
-	Requests      int64            `json:"requests"`
-	Errors        int64            `json:"errors"`
-	AvgLatencyMS  float64          `json:"avg_latency_ms"`
-	ByKey         map[string]int64 `json:"by_key"`
-	Series        []UsagePoint     `json:"series"`
-	BucketMinutes int              `json:"bucket_minutes"`
+	Requests         int64            `json:"requests"`
+	Errors           int64            `json:"errors"`
+	AvgLatencyMS     float64          `json:"avg_latency_ms"`
+	PromptTokens     int64            `json:"prompt_tokens"`
+	CompletionTokens int64            `json:"completion_tokens"`
+	TotalTokens      int64            `json:"total_tokens"`
+	CachedTokens     int64            `json:"cached_tokens"`
+	ReasoningTokens  int64            `json:"reasoning_tokens"`
+	ByKey            map[string]int64 `json:"by_key"`
+	Series           []UsagePoint     `json:"series"`
+	BucketMinutes    int              `json:"bucket_minutes"`
+	TimeZone         string           `json:"time_zone"`
 }
 
 type UsagePoint struct {
-	Date         string  `json:"date"`
-	Requests     int64   `json:"requests"`
-	Errors       int64   `json:"errors"`
-	AvgLatencyMS float64 `json:"avg_latency_ms"`
+	Date             string  `json:"date"`
+	Label            string  `json:"label"`
+	Tooltip          string  `json:"tooltip"`
+	Requests         int64   `json:"requests"`
+	Errors           int64   `json:"errors"`
+	AvgLatencyMS     float64 `json:"avg_latency_ms"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	TotalTokens      int64   `json:"total_tokens"`
+	CachedTokens     int64   `json:"cached_tokens"`
+	ReasoningTokens  int64   `json:"reasoning_tokens"`
 }
 
 type UsageQuery struct {
@@ -61,6 +78,7 @@ type UsageQuery struct {
 	Model        string
 	From         time.Time
 	To           time.Time
+	Location     *time.Location
 }
 
 type ProviderRecord struct {

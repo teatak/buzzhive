@@ -95,7 +95,7 @@ func (s *Store) CreateAppUser(username, password, role string) (AppUser, error) 
 	if err != nil {
 		return AppUser{}, err
 	}
-	now := time.Now().Format(time.RFC3339)
+	now := storeNow()
 	id, err := s.insertReturningID(`INSERT INTO users (username, password_hash, role, valid, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)`, username, string(hash), role, now, now)
 	if err != nil {
 		return AppUser{}, err
@@ -119,7 +119,7 @@ func (s *Store) CreateUserAPIKey(key AuthToken) (AuthToken, error) {
 	if key.Name == "" {
 		key.Name = "user-key-" + randomToken(5)
 	}
-	now := time.Now().Format(time.RFC3339)
+	now := storeNow()
 	id, err := s.insertReturningID(`INSERT INTO user_api_keys (user_id, name, token, valid, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`, key.UserID, key.Name, key.Token, boolInt(key.Valid), now, now)
 	if err != nil {
 		return AuthToken{}, err
@@ -132,7 +132,7 @@ func (s *Store) SetUserAPIKeyValid(id, userID int64, valid bool) error {
 	if id == 0 || userID == 0 {
 		return errors.New("id and user_id are required")
 	}
-	_, err := s.exec(`UPDATE user_api_keys SET valid = ?, updated_at = ? WHERE id = ? AND user_id = ?`, boolInt(valid), time.Now().Format(time.RFC3339), id, userID)
+	_, err := s.exec(`UPDATE user_api_keys SET valid = ?, updated_at = ? WHERE id = ? AND user_id = ?`, boolInt(valid), storeNow(), id, userID)
 	return err
 }
 
@@ -177,7 +177,7 @@ func (s *Store) ChangePassword(userID int64, currentPassword, nextPassword strin
 	if err != nil {
 		return err
 	}
-	_, err = s.exec(`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, string(nextHash), time.Now().Format(time.RFC3339), userID)
+	_, err = s.exec(`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, string(nextHash), storeNow(), userID)
 	return err
 }
 
@@ -190,10 +190,10 @@ func (s *Store) SetupRequired() (bool, error) {
 }
 
 func (s *Store) CreateSession(token string, userID int64, expiresAt time.Time) error {
-	now := time.Now().Format(time.RFC3339)
+	now := storeNow()
 	_, err := s.exec(
 		`INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
-		sessionHash(token), userID, expiresAt.Format(time.RFC3339), now,
+		sessionHash(token), userID, expiresAt.UTC(), now,
 	)
 	return err
 }
@@ -201,26 +201,22 @@ func (s *Store) CreateSession(token string, userID int64, expiresAt time.Time) e
 func (s *Store) UserBySession(token string) (SessionUser, error) {
 	var user AppUser
 	var valid int
-	var expiresAtText string
+	var expiresAt time.Time
 	err := s.queryRow(`
 		SELECT u.id, u.username, u.role, u.valid, s.expires_at
 		FROM sessions s
 		JOIN users u ON u.id = s.user_id
 		WHERE s.token_hash = ? AND s.expires_at > ?`,
-		sessionHash(token), time.Now().Format(time.RFC3339),
-	).Scan(&user.ID, &user.Username, &user.Role, &valid, &expiresAtText)
+		sessionHash(token), storeNow(),
+	).Scan(&user.ID, &user.Username, &user.Role, &valid, &expiresAt)
 	if err != nil {
 		return SessionUser{}, err
 	}
 	if valid == 0 {
 		return SessionUser{}, errors.New("user disabled")
 	}
-	expiresAt, err := time.Parse(time.RFC3339, expiresAtText)
-	if err != nil {
-		return SessionUser{}, err
-	}
 	user.Valid = true
-	return SessionUser{User: user, ExpiresAt: expiresAt}, nil
+	return SessionUser{User: user, ExpiresAt: expiresAt.UTC()}, nil
 }
 
 func (s *Store) DeleteSession(token string) error {
@@ -229,11 +225,11 @@ func (s *Store) DeleteSession(token string) error {
 }
 
 func (s *Store) RenewSession(token string, expiresAt time.Time) error {
-	_, err := s.exec(`UPDATE sessions SET expires_at = ? WHERE token_hash = ?`, expiresAt.Format(time.RFC3339), sessionHash(token))
+	_, err := s.exec(`UPDATE sessions SET expires_at = ? WHERE token_hash = ?`, expiresAt.UTC(), sessionHash(token))
 	return err
 }
 
 func (s *Store) DeleteExpiredSessions() error {
-	_, err := s.exec(`DELETE FROM sessions WHERE expires_at <= ?`, time.Now().Format(time.RFC3339))
+	_, err := s.exec(`DELETE FROM sessions WHERE expires_at <= ?`, storeNow())
 	return err
 }

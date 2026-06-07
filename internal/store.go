@@ -8,22 +8,15 @@ import (
 	"strings"
 
 	_ "github.com/lib/pq"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 func OpenStore(cfg DatabaseConfig) (*Store, error) {
 	driver := strings.ToLower(cfg.Driver)
 	if driver == "" {
-		driver = "sqlite"
+		driver = "postgres"
 	}
 	var dsn string
 	switch driver {
-	case "sqlite", "sqlite3":
-		driver = "sqlite"
-		if cfg.Path == "" {
-			cfg.Path = "data/buzzhive.db"
-		}
-		dsn = cfg.Path + "?_busy_timeout=5000&_journal_mode=WAL"
 	case "postgres", "postgresql", "pg":
 		driver = "postgres"
 		dsn = cfg.URL
@@ -34,16 +27,12 @@ func OpenStore(cfg DatabaseConfig) (*Store, error) {
 		return nil, fmt.Errorf("unsupported database driver %q", cfg.Driver)
 	}
 
-	sqlDriver := driver
-	if driver == "sqlite" {
-		sqlDriver = "sqlite3"
-	}
-	db, err := sql.Open(sqlDriver, dsn)
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db, dialect: driver}
-	if err := store.Migrate(); err != nil {
+	store := &Store{db: db}
+	if err := store.EnsureSchema(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -67,22 +56,12 @@ func (s *Store) prepareTx(tx *sql.Tx, query string) (*sql.Stmt, error) {
 }
 
 func (s *Store) insertReturningID(query string, args ...any) (int64, error) {
-	if s.dialect == "postgres" {
-		var id int64
-		err := s.queryRow(query+" RETURNING id", args...).Scan(&id)
-		return id, err
-	}
-	res, err := s.exec(query, args...)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
+	var id int64
+	err := s.queryRow(query+" RETURNING id", args...).Scan(&id)
+	return id, err
 }
 
 func (s *Store) rebind(query string) string {
-	if s.dialect != "postgres" {
-		return query
-	}
 	var b strings.Builder
 	b.Grow(len(query) + 8)
 	arg := 1

@@ -1,6 +1,7 @@
 package buzzhive
 
 import (
+	"database/sql"
 	"errors"
 	"time"
 )
@@ -36,6 +37,7 @@ func (s *Store) ProviderAPIKeys(providerName string) ([]APIKey, error) {
 	for rows.Next() {
 		var key APIKey
 		var enabled int
+		var disabledAt sql.NullTime
 		if err := rows.Scan(
 			&key.ProviderKeyID,
 			&key.ProviderID,
@@ -49,11 +51,12 @@ func (s *Store) ProviderAPIKeys(providerName string) ([]APIKey, error) {
 			&key.DisabledErrorCode,
 			&key.DisabledErrorMessage,
 			&key.DisabledErrorBody,
-			&key.DisabledAt,
+			&disabledAt,
 		); err != nil {
 			return nil, err
 		}
 		key.Enabled = enabled != 0
+		key.DisabledAt = formatNullStoreTime(disabledAt)
 		out = append(out, key)
 	}
 	return out, rows.Err()
@@ -74,10 +77,13 @@ func (s *Store) EnabledProviders() ([]ProviderRecord, error) {
 	for rows.Next() {
 		var item ProviderRecord
 		var enabled int
-		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.PresetID, &item.BaseURL, &enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.PresetID, &item.BaseURL, &enabled, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		item.Enabled = enabled != 0
+		item.CreatedAt = formatStoreTime(createdAt)
+		item.UpdatedAt = formatStoreTime(updatedAt)
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -112,6 +118,7 @@ func (s *Store) RuntimeProviderAPIKeys() ([]APIKey, error) {
 	for rows.Next() {
 		var key APIKey
 		var enabled int
+		var disabledAt sql.NullTime
 		if err := rows.Scan(
 			&key.ProviderKeyID,
 			&key.ProviderID,
@@ -125,11 +132,12 @@ func (s *Store) RuntimeProviderAPIKeys() ([]APIKey, error) {
 			&key.DisabledErrorCode,
 			&key.DisabledErrorMessage,
 			&key.DisabledErrorBody,
-			&key.DisabledAt,
+			&disabledAt,
 		); err != nil {
 			return nil, err
 		}
 		key.Enabled = enabled != 0
+		key.DisabledAt = formatNullStoreTime(disabledAt)
 		out = append(out, key)
 	}
 	return out, rows.Err()
@@ -222,7 +230,7 @@ func (s *Store) DisableProviderKey(id int64, status int, errorCode, errorMessage
 	if len(errorBody) > 4096 {
 		errorBody = errorBody[:4096]
 	}
-	now := time.Now().Format(time.RFC3339)
+	now := storeNow()
 	_, err := s.exec(
 		`UPDATE provider_keys SET enabled = 0, disabled_status = ?, disabled_error_code = ?, disabled_error_message = ?, disabled_error_body = ?, disabled_at = ?, updated_at = ? WHERE id = ?`,
 		status, errorCode, errorMessage, errorBody, now, now, id,

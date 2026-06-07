@@ -91,6 +91,7 @@ export function App() {
   const [config, setConfig] = useState<AdminConfig | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [tokenUsage, setTokenUsage] = useState<UsageSummary | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
   const [userAPIKeys, setUserAPIKeys] = useState<UserAPIKey[]>([]);
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
@@ -117,6 +118,11 @@ export function App() {
     model: "all",
     ...naturalDayRange(),
   });
+  const [tokenUsageFilter, setTokenUsageFilter] = useState({
+    key_id: "all",
+    model: "all",
+    ...naturalDayRange(),
+  });
 
   async function load(activeToken = token) {
     const [nextSession, data, nextStats] = await Promise.all([
@@ -132,14 +138,16 @@ export function App() {
   }
 
   async function loadDashboard(activeToken = token) {
-    const [nextStats, nextUsage, nextUserAPIKeys, nextModels] = await Promise.all([
+    const [nextStats, nextUsage, nextTokenUsage, nextUserAPIKeys, nextModels] = await Promise.all([
       request<Stats>("/admin/api/stats", activeToken),
       request<UsageSummary>(usagePath(usageFilter), activeToken),
+      request<UsageSummary>(usagePath(tokenUsageFilter), activeToken),
       request<UserAPIKey[]>("/admin/api/user-api-keys", activeToken),
       request<Model[]>("/admin/api/models", activeToken),
     ]);
     setStats(nextStats);
     setUsage(nextUsage);
+    setTokenUsage(nextTokenUsage);
     setUserAPIKeys(asList(nextUserAPIKeys));
     setModels(asList(nextModels));
   }
@@ -427,6 +435,13 @@ export function App() {
       .catch((error) => toast.error(error instanceof Error ? error.message : tNow("toast.action_failed")));
   }, [usageFilter, token, session?.user.id, view]);
 
+  useEffect(() => {
+    if (!token || !session || view !== "dashboard") return;
+    request<UsageSummary>(usagePath(tokenUsageFilter), token)
+      .then(setTokenUsage)
+      .catch((error) => toast.error(error instanceof Error ? error.message : tNow("toast.action_failed")));
+  }, [tokenUsageFilter, token, session?.user.id, view]);
+
   function navigate(nextView: View) {
     const hash = hashForView(nextView);
     if (window.location.hash !== `#${hash}`) {
@@ -443,9 +458,14 @@ export function App() {
 
   const todayRange = naturalDayRange();
   const usageIsToday = usageFilter.from === todayRange.from && usageFilter.to === todayRange.to;
+  const tokenUsageIsToday = tokenUsageFilter.from === todayRange.from && tokenUsageFilter.to === todayRange.to;
   const usageSeries = useMemo(
     () => fillUsageSeries(usage?.series ?? [], usageFilter.from, usageFilter.to, usage?.bucket_minutes ?? 1),
     [usage?.series, usage?.bucket_minutes, usageFilter.from, usageFilter.to],
+  );
+  const tokenUsageSeries = useMemo(
+    () => fillUsageSeries(tokenUsage?.series ?? [], tokenUsageFilter.from, tokenUsageFilter.to, tokenUsage?.bucket_minutes ?? 1),
+    [tokenUsage?.series, tokenUsage?.bucket_minutes, tokenUsageFilter.from, tokenUsageFilter.to],
   );
 
   if (booting) {
@@ -555,12 +575,18 @@ export function App() {
               usageFilter={usageFilter}
               usageIsToday={usageIsToday}
               usageSeries={usageSeries}
+              tokenUsage={tokenUsage}
+              tokenUsageFilter={tokenUsageFilter}
+              tokenUsageIsToday={tokenUsageIsToday}
+              tokenUsageSeries={tokenUsageSeries}
               userAPIKeys={userAPIKeys}
               models={models}
               ownActiveKeys={ownActiveKeys}
               onUsageFilterChange={setUsageFilter}
               onResetUsageToToday={() => setUsageFilter((current) => ({ ...current, ...naturalDayRange() }))}
               onSelectUsageRange={(from, to) => setUsageFilter((current) => ({ ...current, from, to }))}
+              onTokenUsageFilterChange={setTokenUsageFilter}
+              onResetTokenUsageToToday={() => setTokenUsageFilter((current) => ({ ...current, ...naturalDayRange() }))}
             />
           )}
 

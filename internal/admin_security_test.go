@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -88,15 +87,7 @@ func TestPublicAdminRouteWrongMethodDoesNotBypassAuth(t *testing.T) {
 
 func newAdminRouteTestServer(t *testing.T) *Server {
 	t.Helper()
-	store, err := OpenStore(DatabaseConfig{Path: filepath.Join(t.TempDir(), "buzzhive.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Fatal(err)
-		}
-	})
+	store := openTestStore(t)
 	srv := &Server{
 		store:    store,
 		sessions: make(map[string]SessionUser),

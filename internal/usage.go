@@ -1,6 +1,8 @@
 package buzzhive
 
 import (
+	"bytes"
+	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
@@ -10,15 +12,37 @@ import (
 	"github.com/teatak/cart/v2"
 )
 
-func (s *Server) recordProviderResultUsage(user AuthToken, model string, result ProviderAttemptResult, status int) {
+type TokenUsage struct {
+	PromptTokens     int64
+	CompletionTokens int64
+	TotalTokens      int64
+	CachedTokens     int64
+	ReasoningTokens  int64
+	RawUsage         string
+}
+
+func (u TokenUsage) IsZero() bool {
+	return u.PromptTokens == 0 &&
+		u.CompletionTokens == 0 &&
+		u.TotalTokens == 0 &&
+		u.CachedTokens == 0 &&
+		u.ReasoningTokens == 0 &&
+		strings.TrimSpace(u.RawUsage) == ""
+}
+
+func (s *Server) recordProviderResultUsage(user AuthToken, model string, result ProviderAttemptResult, status int, usages ...TokenUsage) {
 	latency := time.Duration(0)
 	if !result.StartedAt.IsZero() {
 		latency = time.Since(result.StartedAt)
 	}
-	s.recordUsage(user, result.Key, model, result.Target.UpstreamModel, status, latency)
+	var usage TokenUsage
+	if len(usages) > 0 {
+		usage = usages[0]
+	}
+	s.recordUsage(user, result.Key, model, result.Target.UpstreamModel, status, latency, usage)
 }
 
-func (s *Server) recordUsage(user AuthToken, key APIKey, model, upstreamModel string, status int, latency time.Duration) {
+func (s *Server) recordUsage(user AuthToken, key APIKey, model, upstreamModel string, status int, latency time.Duration, usage TokenUsage) {
 	if status == 0 {
 		status = http.StatusBadGateway
 	}
@@ -34,20 +58,27 @@ func (s *Server) recordUsage(user AuthToken, key APIKey, model, upstreamModel st
 		latencyMS = 0
 	}
 
+	now := time.Now().UTC()
 	record := UsageRecord{
-		UserID:          user.UserID,
-		UserName:        userName,
-		UserAPIKeyID:    user.ID,
-		UserAPIKeyName:  user.Name,
-		ProviderID:      key.ProviderID,
-		ProviderName:    key.ProviderName,
-		ProviderKeyID:   key.ProviderKeyID,
-		ProviderKeyName: key.Name,
-		Model:           model,
-		UpstreamModel:   upstreamModel,
-		Status:          status,
-		LatencyMS:       latencyMS,
-		CreatedAt:       time.Now(),
+		UserID:           user.UserID,
+		UserName:         userName,
+		UserAPIKeyID:     user.ID,
+		UserAPIKeyName:   user.Name,
+		ProviderID:       key.ProviderID,
+		ProviderName:     key.ProviderName,
+		ProviderKeyID:    key.ProviderKeyID,
+		ProviderKeyName:  key.Name,
+		Model:            model,
+		UpstreamModel:    upstreamModel,
+		Status:           status,
+		LatencyMS:        latencyMS,
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		TotalTokens:      usage.TotalTokens,
+		CachedTokens:     usage.CachedTokens,
+		ReasoningTokens:  usage.ReasoningTokens,
+		RawUsage:         usage.RawUsage,
+		CreatedAt:        now,
 	}
 
 	s.statsMu.Lock()
@@ -78,6 +109,65 @@ func (s *Server) recordUsage(user AuthToken, key APIKey, model, upstreamModel st
 	}
 }
 
+func tokenUsageFromOpenAIResponseBody(raw []byte) TokenUsage {
+	var envelope struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil || isEmptyRawJSON(envelope.Usage) {
+		return TokenUsage{}
+	}
+	var usage struct {
+		PromptTokens        int64 `json:"prompt_tokens"`
+		CompletionTokens    int64 `json:"completion_tokens"`
+		TotalTokens         int64 `json:"total_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens int64 `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+		CompletionTokensDetails struct {
+			ReasoningTokens int64 `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details"`
+	}
+	_ = json.Unmarshal(envelope.Usage, &usage)
+	return TokenUsage{
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		TotalTokens:      usage.TotalTokens,
+		CachedTokens:     usage.PromptTokensDetails.CachedTokens,
+		ReasoningTokens:  usage.CompletionTokensDetails.ReasoningTokens,
+		RawUsage:         compactRawJSON(envelope.Usage),
+	}
+}
+
+func tokenUsageFromGeminiResponseBody(raw []byte, resp geminiGenerateResponse) TokenUsage {
+	var envelope struct {
+		UsageMetadata json.RawMessage `json:"usageMetadata"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil || isEmptyRawJSON(envelope.UsageMetadata) {
+		return TokenUsage{}
+	}
+	return TokenUsage{
+		PromptTokens:     int64(resp.UsageMetadata.PromptTokenCount),
+		CompletionTokens: int64(resp.UsageMetadata.CandidatesTokenCount),
+		TotalTokens:      int64(resp.UsageMetadata.TotalTokenCount),
+		CachedTokens:     int64(resp.UsageMetadata.CachedContentTokenCount),
+		ReasoningTokens:  int64(resp.UsageMetadata.ThoughtsTokenCount),
+		RawUsage:         compactRawJSON(envelope.UsageMetadata),
+	}
+}
+
+func isEmptyRawJSON(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
+}
+
+func compactRawJSON(raw json.RawMessage) string {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return string(bytes.TrimSpace(raw))
+	}
+	return buf.String()
+}
+
 func (s *Server) usageWriter() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -106,7 +196,11 @@ func (s *Server) usageWriter() {
 }
 
 func (s *Server) handleUsage(c *cart.Context) error {
-	from, to, err := parseUsageRange(c.Request)
+	loc, err := usageLocationFromRequest(c.Request)
+	if err != nil {
+		return jsonError(c, http.StatusBadRequest, err)
+	}
+	from, to, err := parseUsageRange(c.Request, loc)
 	if err != nil {
 		return jsonError(c, http.StatusBadRequest, err)
 	}
@@ -121,6 +215,7 @@ func (s *Server) handleUsage(c *cart.Context) error {
 		Model:        strings.TrimSpace(c.Request.URL.Query().Get("model")),
 		From:         from,
 		To:           to,
+		Location:     loc,
 	})
 	if err != nil {
 		return jsonError(c, http.StatusInternalServerError, err)
@@ -128,17 +223,20 @@ func (s *Server) handleUsage(c *cart.Context) error {
 	return jsonOK(c, usage)
 }
 
-func parseUsageRange(r *http.Request) (time.Time, time.Time, error) {
-	from, err := parseUsageTime(r.URL.Query().Get("from"))
+func parseUsageRange(r *http.Request, loc *time.Location) (time.Time, time.Time, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	from, err := parseUsageTime(r.URL.Query().Get("from"), loc)
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
-	to, err := parseUsageTime(r.URL.Query().Get("to"))
+	to, err := parseUsageTime(r.URL.Query().Get("to"), loc)
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
 	if from.IsZero() && to.IsZero() {
-		from = time.Now()
+		from = time.Now().In(loc)
 		from = time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, from.Location())
 		to = from.Add(24 * time.Hour)
 	}
@@ -148,13 +246,29 @@ func parseUsageRange(r *http.Request) (time.Time, time.Time, error) {
 	return from, to, nil
 }
 
-func parseUsageTime(value string) (time.Time, error) {
+func usageLocationFromRequest(r *http.Request) (*time.Location, error) {
+	name := strings.TrimSpace(r.URL.Query().Get("tz"))
+	if name == "" {
+		return time.UTC, nil
+	}
+	return time.LoadLocation(name)
+}
+
+func parseUsageTime(value string, loc *time.Location) (time.Time, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return time.Time{}, nil
 	}
-	for _, layout := range []string{"2006-01-02T15:04", "2006-01-02T15:04:05", time.RFC3339, time.RFC3339Nano} {
-		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, value); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	if loc == nil {
+		loc = time.UTC
+	}
+	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02T15:04"} {
+		if t, err := time.ParseInLocation(layout, value, loc); err == nil {
 			return t, nil
 		}
 	}
