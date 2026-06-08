@@ -10,6 +10,7 @@ export type ProviderRecord = {
   type: string;
   preset_id: string;
   base_url: string;
+  supports_responses: boolean;
   enabled: boolean;
 };
 
@@ -18,6 +19,7 @@ export type ProviderPreset = {
   name: string;
   type: string;
   base_url: string;
+  supports_responses: boolean;
   description: string;
 };
 
@@ -71,6 +73,7 @@ export type ModelRoute = {
   provider_id: number;
   provider_name?: string;
   provider_type?: string;
+  supports_responses?: boolean;
   upstream_model: string;
   quota_family: string;
   enabled: boolean;

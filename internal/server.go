@@ -72,7 +72,7 @@ func newServer(cfg Config) (*Server, error) {
 		client:        client,
 		providers:     providers,
 		authTokens:    authTokens,
-		sessions:      make(map[string]SessionUser),
+		adminSessions: make(map[string]SessionUser),
 		routeNext:     make(map[string]int),
 		routeSessions: make(map[string]RouteSession),
 		toolSigs:      make(map[string]string),
@@ -155,6 +155,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			s.handleOpenAIChatCompletions(w, r, body, user)
+		case "/v1/responses":
+			body, ok := readRequestBody(w, r)
+			if !ok {
+				return
+			}
+			s.handleOpenAIResponses(w, r, body, user)
 		case "/v1/models":
 			s.handleOpenAIModels(w, r, user)
 		default:

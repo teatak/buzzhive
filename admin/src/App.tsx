@@ -213,13 +213,15 @@ export function App() {
     setError("");
     setLoading(true);
     try {
-      const path = setupRequired ? "/admin/api/setup" : "/admin/api/login";
+      const creatingInitialAdmin = setupRequired;
+      const path = creatingInitialAdmin ? "/admin/api/setup" : "/admin/api/login";
       const result = await request<{ token: string; user: AppUser }>(path, "", {
         method: "POST",
         body: JSON.stringify(loginForm),
       });
       const nextToken = result.token;
       await load(nextToken);
+      if (creatingInitialAdmin) setSetupRequired(false);
       localStorage.setItem(storageKey, nextToken);
       setToken(nextToken);
     } catch {

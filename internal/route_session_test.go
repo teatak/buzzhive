@@ -65,6 +65,41 @@ func TestProviderTargetLoopKeepsRouteSessionSticky(t *testing.T) {
 	}
 }
 
+func TestProviderAttemptLoopCapsAttemptsByMatchingKeyCount(t *testing.T) {
+	attempts := 0
+	srv := &Server{
+		providers: map[string]Provider{
+			providerOpenAICompatible: testProviderFunc(func(_ context.Context, _ ProviderRequest, _ APIKey) (*http.Response, error) {
+				attempts++
+				return &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"Too Many Requests"}}`)),
+				}, nil
+			}),
+		},
+		keyState: &KeyState{
+			keys: []APIKey{
+				{Name: "only", Key: "secret", ProviderName: providerOpenAICompatible},
+			},
+			cooldown:     time.Minute,
+			rpdCooldown:  time.Hour,
+			exhausted:    make(map[string]time.Time),
+			cooldownHits: make(map[string]int),
+			rpdLike:      make(map[string]bool),
+			errors:       make(map[string]KeyError),
+		},
+	}
+	srv.cfg.Retry.MaxAttempts = 8
+
+	target := RouteTarget{ProviderName: providerOpenAICompatible, UpstreamModel: "gpt-oss"}
+	result := srv.doProviderAttemptLoop(context.Background(), AuthToken{}, "public-model", target, ProviderRequest{})
+
+	if attempts != 1 || result.Attempts != 1 {
+		t.Fatalf("attempts = provider:%d result:%d, want 1", attempts, result.Attempts)
+	}
+}
+
 func TestRotateRouteTargetsWeighted(t *testing.T) {
 	srv := &Server{routeNext: make(map[string]int)}
 	targets := []RouteTarget{

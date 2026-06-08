@@ -10,7 +10,6 @@ func TestEnsureSchemaCreatesCoreTables(t *testing.T) {
 
 	for _, table := range []string{
 		"users",
-		"sessions",
 		"user_api_keys",
 		"providers",
 		"provider_keys",
@@ -39,7 +38,6 @@ func TestEnsureSchemaTimestampColumns(t *testing.T) {
 	}{
 		{"users", "created_at", true, false, "timestamp with time zone", "now()"},
 		{"users", "updated_at", true, false, "timestamp with time zone", "now()"},
-		{"sessions", "expires_at", false, false, "timestamp with time zone", ""},
 		{"provider_keys", "disabled_at", false, true, "timestamp with time zone", ""},
 		{"usage_logs", "created_at", true, false, "timestamp with time zone", "now()"},
 		{"usage_stats_hourly", "bucket_start", false, false, "timestamp with time zone", ""},

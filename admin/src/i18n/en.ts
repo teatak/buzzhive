@@ -131,6 +131,8 @@ export const dict: Record<string, string> = {
   "providers.preset_openrouter": "OpenRouter",
   "providers.preset_qwen": "Qwen",
   "providers.preset_zhipu": "GLM",
+  "providers.responses": "Responses API",
+  "providers.supports_responses": "This upstream supports the OpenAI Responses API",
   "providers.type": "Protocol",
   "providers.type_anthropic": "Anthropic native",
   "providers.type_gemini": "Gemini native",

@@ -9,7 +9,7 @@ import (
 
 func (s *Store) Providers() ([]ProviderRecord, error) {
 	rows, err := s.query(`
-		SELECT id, name, type, preset_id, base_url, enabled, created_at, updated_at
+		SELECT id, name, type, preset_id, base_url, supports_responses, enabled, created_at, updated_at
 		FROM providers
 		ORDER BY name`)
 	if err != nil {
@@ -22,9 +22,11 @@ func (s *Store) Providers() ([]ProviderRecord, error) {
 		var item ProviderRecord
 		var enabled int
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.PresetID, &item.BaseURL, &enabled, &createdAt, &updatedAt); err != nil {
+		var supportsResponses int
+		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.PresetID, &item.BaseURL, &supportsResponses, &enabled, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
+		item.SupportsResponses = supportsResponses != 0
 		item.Enabled = enabled != 0
 		item.CreatedAt = formatStoreTime(createdAt)
 		item.UpdatedAt = formatStoreTime(updatedAt)
@@ -36,13 +38,15 @@ func (s *Store) Providers() ([]ProviderRecord, error) {
 func (s *Store) Provider(id int64) (ProviderRecord, error) {
 	var item ProviderRecord
 	var enabled int
+	var supportsResponses int
 	var createdAt, updatedAt time.Time
 	err := s.queryRow(`
-		SELECT id, name, type, preset_id, base_url, enabled, created_at, updated_at
+		SELECT id, name, type, preset_id, base_url, supports_responses, enabled, created_at, updated_at
 		FROM providers
 		WHERE id = ?`,
 		id,
-	).Scan(&item.ID, &item.Name, &item.Type, &item.PresetID, &item.BaseURL, &enabled, &createdAt, &updatedAt)
+	).Scan(&item.ID, &item.Name, &item.Type, &item.PresetID, &item.BaseURL, &supportsResponses, &enabled, &createdAt, &updatedAt)
+	item.SupportsResponses = supportsResponses != 0
 	item.Enabled = enabled != 0
 	item.CreatedAt = formatStoreTime(createdAt)
 	item.UpdatedAt = formatStoreTime(updatedAt)
@@ -53,13 +57,10 @@ func (s *Store) CreateProvider(provider ProviderRecord) (ProviderRecord, error) 
 	if provider.Name == "" || provider.Type == "" || provider.BaseURL == "" {
 		return ProviderRecord{}, errors.New("name, type and base_url are required")
 	}
-	if provider.PresetID == "" {
-		provider.PresetID = provider.Type
-	}
 	now := storeNow()
 	id, err := s.insertReturningID(
-		`INSERT INTO providers (name, type, preset_id, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		provider.Name, provider.Type, provider.PresetID, provider.BaseURL, boolInt(provider.Enabled), now, now,
+		`INSERT INTO providers (name, type, preset_id, base_url, supports_responses, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		provider.Name, provider.Type, provider.PresetID, provider.BaseURL, boolInt(provider.SupportsResponses), boolInt(provider.Enabled), now, now,
 	)
 	if err != nil {
 		return ProviderRecord{}, err
@@ -71,12 +72,9 @@ func (s *Store) UpdateProvider(provider ProviderRecord) (ProviderRecord, error) 
 	if provider.ID == 0 || provider.Name == "" || provider.Type == "" || provider.BaseURL == "" {
 		return ProviderRecord{}, errors.New("id, name, type and base_url are required")
 	}
-	if provider.PresetID == "" {
-		provider.PresetID = provider.Type
-	}
 	_, err := s.exec(
-		`UPDATE providers SET name = ?, type = ?, preset_id = ?, base_url = ?, enabled = ?, updated_at = ? WHERE id = ?`,
-		provider.Name, provider.Type, provider.PresetID, provider.BaseURL, boolInt(provider.Enabled), storeNow(), provider.ID,
+		`UPDATE providers SET name = ?, type = ?, preset_id = ?, base_url = ?, supports_responses = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+		provider.Name, provider.Type, provider.PresetID, provider.BaseURL, boolInt(provider.SupportsResponses), boolInt(provider.Enabled), storeNow(), provider.ID,
 	)
 	if err != nil {
 		return ProviderRecord{}, err
@@ -300,9 +298,6 @@ func (s *Store) Model(id int64) (Model, error) {
 func (s *Store) CreateModel(model Model) (Model, error) {
 	if model.Name == "" {
 		return Model{}, errors.New("name is required")
-	}
-	if model.DisplayName == "" {
-		model.DisplayName = model.Name
 	}
 	if model.Capabilities == "" {
 		model.Capabilities = "{}"

@@ -16,18 +16,28 @@ import (
 var errUnsupportedOpenAIContent = errors.New("only text, data URL image, and input_audio chat content are supported in this version")
 
 type openAIChatRequest struct {
-	Model           string               `json:"model"`
-	Messages        []openAIMessage      `json:"messages"`
-	Stream          bool                 `json:"stream"`
-	Tools           json.RawMessage      `json:"tools,omitempty"`
-	ToolChoice      json.RawMessage      `json:"tool_choice,omitempty"`
-	Temperature     *float64             `json:"temperature,omitempty"`
-	TopP            *float64             `json:"top_p,omitempty"`
-	MaxTokens       *int                 `json:"max_tokens,omitempty"`
-	MaxOutputTokens *int                 `json:"max_completion_tokens,omitempty"`
-	Stop            any                  `json:"stop,omitempty"`
-	ResponseFormat  json.RawMessage      `json:"response_format,omitempty"`
-	StreamOptions   *openAIStreamOptions `json:"stream_options,omitempty"`
+	Model            string               `json:"model"`
+	Messages         []openAIMessage      `json:"messages"`
+	Stream           bool                 `json:"stream"`
+	N                *int                 `json:"n,omitempty"`
+	Tools            json.RawMessage      `json:"tools,omitempty"`
+	ToolChoice       json.RawMessage      `json:"tool_choice,omitempty"`
+	Temperature      *float64             `json:"temperature,omitempty"`
+	TopP             *float64             `json:"top_p,omitempty"`
+	MaxTokens        *int                 `json:"max_tokens,omitempty"`
+	MaxOutputTokens  *int                 `json:"max_completion_tokens,omitempty"`
+	Stop             any                  `json:"stop,omitempty"`
+	PresencePenalty  *float64             `json:"presence_penalty,omitempty"`
+	FrequencyPenalty *float64             `json:"frequency_penalty,omitempty"`
+	LogitBias        json.RawMessage      `json:"logit_bias,omitempty"`
+	Logprobs         *bool                `json:"logprobs,omitempty"`
+	TopLogprobs      *int                 `json:"top_logprobs,omitempty"`
+	Seed             *int64               `json:"seed,omitempty"`
+	User             string               `json:"user,omitempty"`
+	Metadata         json.RawMessage      `json:"metadata,omitempty"`
+	ReasoningEffort  *string              `json:"reasoning_effort,omitempty"`
+	ResponseFormat   json.RawMessage      `json:"response_format,omitempty"`
+	StreamOptions    *openAIStreamOptions `json:"stream_options,omitempty"`
 }
 
 type openAIStreamOptions struct {
@@ -82,9 +92,19 @@ type openAIToolCallFunction struct {
 }
 
 type openAIUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens            int                            `json:"prompt_tokens"`
+	CompletionTokens        int                            `json:"completion_tokens"`
+	TotalTokens             int                            `json:"total_tokens"`
+	PromptTokensDetails     *openAIPromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *openAICompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+}
+
+type openAIPromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+type openAICompletionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 type geminiGenerateRequest struct {
@@ -143,12 +163,17 @@ type geminiFunctionCallingConfig struct {
 }
 
 type geminiGenerationConfig struct {
-	Temperature      *float64        `json:"temperature,omitempty"`
-	TopP             *float64        `json:"topP,omitempty"`
-	MaxOutputTokens  *int            `json:"maxOutputTokens,omitempty"`
-	StopSequences    []string        `json:"stopSequences,omitempty"`
-	ResponseMimeType string          `json:"responseMimeType,omitempty"`
-	ResponseSchema   json.RawMessage `json:"responseSchema,omitempty"`
+	Temperature      *float64              `json:"temperature,omitempty"`
+	TopP             *float64              `json:"topP,omitempty"`
+	MaxOutputTokens  *int                  `json:"maxOutputTokens,omitempty"`
+	StopSequences    []string              `json:"stopSequences,omitempty"`
+	ResponseMimeType string                `json:"responseMimeType,omitempty"`
+	ResponseSchema   json.RawMessage       `json:"responseSchema,omitempty"`
+	ThinkingConfig   *geminiThinkingConfig `json:"thinkingConfig,omitempty"`
+}
+
+type geminiThinkingConfig struct {
+	ThinkingLevel string `json:"thinkingLevel,omitempty"`
 }
 
 type geminiGenerateResponse struct {
@@ -184,6 +209,10 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "auto model routing has been removed")
 		return
 	}
+	if err := validateOpenAIChatParameterSupport(req); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
 
 	targets, err := s.resolveRouteTargets(req.Model)
 	if err != nil {
@@ -205,6 +234,12 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
+	thinkingLevel, err := geminiThinkingLevelForOpenAIReasoningEffort(req.ReasoningEffort, target.UpstreamModel)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	canonicalReq.ThinkingLevel = thinkingLevel
 	s.applyToolSignatures(&canonicalReq)
 	geminiReq, err := canonicalToGeminiGenerateRequest(canonicalReq)
 	if err != nil {
@@ -222,6 +257,55 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	s.proxyOpenAIChat(w, r, geminiBody, user, req.Model, targets)
+}
+
+func validateOpenAIChatParameterSupport(req openAIChatRequest) error {
+	if req.N != nil {
+		if *req.N < 1 {
+			return errors.New("n must be at least 1")
+		}
+		if *req.N > 1 {
+			return errors.New("n greater than 1 is not supported")
+		}
+	}
+	if req.Logprobs != nil && *req.Logprobs {
+		return errors.New("logprobs is not supported")
+	}
+	if req.TopLogprobs != nil {
+		return errors.New("top_logprobs is not supported")
+	}
+	return nil
+}
+
+func geminiThinkingLevelForOpenAIReasoningEffort(effort *string, model string) (*string, error) {
+	if effort == nil || strings.TrimSpace(*effort) == "" {
+		return nil, nil
+	}
+	if !strings.Contains(strings.ToLower(model), "gemini-3") {
+		return nil, errors.New("reasoning_effort mapping is only supported for Gemini 3 models")
+	}
+	value := strings.ToLower(strings.TrimSpace(*effort))
+	switch value {
+	case "low", "high":
+		level := strings.ToUpper(value)
+		return &level, nil
+	case "medium":
+		level := "MEDIUM"
+		return &level, nil
+	case "minimal":
+		if strings.Contains(strings.ToLower(model), "flash") {
+			level := "MINIMAL"
+			return &level, nil
+		}
+		level := "LOW"
+		return &level, nil
+	case "none":
+		return nil, errors.New("reasoning_effort none is not supported for Gemini 3 models")
+	case "xhigh":
+		return nil, errors.New("reasoning_effort xhigh is not supported for Gemini models")
+	default:
+		return nil, fmt.Errorf("unsupported reasoning_effort %q", value)
+	}
 }
 
 func openAIStopSequences(value any) []string {

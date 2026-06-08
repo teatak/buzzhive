@@ -27,6 +27,7 @@ import {
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Checkbox } from "../components/ui/checkbox";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
@@ -58,12 +59,17 @@ const defaultBaseURL: Record<string, string> = {
   mimo: "",
 };
 
+const defaultSupportsResponses: Record<string, boolean> = {
+  openai: true,
+};
+
 const providerDefaults: ProviderForm = {
   id: 0,
   name: "",
   type: "openai-compatible",
   preset_id: "",
   base_url: "",
+  supports_responses: false,
   enabled: true,
 };
 
@@ -146,7 +152,13 @@ export function ProvidersPage(props: {
   }
 
   function changeType(type: string) {
-    setForm({ ...form, type, preset_id: form.preset_id || type, base_url: form.base_url || defaultBaseURL[type] || "" });
+    setForm((current) => ({
+      ...current,
+      type,
+      preset_id: type,
+      base_url: defaultBaseURL[type] || "",
+      supports_responses: defaultSupportsResponses[type] ?? false,
+    }));
   }
 
   async function saveProvider() {
@@ -362,6 +374,7 @@ export function ProvidersPage(props: {
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <ProviderStat label={t("providers.type")} value={providerTypeLabel(selectedProvider.type, t)} />
               <ProviderStat label={t("providers.preset")} value={selectedProvider.preset_id || "-"} mono />
+              <ProviderStat label={t("providers.responses")} value={selectedProvider.supports_responses ? t("common.active") : t("common.disabled")} />
               <ProviderStat label={t("nav.provider_keys")} value={String(selectedProviderKeys.length)} />
             </div>
             <div className="flex items-center gap-2">
@@ -480,6 +493,7 @@ export function ProvidersPage(props: {
                           </div>
                           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
                             <ProviderChip label={t("providers.preset")} value={provider.preset_id || "-"} mono />
+                            <ProviderChip label={t("providers.responses")} value={provider.supports_responses ? t("common.active") : t("common.disabled")} />
                             <ProviderChip label={t("nav.provider_keys")} value={String(keys.length)} />
                           </div>
                         </div>
@@ -516,8 +530,13 @@ export function ProvidersPage(props: {
               options={providerTypes.map((type) => ({ value: type, label: providerTypeLabel(type, t) }))}
               onChange={changeType}
             />
-            <FormTextField label={t("providers.preset")} value={form.preset_id} onChange={(preset_id) => setForm({ ...form, preset_id })} />
             <FormTextField label={t("providers.base_url")} value={form.base_url} onChange={(base_url) => setForm({ ...form, base_url })} />
+            <FormStaticField label={t("providers.responses")}>
+              <label className="flex items-center gap-3 rounded-md border bg-muted/20 px-3 py-2 text-sm">
+                <Checkbox checked={form.supports_responses} onCheckedChange={(checked) => setForm({ ...form, supports_responses: checked === true })} />
+                <span>{t("providers.supports_responses")}</span>
+              </label>
+            </FormStaticField>
             {!editingProviderID && (
               <FormTextareaField label={t("provider_keys.optional_keys")} className="mono min-h-28" value={providerKeySecret} onChange={setProviderKeySecret} />
             )}

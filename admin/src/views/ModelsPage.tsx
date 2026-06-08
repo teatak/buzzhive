@@ -40,6 +40,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/toolti
 import { EnabledToggleButton } from "../components/enabled-toggle-button";
 import { FormNumberField, FormSelectField, FormStaticField, FormTextareaField, FormTextField } from "../components/form-fields";
 import { useLocale } from "../i18n/locale";
+import { modelDisplayName } from "../lib/model";
 import type { Model, ModelPreset, ModelRoute, ProviderRecord } from "../types/admin";
 
 type ModelsPageProps = {
@@ -363,7 +364,7 @@ export function ModelsPage(props: ModelsPageProps) {
                         <StatusBadge enabled={model.enabled} />
                       </div>
                       <div className="flex items-center justify-between gap-3 border-t pt-3">
-                        <ModelChip label={t("models.routes")} value={String(routes.length)} />
+                        <ModelRouteChip label={t("models.routes")} count={routes.length} />
                         <div className="flex justify-end" onClick={stopCardAction}>
                           <RowActions
                             onEdit={() => openModel(model)}
@@ -561,7 +562,7 @@ function ModelIcon({ model, className = "h-10 w-10" }: { model: Model; className
 
 function modelFamily(model: Model) {
   const text = `${model.name} ${model.display_name}`.toLowerCase();
-  if (text.includes("gemini")) return "gemini";
+  if (text.includes("gemini") || text.includes("gemma")) return "gemini";
   if (text.includes("claude") || text.includes("anthropic")) return "anthropic";
   if (text.includes("deepseek")) return "deepseek";
   if (text.includes("qwen")) return "qwen";
@@ -571,38 +572,6 @@ function modelFamily(model: Model) {
   if (text.includes("gpt") || text.includes("openai")) return "openai";
   if (text.includes("mimo")) return "mimo";
   return "generic";
-}
-
-function modelDisplayName(model: Model) {
-  const explicit = model.display_name.trim();
-  return explicit || displayNameFromModelID(model.name);
-}
-
-function displayNameFromModelID(id: string) {
-  const modelID = id.trim().replace(/^models\//i, "").split("/").pop() ?? id.trim();
-  if (!modelID) return id;
-  return modelID
-    .replace(/[_:-]+/g, " ")
-    .split(/\s+/)
-    .filter(Boolean)
-    .map(formatModelNamePart)
-    .join(" ");
-}
-
-function formatModelNamePart(part: string) {
-  const lower = part.toLowerCase();
-  const acronyms: Record<string, string> = {
-    api: "API",
-    gpt: "GPT",
-    glm: "GLM",
-    json: "JSON",
-    llm: "LLM",
-    r1: "R1",
-    vl: "VL",
-  };
-  if (acronyms[lower]) return acronyms[lower];
-  if (/^\d+(?:\.\d+)*$/.test(part)) return part;
-  return lower.charAt(0).toUpperCase() + lower.slice(1);
 }
 
 function policyLabel(t: (key: string) => string, policy: string) {
@@ -654,6 +623,18 @@ function ModelChip({ label, value, mono = false }: { label: string; value: strin
       <span className={mono ? "mono" : ""}>{value || "-"}</span>
     </Badge>
   );
+}
+
+function ModelRouteChip({ label, count }: { label: string; count: number }) {
+  if (count === 0) {
+    return (
+      <Badge variant="outline" className="h-6 shrink-0 gap-1 rounded-full border-dashed px-2 text-xs text-muted-foreground">
+        <span>{label}</span>
+        <span>0</span>
+      </Badge>
+    );
+  }
+  return <ModelChip label={label} value={String(count)} />;
 }
 
 function ModelValueChip({ value }: { value: string }) {

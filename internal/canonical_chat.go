@@ -17,6 +17,7 @@ type canonicalChatRequest struct {
 	MaxOutputTokens *int
 	StopSequences   []string
 	ResponseFormat  *canonicalResponseFormat
+	ThinkingLevel   *string
 	Tools           []canonicalTool
 	ToolChoice      *canonicalToolChoice
 }
@@ -65,6 +66,8 @@ type canonicalUsage struct {
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
+	CachedTokens     int
+	ReasoningTokens  int
 }
 
 type canonicalChatResponse struct {
@@ -526,11 +529,14 @@ func canonicalToGeminiGenerationConfig(req canonicalChatRequest) *geminiGenerati
 		StopSequences:    req.StopSequences,
 		ResponseMimeType: "",
 	}
+	if req.ThinkingLevel != nil {
+		cfg.ThinkingConfig = &geminiThinkingConfig{ThinkingLevel: *req.ThinkingLevel}
+	}
 	if req.ResponseFormat != nil {
 		cfg.ResponseMimeType = req.ResponseFormat.MimeType
 		cfg.ResponseSchema = req.ResponseFormat.Schema
 	}
-	if cfg.Temperature == nil && cfg.TopP == nil && cfg.MaxOutputTokens == nil && len(cfg.StopSequences) == 0 && cfg.ResponseMimeType == "" && len(cfg.ResponseSchema) == 0 {
+	if cfg.Temperature == nil && cfg.TopP == nil && cfg.MaxOutputTokens == nil && len(cfg.StopSequences) == 0 && cfg.ResponseMimeType == "" && len(cfg.ResponseSchema) == 0 && cfg.ThinkingConfig == nil {
 		return nil
 	}
 	return cfg
@@ -554,6 +560,8 @@ func geminiToCanonicalChatResponse(resp geminiGenerateResponse, model, requestID
 			PromptTokens:     resp.UsageMetadata.PromptTokenCount,
 			CompletionTokens: resp.UsageMetadata.CandidatesTokenCount,
 			TotalTokens:      resp.UsageMetadata.TotalTokenCount,
+			CachedTokens:     resp.UsageMetadata.CachedContentTokenCount,
+			ReasoningTokens:  resp.UsageMetadata.ThoughtsTokenCount,
 		},
 	}
 }
@@ -576,16 +584,31 @@ func canonicalToOpenAIChatResponse(resp canonicalChatResponse) openAIChatRespons
 			Message:      message,
 			FinishReason: &finishReason,
 		}},
-		Usage: &openAIUsage{
-			PromptTokens:     resp.Usage.PromptTokens,
-			CompletionTokens: resp.Usage.CompletionTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
-		},
+		Usage: canonicalUsageToOpenAIUsage(resp.Usage),
 	}
 }
 
 func (usage canonicalUsage) isZero() bool {
-	return usage.PromptTokens == 0 && usage.CompletionTokens == 0 && usage.TotalTokens == 0
+	return usage.PromptTokens == 0 &&
+		usage.CompletionTokens == 0 &&
+		usage.TotalTokens == 0 &&
+		usage.CachedTokens == 0 &&
+		usage.ReasoningTokens == 0
+}
+
+func canonicalUsageToOpenAIUsage(usage canonicalUsage) *openAIUsage {
+	out := &openAIUsage{
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		TotalTokens:      usage.TotalTokens,
+	}
+	if usage.CachedTokens != 0 {
+		out.PromptTokensDetails = &openAIPromptTokensDetails{CachedTokens: usage.CachedTokens}
+	}
+	if usage.ReasoningTokens != 0 {
+		out.CompletionTokensDetails = &openAICompletionTokensDetails{ReasoningTokens: usage.ReasoningTokens}
+	}
+	return out
 }
 
 func geminiResponseToolCalls(resp geminiGenerateResponse, requestID string) []canonicalToolCall {
@@ -660,6 +683,8 @@ func geminiToCanonicalStreamEvent(resp geminiGenerateResponse, requestID string)
 			PromptTokens:     resp.UsageMetadata.PromptTokenCount,
 			CompletionTokens: resp.UsageMetadata.CandidatesTokenCount,
 			TotalTokens:      resp.UsageMetadata.TotalTokenCount,
+			CachedTokens:     resp.UsageMetadata.CachedContentTokenCount,
+			ReasoningTokens:  resp.UsageMetadata.ThoughtsTokenCount,
 		},
 	}
 }
@@ -683,11 +708,7 @@ func canonicalToOpenAIStreamChunk(event canonicalStreamEvent, id string, created
 		Choices: []openAIChoice{choice},
 	}
 	if includeUsage && !event.Usage.isZero() {
-		resp.Usage = &openAIUsage{
-			PromptTokens:     event.Usage.PromptTokens,
-			CompletionTokens: event.Usage.CompletionTokens,
-			TotalTokens:      event.Usage.TotalTokens,
-		}
+		resp.Usage = canonicalUsageToOpenAIUsage(event.Usage)
 	}
 	return resp
 }

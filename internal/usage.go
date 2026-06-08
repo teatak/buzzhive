@@ -111,30 +111,63 @@ func (s *Server) recordUsage(user AuthToken, key APIKey, model, upstreamModel st
 
 func tokenUsageFromOpenAIResponseBody(raw []byte) TokenUsage {
 	var envelope struct {
-		Usage json.RawMessage `json:"usage"`
+		Usage    json.RawMessage `json:"usage"`
+		Response struct {
+			Usage json.RawMessage `json:"usage"`
+		} `json:"response"`
 	}
-	if err := json.Unmarshal(raw, &envelope); err != nil || isEmptyRawJSON(envelope.Usage) {
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return TokenUsage{}
+	}
+	usageRaw := envelope.Usage
+	if isEmptyRawJSON(usageRaw) {
+		usageRaw = envelope.Response.Usage
+	}
+	if isEmptyRawJSON(usageRaw) {
 		return TokenUsage{}
 	}
 	var usage struct {
 		PromptTokens        int64 `json:"prompt_tokens"`
 		CompletionTokens    int64 `json:"completion_tokens"`
 		TotalTokens         int64 `json:"total_tokens"`
+		InputTokens         int64 `json:"input_tokens"`
+		OutputTokens        int64 `json:"output_tokens"`
 		PromptTokensDetails struct {
 			CachedTokens int64 `json:"cached_tokens"`
 		} `json:"prompt_tokens_details"`
 		CompletionTokensDetails struct {
 			ReasoningTokens int64 `json:"reasoning_tokens"`
 		} `json:"completion_tokens_details"`
+		InputTokensDetails struct {
+			CachedTokens int64 `json:"cached_tokens"`
+		} `json:"input_tokens_details"`
+		OutputTokensDetails struct {
+			ReasoningTokens int64 `json:"reasoning_tokens"`
+		} `json:"output_tokens_details"`
 	}
-	_ = json.Unmarshal(envelope.Usage, &usage)
+	_ = json.Unmarshal(usageRaw, &usage)
+	if usage.PromptTokens == 0 {
+		usage.PromptTokens = usage.InputTokens
+	}
+	if usage.CompletionTokens == 0 {
+		usage.CompletionTokens = usage.OutputTokens
+	}
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+	if usage.PromptTokensDetails.CachedTokens == 0 {
+		usage.PromptTokensDetails.CachedTokens = usage.InputTokensDetails.CachedTokens
+	}
+	if usage.CompletionTokensDetails.ReasoningTokens == 0 {
+		usage.CompletionTokensDetails.ReasoningTokens = usage.OutputTokensDetails.ReasoningTokens
+	}
 	return TokenUsage{
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
 		TotalTokens:      usage.TotalTokens,
 		CachedTokens:     usage.PromptTokensDetails.CachedTokens,
 		ReasoningTokens:  usage.CompletionTokensDetails.ReasoningTokens,
-		RawUsage:         compactRawJSON(envelope.Usage),
+		RawUsage:         compactRawJSON(usageRaw),
 	}
 }
 

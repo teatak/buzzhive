@@ -89,8 +89,8 @@ func newAdminRouteTestServer(t *testing.T) *Server {
 	t.Helper()
 	store := openTestStore(t)
 	srv := &Server{
-		store:    store,
-		sessions: make(map[string]SessionUser),
+		store:         store,
+		adminSessions: make(map[string]SessionUser),
 		keyState: &KeyState{
 			cooldown:  time.Minute,
 			exhausted: make(map[string]time.Time),

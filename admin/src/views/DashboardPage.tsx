@@ -9,6 +9,7 @@ import { TokenUsageChart } from "../features/usage/TokenUsageChart";
 import { UsageChart } from "../features/usage/UsageChart";
 import { useLocale } from "../i18n/locale";
 import { displayMinute, naturalMonthRange } from "../lib/date";
+import { modelDisplayName } from "../lib/model";
 import { cn } from "../lib/utils";
 import type { Model, UsagePoint, UsageSummary, UserAPIKey } from "../types/admin";
 
@@ -191,7 +192,7 @@ function UsageFilterControls(props: { filter: UsageFilter; userAPIKeys: UserAPIK
         <SelectContent>
           <SelectItem value="all">{t("usage.all_models")}</SelectItem>
           {props.models.map((model) => (
-            <SelectItem key={model.id} value={model.name}>{model.display_name || model.name}</SelectItem>
+            <SelectItem key={model.id} value={model.name}>{modelDisplayName(model)}</SelectItem>
           ))}
         </SelectContent>
       </Select>

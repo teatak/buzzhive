@@ -9,6 +9,8 @@ type TokenUsagePoint = UsagePoint & {
   output_text_tokens: number;
 };
 
+const tokenBarAnimationDuration = 180;
+
 export function TokenUsageChart(props: { series: UsagePoint[] }) {
   const chartData = props.series.map(toTokenUsagePoint);
 
@@ -32,10 +34,10 @@ export function TokenUsageChart(props: { series: UsagePoint[] }) {
           wrapperStyle={{ transition: "none" }}
           content={<TokenUsageTooltip />}
         />
-        <Bar dataKey="input_cached_tokens" stackId="tokens" fill="var(--color-input_cached_tokens)" radius={[0, 0, 4, 4]} />
-        <Bar dataKey="input_uncached_tokens" stackId="tokens" fill="var(--color-input_uncached_tokens)" />
-        <Bar dataKey="reasoning_tokens" stackId="tokens" fill="var(--color-reasoning_tokens)" />
-        <Bar dataKey="output_text_tokens" stackId="tokens" fill="var(--color-output_text_tokens)" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="input_cached_tokens" stackId="tokens" fill="var(--color-input_cached_tokens)" radius={[0, 0, 4, 4]} animationDuration={tokenBarAnimationDuration} />
+        <Bar dataKey="input_uncached_tokens" stackId="tokens" fill="var(--color-input_uncached_tokens)" animationDuration={tokenBarAnimationDuration} />
+        <Bar dataKey="reasoning_tokens" stackId="tokens" fill="var(--color-reasoning_tokens)" animationDuration={tokenBarAnimationDuration} />
+        <Bar dataKey="output_text_tokens" stackId="tokens" fill="var(--color-output_text_tokens)" radius={[4, 4, 0, 0]} animationDuration={tokenBarAnimationDuration} />
       </BarChart>
     </ChartContainer>
   );

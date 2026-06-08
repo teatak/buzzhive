@@ -2,7 +2,6 @@ package buzzhive
 
 import (
 	"errors"
-	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -187,49 +186,4 @@ func (s *Store) SetupRequired() (bool, error) {
 		return false, err
 	}
 	return count == 0, nil
-}
-
-func (s *Store) CreateSession(token string, userID int64, expiresAt time.Time) error {
-	now := storeNow()
-	_, err := s.exec(
-		`INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
-		sessionHash(token), userID, expiresAt.UTC(), now,
-	)
-	return err
-}
-
-func (s *Store) UserBySession(token string) (SessionUser, error) {
-	var user AppUser
-	var valid int
-	var expiresAt time.Time
-	err := s.queryRow(`
-		SELECT u.id, u.username, u.role, u.valid, s.expires_at
-		FROM sessions s
-		JOIN users u ON u.id = s.user_id
-		WHERE s.token_hash = ? AND s.expires_at > ?`,
-		sessionHash(token), storeNow(),
-	).Scan(&user.ID, &user.Username, &user.Role, &valid, &expiresAt)
-	if err != nil {
-		return SessionUser{}, err
-	}
-	if valid == 0 {
-		return SessionUser{}, errors.New("user disabled")
-	}
-	user.Valid = true
-	return SessionUser{User: user, ExpiresAt: expiresAt.UTC()}, nil
-}
-
-func (s *Store) DeleteSession(token string) error {
-	_, err := s.exec(`DELETE FROM sessions WHERE token_hash = ?`, sessionHash(token))
-	return err
-}
-
-func (s *Store) RenewSession(token string, expiresAt time.Time) error {
-	_, err := s.exec(`UPDATE sessions SET expires_at = ? WHERE token_hash = ?`, expiresAt.UTC(), sessionHash(token))
-	return err
-}
-
-func (s *Store) DeleteExpiredSessions() error {
-	_, err := s.exec(`DELETE FROM sessions WHERE expires_at <= ?`, storeNow())
-	return err
 }

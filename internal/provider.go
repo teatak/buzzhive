@@ -281,6 +281,12 @@ func (s *Server) doProviderAttemptLoop(ctx context.Context, user AuthToken, mode
 	if req.MaxAttempts > 0 {
 		maxAttempts = req.MaxAttempts
 	}
+	if s.keyState != nil {
+		keyCount := s.keyState.AvailableFor(target)
+		if keyCount > 0 && keyCount < maxAttempts {
+			maxAttempts = keyCount
+		}
+	}
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}

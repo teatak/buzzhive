@@ -206,6 +206,28 @@ func TestAdminModelUpdateAllowsEmptyDisplayName(t *testing.T) {
 	}
 }
 
+func TestAdminModelCreateAllowsEmptyDisplayName(t *testing.T) {
+	srv := newAdminRouteTestServer(t)
+	adminToken := createAdminRouteTestSession(t, srv, "admin", "admin")
+
+	body := bytes.NewBufferString(`{"name":"owl-beta","display_name":"","description":"","context_window":1050000,"max_input_tokens":1050000,"max_output_tokens":262100,"capabilities":"{\"stream\":true}","selection_policy":"round_robin","enabled":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/models", body)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rr := httptest.NewRecorder()
+	srv.adminAPI.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+
+	var created Model
+	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.DisplayName != "" {
+		t.Fatalf("display_name = %q, want empty", created.DisplayName)
+	}
+}
+
 func TestAdminProviderRoutesCreateRuntimeProvider(t *testing.T) {
 	srv := newAdminRouteTestServer(t)
 	adminToken := createAdminRouteTestSession(t, srv, "admin", "admin")
@@ -230,7 +252,7 @@ func TestAdminProviderRoutesCreateRuntimeProvider(t *testing.T) {
 		t.Fatalf("runtime providers = %+v, want openai", srv.providers)
 	}
 
-	updateBody := bytes.NewBufferString(`{"id":` + strconv.FormatInt(provider.ID, 10) + `,"name":"openai","type":"openai","base_url":"https://api.openai.example/v2","enabled":true}`)
+	updateBody := bytes.NewBufferString(`{"id":` + strconv.FormatInt(provider.ID, 10) + `,"name":"openai","type":"openai","preset_id":"","base_url":"https://api.openai.example/v2","enabled":true}`)
 	req = httptest.NewRequest(http.MethodPut, "/admin/api/providers", updateBody)
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	rr = httptest.NewRecorder()
@@ -245,6 +267,9 @@ func TestAdminProviderRoutesCreateRuntimeProvider(t *testing.T) {
 	}
 	if updated.ID != provider.ID || updated.BaseURL != "https://api.openai.example/v2" {
 		t.Fatalf("updated provider = %+v, want id %d and v2 base URL", updated, provider.ID)
+	}
+	if updated.PresetID != "" {
+		t.Fatalf("preset_id = %q, want empty", updated.PresetID)
 	}
 	providers, err := srv.store.Providers()
 	if err != nil {

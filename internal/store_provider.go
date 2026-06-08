@@ -64,7 +64,7 @@ func (s *Store) ProviderAPIKeys(providerName string) ([]APIKey, error) {
 
 func (s *Store) EnabledProviders() ([]ProviderRecord, error) {
 	rows, err := s.query(`
-		SELECT id, name, type, preset_id, base_url, enabled, created_at, updated_at
+		SELECT id, name, type, preset_id, base_url, supports_responses, enabled, created_at, updated_at
 		FROM providers
 		WHERE enabled = 1
 		ORDER BY name`)
@@ -77,10 +77,12 @@ func (s *Store) EnabledProviders() ([]ProviderRecord, error) {
 	for rows.Next() {
 		var item ProviderRecord
 		var enabled int
+		var supportsResponses int
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.PresetID, &item.BaseURL, &enabled, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.PresetID, &item.BaseURL, &supportsResponses, &enabled, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
+		item.SupportsResponses = supportsResponses != 0
 		item.Enabled = enabled != 0
 		item.CreatedAt = formatStoreTime(createdAt)
 		item.UpdatedAt = formatStoreTime(updatedAt)
@@ -162,6 +164,7 @@ func (s *Store) ResolveModelRoutes(publicModel string) ([]RouteTarget, bool, err
 			p.id,
 			p.name,
 			p.type,
+			p.supports_responses,
 			mr.upstream_model,
 			mr.quota_family,
 			mr.priority,
@@ -192,6 +195,7 @@ func (s *Store) ResolveModelRoutes(publicModel string) ([]RouteTarget, bool, err
 			&target.ProviderID,
 			&target.ProviderName,
 			&target.ProviderType,
+			&target.SupportsResponses,
 			&target.UpstreamModel,
 			&target.QuotaFamily,
 			&target.Priority,

@@ -141,6 +141,110 @@ func TestOpenAIUpstreamErrorMessageParsesProviderBodies(t *testing.T) {
 	}
 }
 
+func TestValidateOpenAIChatParameterSupport(t *testing.T) {
+	trueValue := true
+	falseValue := false
+	zero := 0
+	one := 1
+	two := 2
+	topLogprobs := 3
+
+	tests := []struct {
+		name    string
+		req     openAIChatRequest
+		wantErr string
+	}{
+		{name: "default", req: openAIChatRequest{}},
+		{name: "n one", req: openAIChatRequest{N: &one}},
+		{name: "logprobs false", req: openAIChatRequest{Logprobs: &falseValue}},
+		{name: "ignored compatible params", req: openAIChatRequest{
+			Seed:             int64PtrForTest(123),
+			PresencePenalty:  float64PtrForTest(0.2),
+			FrequencyPenalty: float64PtrForTest(0.3),
+			LogitBias:        json.RawMessage(`{"42":1}`),
+			User:             "alice",
+			Metadata:         json.RawMessage(`{"trace":"ok"}`),
+		}},
+		{name: "n zero", req: openAIChatRequest{N: &zero}, wantErr: "n must be at least 1"},
+		{name: "n greater than one", req: openAIChatRequest{N: &two}, wantErr: "n greater than 1 is not supported"},
+		{name: "logprobs true", req: openAIChatRequest{Logprobs: &trueValue}, wantErr: "logprobs is not supported"},
+		{name: "top logprobs", req: openAIChatRequest{TopLogprobs: &topLogprobs}, wantErr: "top_logprobs is not supported"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateOpenAIChatParameterSupport(tt.req)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != tt.wantErr {
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestGeminiThinkingLevelForOpenAIReasoningEffort(t *testing.T) {
+	tests := []struct {
+		name    string
+		effort  *string
+		model   string
+		want    string
+		wantErr string
+	}{
+		{name: "unset", model: "gemini-3-flash-preview"},
+		{name: "blank", effort: stringPtrForTest(" "), model: "gemini-3-flash-preview"},
+		{name: "flash minimal", effort: stringPtrForTest("minimal"), model: "gemini-3-flash-preview", want: "MINIMAL"},
+		{name: "flash medium", effort: stringPtrForTest("medium"), model: "gemini-3-flash-preview", want: "MEDIUM"},
+		{name: "pro low", effort: stringPtrForTest("low"), model: "gemini-3-pro-preview", want: "LOW"},
+		{name: "pro high", effort: stringPtrForTest("high"), model: "gemini-3-pro-preview", want: "HIGH"},
+		{name: "pro medium", effort: stringPtrForTest("medium"), model: "gemini-3-pro-preview", want: "MEDIUM"},
+		{name: "pro minimal maps low", effort: stringPtrForTest("minimal"), model: "gemini-3-pro-preview", want: "LOW"},
+		{name: "none", effort: stringPtrForTest("none"), model: "gemini-3-flash-preview", wantErr: "reasoning_effort none is not supported for Gemini 3 models"},
+		{name: "xhigh", effort: stringPtrForTest("xhigh"), model: "gemini-3-flash-preview", wantErr: "reasoning_effort xhigh is not supported for Gemini models"},
+		{name: "gemini 2.5", effort: stringPtrForTest("low"), model: "gemini-2.5-flash", wantErr: "reasoning_effort mapping is only supported for Gemini 3 models"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := geminiThinkingLevelForOpenAIReasoningEffort(tt.effort, tt.model)
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.want == "" {
+				if got != nil {
+					t.Fatalf("thinking level = %q, want nil", *got)
+				}
+				return
+			}
+			if got == nil || *got != tt.want {
+				t.Fatalf("thinking level = %v, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func stringPtrForTest(value string) *string {
+	return &value
+}
+
+func int64PtrForTest(value int64) *int64 {
+	return &value
+}
+
+func float64PtrForTest(value float64) *float64 {
+	return &value
+}
+
 func TestOpenAIRetryErrorUsesMappedRateLimitError(t *testing.T) {
 	resp := errorResponse(http.StatusTooManyRequests, `{"error":{"code":429,"message":"Resource has been exhausted.","status":"RESOURCE_EXHAUSTED"}}`)
 	rr := httptest.NewRecorder()
@@ -272,6 +376,12 @@ func TestOpenAIChatCompletionsRoutesToGemini(t *testing.T) {
 	if got.Usage == nil || got.Usage.TotalTokens != 7 {
 		t.Fatalf("usage = %+v", got.Usage)
 	}
+	if got.Usage.PromptTokensDetails == nil || got.Usage.PromptTokensDetails.CachedTokens != 1 {
+		t.Fatalf("prompt token details = %+v", got.Usage.PromptTokensDetails)
+	}
+	if got.Usage.CompletionTokensDetails == nil || got.Usage.CompletionTokensDetails.ReasoningTokens != 2 {
+		t.Fatalf("completion token details = %+v", got.Usage.CompletionTokensDetails)
+	}
 	usage, err := store.UsageSummary(UsageQuery{
 		Model: "gemini-3.5-flash",
 		From:  time.Now().Add(-time.Minute),
@@ -309,6 +419,79 @@ func TestOpenAIChatCompletionsRoutesToGemini(t *testing.T) {
 	}
 	if !strings.Contains(rawUsage, `"cachedContentTokenCount":1`) || !strings.Contains(rawUsage, `"thoughtsTokenCount":2`) {
 		t.Fatalf("raw usage = %s", rawUsage)
+	}
+}
+
+func TestOpenAIChatReasoningEffortRoutesToGeminiThinkingLevel(t *testing.T) {
+	var upstreamBody geminiGenerateRequest
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"candidates": [{
+				"content": {"role": "model", "parts": [{"text": "ok"}]},
+				"finishReason": "STOP"
+			}]
+		}`))
+	}))
+	defer upstream.Close()
+
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, keys := createGeminiRouteTestStore(t, upstream.URL, "fast-model", "gemini-3-flash-preview", "AIza-secret")
+	defer store.Close()
+	srv := &Server{
+		store:    store,
+		upstream: upstreamURL,
+		client:   upstream.Client(),
+		providers: map[string]Provider{
+			providerGemini: NewGeminiProvider(upstreamURL, upstream.Client()),
+		},
+		authTokens: map[string]AuthToken{
+			"bh_valid": {Name: "alice-key", UserName: "alice", Valid: true},
+		},
+		keyState: &KeyState{
+			keys:         keys,
+			cooldown:     time.Minute,
+			rpdCooldown:  time.Hour,
+			exhausted:    make(map[string]time.Time),
+			cooldownHits: make(map[string]int),
+			rpdLike:      make(map[string]bool),
+			errors:       make(map[string]KeyError),
+		},
+		stats: Stats{
+			StartedAt: time.Now(),
+			Exhausted: make(map[string]string),
+			RPDLike:   make(map[string]bool),
+			KeyErrors: make(map[string]KeyError),
+		},
+	}
+	srv.cfg.Retry.MaxAttempts = 2
+
+	body := `{
+		"model": "fast-model",
+		"reasoning_effort": "medium",
+		"messages": [{"role": "user", "content": "hi"}]
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer bh_valid")
+	rr := httptest.NewRecorder()
+
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if upstreamBody.GenerationConfig == nil || upstreamBody.GenerationConfig.ThinkingConfig == nil {
+		t.Fatalf("generation config = %+v", upstreamBody.GenerationConfig)
+	}
+	if got := upstreamBody.GenerationConfig.ThinkingConfig.ThinkingLevel; got != "MEDIUM" {
+		t.Fatalf("thinking level = %q", got)
 	}
 }
 
@@ -1811,7 +1994,9 @@ func TestOpenAIChatStreamIncludesUsageWhenRequested(t *testing.T) {
 	}
 	bodyText := rr.Body.String()
 	for _, want := range []string{
-		`"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}`,
+		`"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5`,
+		`"prompt_tokens_details":{"cached_tokens":1}`,
+		`"completion_tokens_details":{"reasoning_tokens":1}`,
 		`"content":"ok"`,
 		"data: [DONE]",
 	} {
@@ -1951,6 +2136,130 @@ func TestOpenAIChatPassesThroughOpenAICompatibleProvider(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "chatcmpl-upstream") {
 		t.Fatalf("response = %s", rr.Body.String())
+	}
+}
+
+func TestOpenAIResponsesPassesThroughOpenAICompatibleProvider(t *testing.T) {
+	var upstreamPath string
+	var upstreamBody map[string]any
+	var upstreamAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPath = r.URL.Path
+		upstreamAuth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id":"resp-upstream","object":"response","output":[],"usage":{"input_tokens":7,"output_tokens":5,"total_tokens":12,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":3}}}`))
+	}))
+	defer upstream.Close()
+
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := openTestStore(t)
+
+	now := storeNow()
+	providerID, err := store.insertReturningID(
+		`INSERT INTO providers (name, type, preset_id, base_url, supports_responses, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 1, ?, ?)`,
+		"openrouter", "openai-compatible", "openrouter", upstream.URL+"/v1", now, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.exec(
+		`INSERT INTO provider_keys (provider_id, name, secret, secret_hint, enabled, priority, weight, labels, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 0, 1, '', ?, ?)`,
+		providerID, "or-main", "sk-secret", "cret", now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	modelID, err := store.insertReturningID(
+		`INSERT INTO models (name, selection_policy, enabled, created_at, updated_at) VALUES (?, ?, 1, ?, ?)`,
+		"public-response", "round_robin", now, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.exec(
+		`INSERT INTO model_routes (model_id, provider_id, upstream_model, quota_family, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, '', 1, 0, 1, ?, ?)`,
+		modelID, providerID, "openai/gpt-oss-120b", now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	providerRecords, err := store.EnabledProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers, err := newProviderRegistry(providerRecords, upstreamURL, upstream.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := store.RuntimeProviderAPIKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{
+		store:     store,
+		upstream:  upstreamURL,
+		client:    upstream.Client(),
+		providers: providers,
+		authTokens: map[string]AuthToken{
+			"bh_valid": {Name: "alice-key", UserName: "alice", Valid: true},
+		},
+		keyState: &KeyState{
+			keys:         keys,
+			cooldown:     time.Minute,
+			rpdCooldown:  time.Hour,
+			exhausted:    make(map[string]time.Time),
+			cooldownHits: make(map[string]int),
+			rpdLike:      make(map[string]bool),
+			errors:       make(map[string]KeyError),
+		},
+		stats: Stats{
+			StartedAt: time.Now(),
+			Exhausted: make(map[string]string),
+			RPDLike:   make(map[string]bool),
+			KeyErrors: make(map[string]KeyError),
+		},
+	}
+	srv.cfg.Retry.MaxAttempts = 2
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"public-response","input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer bh_valid")
+	rr := httptest.NewRecorder()
+
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if upstreamPath != "/v1/responses" {
+		t.Fatalf("upstream path = %q", upstreamPath)
+	}
+	if upstreamAuth != "Bearer sk-secret" {
+		t.Fatalf("upstream auth = %q", upstreamAuth)
+	}
+	if upstreamBody["model"] != "openai/gpt-oss-120b" {
+		t.Fatalf("upstream model = %v", upstreamBody["model"])
+	}
+	if !strings.Contains(rr.Body.String(), "resp-upstream") {
+		t.Fatalf("response = %s", rr.Body.String())
+	}
+
+	var promptTokens, completionTokens, totalTokens, cachedTokens, reasoningTokens int64
+	if err := store.queryRow(`
+		SELECT prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens
+		FROM usage_logs
+		WHERE model = ?`,
+		"public-response",
+	).Scan(&promptTokens, &completionTokens, &totalTokens, &cachedTokens, &reasoningTokens); err != nil {
+		t.Fatal(err)
+	}
+	if promptTokens != 7 || completionTokens != 5 || totalTokens != 12 || cachedTokens != 2 || reasoningTokens != 3 {
+		t.Fatalf("usage = prompt:%d completion:%d total:%d cached:%d reasoning:%d", promptTokens, completionTokens, totalTokens, cachedTokens, reasoningTokens)
 	}
 }
 

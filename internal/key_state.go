@@ -36,6 +36,19 @@ func (k *KeyState) NextFor(model string, target RouteTarget) (APIKey, bool) {
 	return APIKey{}, false
 }
 
+func (k *KeyState) AvailableFor(target RouteTarget) int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	count := 0
+	for _, key := range k.keys {
+		if keyMatchesTarget(key, target) {
+			count++
+		}
+	}
+	return count
+}
+
 func keyMatchesTarget(key APIKey, target RouteTarget) bool {
 	if target.ProviderName != "" && key.ProviderName != "" && key.ProviderName != target.ProviderName {
 		return false

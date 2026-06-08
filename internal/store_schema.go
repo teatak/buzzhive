@@ -31,23 +31,18 @@ func (s *Store) schemaStatements() []string {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			FOREIGN KEY (user_id) REFERENCES users(id)
 		)`,
-		`CREATE TABLE IF NOT EXISTS sessions (
-			token_hash TEXT PRIMARY KEY,
-			user_id BIGINT NOT NULL,
-			expires_at TIMESTAMPTZ NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-			FOREIGN KEY (user_id) REFERENCES users(id)
-		)`,
 		`CREATE TABLE IF NOT EXISTS providers (
 			id BIGSERIAL PRIMARY KEY,
 			name TEXT NOT NULL UNIQUE,
 			type TEXT NOT NULL,
 			preset_id TEXT NOT NULL DEFAULT '',
 			base_url TEXT NOT NULL,
+			supports_responses INTEGER NOT NULL DEFAULT 0,
 			enabled INTEGER NOT NULL DEFAULT 1,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
+		`ALTER TABLE providers ADD COLUMN IF NOT EXISTS supports_responses INTEGER NOT NULL DEFAULT 0`,
 		`CREATE TABLE IF NOT EXISTS provider_keys (
 			id BIGSERIAL PRIMARY KEY,
 			provider_id BIGINT NOT NULL,
@@ -155,8 +150,6 @@ func (s *Store) schemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_provider_keys_provider_id ON provider_keys(provider_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_model_routes_model_id ON model_routes(model_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_model_routes_provider_id ON model_routes(provider_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_user_created ON usage_logs(user_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_key_created ON usage_logs(user_api_key_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_stats_hourly_user_bucket ON usage_stats_hourly(user_id, bucket_start)`,

@@ -313,21 +313,18 @@ func (s *Server) adminSessionByToken(ctx context.Context, token string) (Session
 	}
 
 	s.runtimeMu.Lock()
-	user, ok := s.sessions[token]
+	user, ok := s.adminSessions[token]
 	s.runtimeMu.Unlock()
 	if ok && user.User.Valid && time.Now().Before(user.ExpiresAt) {
 		user = s.renewAdminSessionIfNeeded(ctx, token, user)
 		return user, true
 	}
-	sessionUser, err := s.store.UserBySession(token)
-	if err != nil {
-		return SessionUser{}, false
+	if ok {
+		s.runtimeMu.Lock()
+		delete(s.adminSessions, token)
+		s.runtimeMu.Unlock()
 	}
-	sessionUser = s.renewAdminSessionIfNeeded(ctx, token, sessionUser)
-	s.runtimeMu.Lock()
-	s.sessions[token] = sessionUser
-	s.runtimeMu.Unlock()
-	return sessionUser, true
+	return SessionUser{}, false
 }
 
 func adminTokenFromRequest(r *http.Request) string {
@@ -347,14 +344,8 @@ func (s *Server) createSession(user AppUser) (string, error) {
 		}
 		return token, nil
 	}
-	if err := s.store.DeleteExpiredSessions(); err != nil {
-		return "", err
-	}
-	if err := s.store.CreateSession(token, user.ID, expiresAt); err != nil {
-		return "", err
-	}
 	s.runtimeMu.Lock()
-	s.sessions[token] = sessionUser
+	s.adminSessions[token] = sessionUser
 	s.runtimeMu.Unlock()
 	return token, nil
 }
@@ -372,12 +363,8 @@ func (s *Server) renewAdminSessionIfNeeded(ctx context.Context, token string, se
 		}
 		return nextSessionUser
 	}
-	if err := s.store.RenewSession(token, nextExpiresAt); err != nil {
-		log.Printf("renew admin session: %v", err)
-		return sessionUser
-	}
 	s.runtimeMu.Lock()
-	s.sessions[token] = nextSessionUser
+	s.adminSessions[token] = nextSessionUser
 	s.runtimeMu.Unlock()
 	return nextSessionUser
 }
@@ -389,11 +376,8 @@ func (s *Server) deleteAdminSession(ctx context.Context, token string) error {
 	if s.runtimeCache.Enabled() {
 		return s.runtimeCache.DeleteAdminSession(ctx, token)
 	}
-	if err := s.store.DeleteSession(token); err != nil {
-		return err
-	}
 	s.runtimeMu.Lock()
-	delete(s.sessions, token)
+	delete(s.adminSessions, token)
 	s.runtimeMu.Unlock()
 	return nil
 }
@@ -559,12 +543,13 @@ func (s *Server) handleUserAPIKeys(c *cart.Context, actor AppUser) error {
 }
 
 type providerWriteRequest struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	PresetID string `json:"preset_id"`
-	BaseURL  string `json:"base_url"`
-	Enabled  *bool  `json:"enabled"`
+	ID                int64  `json:"id"`
+	Name              string `json:"name"`
+	Type              string `json:"type"`
+	PresetID          string `json:"preset_id"`
+	BaseURL           string `json:"base_url"`
+	SupportsResponses bool   `json:"supports_responses"`
+	Enabled           *bool  `json:"enabled"`
 }
 
 type providerKeyWriteRequest struct {
@@ -617,11 +602,12 @@ func (s *Server) handleProviders(c *cart.Context) error {
 			return jsonError(c, http.StatusBadRequest, err)
 		}
 		created, err := s.store.CreateProvider(ProviderRecord{
-			Name:     req.Name,
-			Type:     req.Type,
-			PresetID: req.PresetID,
-			BaseURL:  req.BaseURL,
-			Enabled:  boolWithDefault(req.Enabled, true),
+			Name:              req.Name,
+			Type:              req.Type,
+			PresetID:          req.PresetID,
+			BaseURL:           req.BaseURL,
+			SupportsResponses: req.SupportsResponses,
+			Enabled:           boolWithDefault(req.Enabled, true),
 		})
 		if err != nil {
 			return jsonError(c, http.StatusBadRequest, err)
@@ -645,12 +631,11 @@ func (s *Server) handleProviders(c *cart.Context) error {
 		if req.Type != "" {
 			existing.Type = req.Type
 		}
-		if req.PresetID != "" {
-			existing.PresetID = req.PresetID
-		}
+		existing.PresetID = req.PresetID
 		if req.BaseURL != "" {
 			existing.BaseURL = req.BaseURL
 		}
+		existing.SupportsResponses = req.SupportsResponses
 		if req.Enabled != nil {
 			existing.Enabled = *req.Enabled
 		}

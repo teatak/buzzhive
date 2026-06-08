@@ -104,7 +104,7 @@ type Server struct {
 	client        *http.Client
 	providers     map[string]Provider
 	authTokens    map[string]AuthToken
-	sessions      map[string]SessionUser
+	adminSessions map[string]SessionUser
 	routeNext     map[string]int
 	routeSessions map[string]RouteSession
 	keyState      *KeyState
