@@ -101,7 +101,8 @@ export function ModelsPage(props: ModelsPageProps) {
   const [routeOpen, setRouteOpen] = useState(false);
   const [modelForm, setModelForm] = useState<Model>(modelDefaults);
   const [presetIDs, setPresetIDs] = useState<string[]>([]);
-  const [lastPresetIndex, setLastPresetIndex] = useState<number | null>(null);
+  const [anchorIndex, setAnchorIndex] = useState<number | null>(null);
+  const [lastShiftRange, setLastShiftRange] = useState<string[]>([]);
   const [routeForm, setRouteForm] = useState(routeDefaults);
   const [saving, setSaving] = useState(false);
   const [selectedModelID, setSelectedModelID] = useState<number | null>(null);
@@ -193,24 +194,37 @@ export function ModelsPage(props: ModelsPageProps) {
     await save("/admin/api/model-presets", { ids: presetIDs });
     setPresetOpen(false);
     setPresetIDs([]);
-    setLastPresetIndex(null);
+    setAnchorIndex(null);
+    setLastShiftRange([]);
   }
 
   function togglePreset(preset: ModelPreset, index: number, shiftKey: boolean) {
     if (existingModelNames.has(preset.name)) return;
 
-    setPresetIDs((current) => {
-      if (shiftKey && lastPresetIndex != null) {
-        const [start, end] = [lastPresetIndex, index].sort((a, b) => a - b);
-        const rangeIDs = props.modelPresets
-          .slice(start, end + 1)
-          .filter((item) => !existingModelNames.has(item.name))
-          .map((item) => item.id);
-        return Array.from(new Set([...current, ...rangeIDs]));
-      }
-      return current.includes(preset.id) ? current.filter((id) => id !== preset.id) : [...current, preset.id];
-    });
-    setLastPresetIndex(index);
+    if (shiftKey && anchorIndex !== null) {
+      const [start, end] = [anchorIndex, index].sort((a, b) => a - b);
+      const newRangeIDs = props.modelPresets
+        .slice(start, end + 1)
+        .filter((item) => !existingModelNames.has(item.name))
+        .map((item) => item.id);
+
+      setPresetIDs((current) => {
+        const next = current.filter((id) => !(lastShiftRange.includes(id) && !newRangeIDs.includes(id)));
+        newRangeIDs.forEach((id) => {
+          if (!next.includes(id)) {
+            next.push(id);
+          }
+        });
+        return next;
+      });
+      setLastShiftRange(newRangeIDs);
+    } else {
+      setPresetIDs((current) => {
+        return current.includes(preset.id) ? current.filter((id) => id !== preset.id) : [...current, preset.id];
+      });
+      setAnchorIndex(index);
+      setLastShiftRange([]);
+    }
   }
 
   async function submitRoute() {
@@ -315,7 +329,8 @@ export function ModelsPage(props: ModelsPageProps) {
             <div className="flex gap-2">
               <Button type="button" variant="outline" onClick={() => {
                 setPresetIDs([]);
-                setLastPresetIndex(null);
+                setAnchorIndex(null);
+                setLastShiftRange([]);
                 setPresetOpen(true);
               }}>
                 <Plus />{t("models.add_from_preset")}
@@ -410,7 +425,14 @@ export function ModelsPage(props: ModelsPageProps) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={presetOpen} onOpenChange={setPresetOpen}>
+      <Dialog open={presetOpen} onOpenChange={(open) => {
+        setPresetOpen(open);
+        if (!open) {
+          setPresetIDs([]);
+          setAnchorIndex(null);
+          setLastShiftRange([]);
+        }
+      }}>
         <DialogContent className="sm:max-w-4xl">
           <DialogHeader><DialogTitle>{t("models.add_from_preset")}</DialogTitle></DialogHeader>
           <div className="grid gap-4 py-4">
@@ -424,7 +446,7 @@ export function ModelsPage(props: ModelsPageProps) {
                     type="button"
                     disabled={exists}
                     onClick={(event) => togglePreset(preset, index, event.shiftKey)}
-                    className={`flex min-w-0 items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-50 ${selected ? "border-primary bg-primary/5" : "border-border bg-background"}`}
+                    className={`flex min-w-0 items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors enabled:hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-50 ${selected ? "border-primary bg-primary/5" : "border-border bg-background"}`}
                   >
                     <ModelPresetIcon preset={preset} />
                     <span className="grid min-w-0 flex-1 gap-0.5">

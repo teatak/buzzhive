@@ -900,7 +900,7 @@ func (s *Server) handleModelPresets(c *cart.Context) error {
 				return jsonError(c, http.StatusNotFound, "preset not found")
 			}
 			if existing[preset.Name] {
-				return jsonError(c, http.StatusConflict, "model already exists")
+				continue
 			}
 			model, err := s.store.CreateModel(preset.Model())
 			if err != nil {
