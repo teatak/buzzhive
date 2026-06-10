@@ -543,13 +543,12 @@ func (s *Server) handleUserAPIKeys(c *cart.Context, actor AppUser) error {
 }
 
 type providerWriteRequest struct {
-	ID                int64  `json:"id"`
-	Name              string `json:"name"`
-	Type              string `json:"type"`
-	PresetID          string `json:"preset_id"`
-	BaseURL           string `json:"base_url"`
-	SupportsResponses bool   `json:"supports_responses"`
-	Enabled           *bool  `json:"enabled"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	PresetID string `json:"preset_id"`
+	BaseURL  string `json:"base_url"`
+	Enabled  *bool  `json:"enabled"`
 }
 
 type providerKeyWriteRequest struct {
@@ -602,12 +601,11 @@ func (s *Server) handleProviders(c *cart.Context) error {
 			return jsonError(c, http.StatusBadRequest, err)
 		}
 		created, err := s.store.CreateProvider(ProviderRecord{
-			Name:              req.Name,
-			Type:              req.Type,
-			PresetID:          req.PresetID,
-			BaseURL:           req.BaseURL,
-			SupportsResponses: req.SupportsResponses,
-			Enabled:           boolWithDefault(req.Enabled, true),
+			Name:     req.Name,
+			Type:     req.Type,
+			PresetID: req.PresetID,
+			BaseURL:  req.BaseURL,
+			Enabled:  boolWithDefault(req.Enabled, true),
 		})
 		if err != nil {
 			return jsonError(c, http.StatusBadRequest, err)
@@ -635,7 +633,6 @@ func (s *Server) handleProviders(c *cart.Context) error {
 		if req.BaseURL != "" {
 			existing.BaseURL = req.BaseURL
 		}
-		existing.SupportsResponses = req.SupportsResponses
 		if req.Enabled != nil {
 			existing.Enabled = *req.Enabled
 		}

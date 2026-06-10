@@ -4,6 +4,7 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent } from "../../compone
 import { tNow } from "../../i18n/locale";
 import { addMinutes, isoMinute } from "../../lib/date";
 import type { UsagePoint } from "../../types/admin";
+import { formatCompactNumber } from "../../lib/utils";
 
 export function UsageChart(props: { series: UsagePoint[]; bucketMinutes?: number; onRangeSelect?: (from: string, to: string) => void }) {
   const [dragStart, setDragStart] = useState<number | null>(null);
@@ -123,7 +124,7 @@ export function UsageChart(props: { series: UsagePoint[]; bucketMinutes?: number
         <AreaChart key={chartStateKey} data={props.series} margin={{ left: 8, right: 8, top: 12, bottom: 0 }}>
           <CartesianGrid vertical={false} />
           <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={32} />
-          <YAxis tickLine={false} axisLine={false} width={28} allowDecimals={false} />
+          <YAxis tickLine={false} axisLine={false} width={44} allowDecimals={false} tickFormatter={formatCompactNumber} />
           <ChartTooltip
             isAnimationActive={false}
             animationDuration={0}
@@ -136,6 +137,14 @@ export function UsageChart(props: { series: UsagePoint[]; bucketMinutes?: number
                   const point = payload?.[0]?.payload as UsagePoint | undefined;
                   return point?.tooltip ?? point?.label ?? "";
                 }}
+                formatter={(value) => (
+                  <div className="flex flex-1 justify-between leading-none items-center gap-2">
+                    <span className="text-muted-foreground">{tNow("dashboard.requests")}</span>
+                    <span className="font-mono font-medium text-foreground tabular-nums">
+                      {formatCompactNumber(Number(value))}
+                    </span>
+                  </div>
+                )}
               />
             }
           />

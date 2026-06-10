@@ -49,27 +49,22 @@ type ProviderKeyForm = {
   labels: string;
 };
 
-const providerTypes = ["gemini", "openai", "anthropic", "openai-compatible"];
+const providerTypes = ["gemini", "openai", "openai-responses", "anthropic"];
 
 const defaultBaseURL: Record<string, string> = {
   gemini: "https://generativelanguage.googleapis.com",
   openai: "https://api.openai.com/v1",
+  "openai-responses": "https://api.openai.com/v1",
   anthropic: "https://api.anthropic.com",
-  "openai-compatible": "",
   mimo: "",
-};
-
-const defaultSupportsResponses: Record<string, boolean> = {
-  openai: true,
 };
 
 const providerDefaults: ProviderForm = {
   id: 0,
   name: "",
-  type: "openai-compatible",
+  type: "openai",
   preset_id: "",
   base_url: "",
-  supports_responses: false,
   enabled: true,
 };
 
@@ -157,7 +152,6 @@ export function ProvidersPage(props: {
       type,
       preset_id: type,
       base_url: defaultBaseURL[type] || "",
-      supports_responses: defaultSupportsResponses[type] ?? false,
     }));
   }
 
@@ -371,10 +365,9 @@ export function ProvidersPage(props: {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <ProviderStat label={t("providers.type")} value={providerTypeLabel(selectedProvider.type, t)} />
               <ProviderStat label={t("providers.preset")} value={selectedProvider.preset_id || "-"} mono />
-              <ProviderStat label={t("providers.responses")} value={selectedProvider.supports_responses ? t("common.active") : t("common.disabled")} />
               <ProviderStat label={t("nav.provider_keys")} value={String(selectedProviderKeys.length)} />
             </div>
             <div className="flex items-center gap-2">
@@ -493,7 +486,6 @@ export function ProvidersPage(props: {
                           </div>
                           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
                             <ProviderChip label={t("providers.preset")} value={provider.preset_id || "-"} mono />
-                            <ProviderChip label={t("providers.responses")} value={provider.supports_responses ? t("common.active") : t("common.disabled")} />
                             <ProviderChip label={t("nav.provider_keys")} value={String(keys.length)} />
                           </div>
                         </div>
@@ -516,10 +508,7 @@ export function ProvidersPage(props: {
         </div>
       )}
 
-      <Dialog open={open} onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
-        if (!nextOpen) setEditingProviderID(null);
-      }}>
+      <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-4xl">
           <DialogHeader><DialogTitle>{editingProviderID ? t("providers.edit_provider") : t("providers.new_provider")}</DialogTitle></DialogHeader>
           <div className="grid gap-4 py-4">
@@ -531,12 +520,6 @@ export function ProvidersPage(props: {
               onChange={changeType}
             />
             <FormTextField label={t("providers.base_url")} value={form.base_url} onChange={(base_url) => setForm({ ...form, base_url })} />
-            <FormStaticField label={t("providers.responses")}>
-              <label className="flex items-center gap-3 rounded-md border bg-muted/20 px-3 py-2 text-sm">
-                <Checkbox checked={form.supports_responses} onCheckedChange={(checked) => setForm({ ...form, supports_responses: checked === true })} />
-                <span>{t("providers.supports_responses")}</span>
-              </label>
-            </FormStaticField>
             {!editingProviderID && (
               <FormTextareaField label={t("provider_keys.optional_keys")} className="mono min-h-28" value={providerKeySecret} onChange={setProviderKeySecret} />
             )}
@@ -743,10 +726,10 @@ function providerTypeLabel(type: string, t: (key: string) => string) {
       return t("providers.type_gemini");
     case "openai":
       return t("providers.type_openai");
+    case "openai-responses":
+      return t("providers.type_openai_responses");
     case "anthropic":
       return t("providers.type_anthropic");
-    case "openai-compatible":
-      return t("providers.type_openai_compatible");
     default:
       return type;
   }

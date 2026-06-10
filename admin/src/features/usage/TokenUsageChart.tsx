@@ -2,6 +2,7 @@ import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { ChartContainer, ChartTooltip } from "../../components/ui/chart";
 import { tNow } from "../../i18n/locale";
 import type { UsagePoint } from "../../types/admin";
+import { formatCompactNumber } from "../../lib/utils";
 
 type TokenUsagePoint = UsagePoint & {
   input_uncached_tokens: number;
@@ -20,24 +21,24 @@ export function TokenUsageChart(props: { series: UsagePoint[] }) {
       config={{
         input_cached_tokens: { label: tNow("usage.input_cached_tokens"), color: "var(--chart-1)" },
         input_uncached_tokens: { label: tNow("usage.input_uncached_tokens"), color: "var(--chart-2)" },
-        reasoning_tokens: { label: tNow("usage.reasoning_tokens"), color: "oklch(0.56 0.2 32)" },
-        output_text_tokens: { label: tNow("usage.output_text_tokens"), color: "oklch(0.82 0.18 82)" },
+        reasoning_tokens: { label: tNow("usage.reasoning_tokens"), color: "var(--chart-3)" },
+        output_text_tokens: { label: tNow("usage.output_text_tokens"), color: "var(--chart-4)" },
       }}
     >
       <BarChart data={chartData} margin={{ left: 8, right: 8, top: 12, bottom: 0 }}>
         <CartesianGrid vertical={false} />
         <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={32} />
-        <YAxis tickLine={false} axisLine={false} width={44} allowDecimals={false} />
+        <YAxis tickLine={false} axisLine={false} width={44} allowDecimals={false} tickFormatter={formatCompactNumber} />
         <ChartTooltip
           isAnimationActive={false}
           animationDuration={0}
           wrapperStyle={{ transition: "none" }}
           content={<TokenUsageTooltip />}
         />
-        <Bar dataKey="input_cached_tokens" stackId="tokens" fill="var(--color-input_cached_tokens)" radius={[0, 0, 4, 4]} animationDuration={tokenBarAnimationDuration} />
-        <Bar dataKey="input_uncached_tokens" stackId="tokens" fill="var(--color-input_uncached_tokens)" animationDuration={tokenBarAnimationDuration} />
+        <Bar dataKey="output_text_tokens" stackId="tokens" fill="var(--color-output_text_tokens)" radius={[0, 0, 4, 4]} animationDuration={tokenBarAnimationDuration} />
         <Bar dataKey="reasoning_tokens" stackId="tokens" fill="var(--color-reasoning_tokens)" animationDuration={tokenBarAnimationDuration} />
-        <Bar dataKey="output_text_tokens" stackId="tokens" fill="var(--color-output_text_tokens)" radius={[4, 4, 0, 0]} animationDuration={tokenBarAnimationDuration} />
+        <Bar dataKey="input_uncached_tokens" stackId="tokens" fill="var(--color-input_uncached_tokens)" animationDuration={tokenBarAnimationDuration} />
+        <Bar dataKey="input_cached_tokens" stackId="tokens" fill="var(--color-input_cached_tokens)" radius={[4, 4, 0, 0]} animationDuration={tokenBarAnimationDuration} />
       </BarChart>
     </ChartContainer>
   );
@@ -79,7 +80,7 @@ function TokenUsageTooltip(props: {
           />
         );
       })}
-      <TooltipRow label={tNow("usage.total_tokens")} value={point.total_tokens} />
+      <TooltipRow label={tNow("usage.total_tokens")} value={point.total_tokens} color="oklch(0.65 0 0)" />
     </div>
   );
 }
@@ -90,7 +91,7 @@ function TooltipRow(props: { label: string; value: number; color?: string }) {
       {props.color ? <span className="h-2.5 w-2.5 shrink-0 rounded-[2px]" style={{ background: props.color }} /> : null}
       {!props.color ? <span /> : null}
       <span className="text-muted-foreground">{props.label}</span>
-      <span className="text-right font-mono font-medium text-foreground tabular-nums">{props.value.toLocaleString()}</span>
+      <span className="text-right font-mono font-medium text-foreground tabular-nums">{formatCompactNumber(props.value)}</span>
     </div>
   );
 }

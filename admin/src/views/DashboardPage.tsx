@@ -10,7 +10,7 @@ import { UsageChart } from "../features/usage/UsageChart";
 import { useLocale } from "../i18n/locale";
 import { displayMinute, naturalMonthRange } from "../lib/date";
 import { modelDisplayName } from "../lib/model";
-import { cn } from "../lib/utils";
+import { cn, formatCompactNumber } from "../lib/utils";
 import type { Model, UsagePoint, UsageSummary, UserAPIKey } from "../types/admin";
 
 type UsageFilter = {
@@ -240,19 +240,7 @@ function TokenUsageMetrics(props: { usage: UsageSummary | null }) {
   );
 }
 
-function formatCompactNumber(value: number) {
-  const abs = Math.abs(value);
-  const units = [
-    { value: 1_000_000_000, suffix: "B" },
-    { value: 1_000_000, suffix: "M" },
-    { value: 1_000, suffix: "K" },
-  ];
-  const unit = units.find((item) => abs >= item.value);
-  if (!unit) return value.toLocaleString();
-  const scaled = value / unit.value;
-  const digits = Math.abs(scaled) >= 100 ? 0 : 1;
-  return `${scaled.toFixed(digits).replace(/\.0$/, "")}${unit.suffix}`;
-}
+
 
 function isRange(filter: UsageFilter, range: { from: string; to: string }) {
   return filter.from === range.from && filter.to === range.to;

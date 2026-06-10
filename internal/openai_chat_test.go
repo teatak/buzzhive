@@ -2035,7 +2035,7 @@ func TestOpenAIChatPassesThroughOpenAICompatibleProvider(t *testing.T) {
 	now := storeNow()
 	providerID, err := store.insertReturningID(
 		`INSERT INTO providers (name, type, preset_id, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		"openrouter", "openai-compatible", "openrouter", upstream.URL+"/v1", now, now,
+		"openrouter", "openai", "openrouter", upstream.URL+"/v1", now, now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2163,8 +2163,8 @@ func TestOpenAIResponsesPassesThroughOpenAICompatibleProvider(t *testing.T) {
 
 	now := storeNow()
 	providerID, err := store.insertReturningID(
-		`INSERT INTO providers (name, type, preset_id, base_url, supports_responses, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 1, ?, ?)`,
-		"openrouter", "openai-compatible", "openrouter", upstream.URL+"/v1", now, now,
+		`INSERT INTO providers (name, type, preset_id, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
+		"openrouter", "openai-responses", "openrouter", upstream.URL+"/v1", now, now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2295,7 +2295,7 @@ func TestOpenAICompatibleStreamPassThroughFlushesChunks(t *testing.T) {
 	now := storeNow()
 	providerID, err := store.insertReturningID(
 		`INSERT INTO providers (name, type, preset_id, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		"openrouter", "openai-compatible", "openrouter", upstream.URL, now, now,
+		"openrouter", "openai", "openrouter", upstream.URL, now, now,
 	)
 	if err != nil {
 		t.Fatal(err)

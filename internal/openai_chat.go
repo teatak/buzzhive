@@ -634,12 +634,8 @@ func tokenUsageFromOpenAIStreamLine(line []byte) TokenUsage {
 }
 
 func isOpenAIProviderType(providerType string) bool {
-	switch strings.ToLower(providerType) {
-	case "openai", "openai-compatible":
-		return true
-	default:
-		return false
-	}
+	t := strings.ToLower(providerType)
+	return t == "openai" || t == "openai-responses"
 }
 
 func rewriteOpenAIModel(body []byte, publicModel, upstreamModel string) []byte {

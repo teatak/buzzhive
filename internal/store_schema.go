@@ -156,5 +156,6 @@ func (s *Store) schemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_usage_stats_hourly_key_bucket ON usage_stats_hourly(user_api_key_id, bucket_start)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_stats_daily_user_bucket ON usage_stats_daily(user_id, bucket_start)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_stats_daily_key_bucket ON usage_stats_daily(user_api_key_id, bucket_start)`,
+		`UPDATE providers SET type = 'openai' WHERE type = 'openai-compatible'`,
 	}
 }

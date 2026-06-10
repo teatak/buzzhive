@@ -40,7 +40,7 @@ func (s *Server) handleOpenAIResponses(w http.ResponseWriter, r *http.Request, b
 	}
 	supportedTargets := targets[:0]
 	for _, target := range targets {
-		if target.SupportsResponses && isOpenAIProviderType(target.ProviderType) {
+		if target.ProviderType == "openai-responses" {
 			supportedTargets = append(supportedTargets, target)
 		}
 	}

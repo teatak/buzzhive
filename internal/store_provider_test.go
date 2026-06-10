@@ -73,7 +73,7 @@ func TestDisableProviderKey(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	providerID, err := store.insertReturningID(
 		`INSERT INTO providers (name, type, preset_id, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		"openrouter", "openai-compatible", "openrouter", "https://openrouter.example.test/v1", now, now,
+		"openrouter", "openai", "openrouter", "https://openrouter.example.test/v1", now, now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestProviderManagementCRUD(t *testing.T) {
 
 	provider, err := store.CreateProvider(ProviderRecord{
 		Name:    "openrouter",
-		Type:    "openai-compatible",
+		Type:    "openai",
 		BaseURL: "https://openrouter.example.test/v1",
 		Enabled: true,
 	})

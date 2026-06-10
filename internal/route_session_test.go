@@ -69,7 +69,7 @@ func TestProviderAttemptLoopCapsAttemptsByMatchingKeyCount(t *testing.T) {
 	attempts := 0
 	srv := &Server{
 		providers: map[string]Provider{
-			providerOpenAICompatible: testProviderFunc(func(_ context.Context, _ ProviderRequest, _ APIKey) (*http.Response, error) {
+			providerOpenAI: testProviderFunc(func(_ context.Context, _ ProviderRequest, _ APIKey) (*http.Response, error) {
 				attempts++
 				return &http.Response{
 					StatusCode: http.StatusTooManyRequests,
@@ -80,7 +80,7 @@ func TestProviderAttemptLoopCapsAttemptsByMatchingKeyCount(t *testing.T) {
 		},
 		keyState: &KeyState{
 			keys: []APIKey{
-				{Name: "only", Key: "secret", ProviderName: providerOpenAICompatible},
+				{Name: "only", Key: "secret", ProviderName: providerOpenAI},
 			},
 			cooldown:     time.Minute,
 			rpdCooldown:  time.Hour,
@@ -92,7 +92,7 @@ func TestProviderAttemptLoopCapsAttemptsByMatchingKeyCount(t *testing.T) {
 	}
 	srv.cfg.Retry.MaxAttempts = 8
 
-	target := RouteTarget{ProviderName: providerOpenAICompatible, UpstreamModel: "gpt-oss"}
+	target := RouteTarget{ProviderName: providerOpenAI, UpstreamModel: "gpt-oss"}
 	result := srv.doProviderAttemptLoop(context.Background(), AuthToken{}, "public-model", target, ProviderRequest{})
 
 	if attempts != 1 || result.Attempts != 1 {

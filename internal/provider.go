@@ -15,7 +15,7 @@ import (
 const (
 	providerGemini           = "gemini"
 	providerOpenAI           = "openai"
-	providerOpenAICompatible = "openai-compatible"
+	providerOpenAIResponses  = "openai-responses"
 	providerAnthropic        = "anthropic"
 	providerOllama           = "ollama"
 )
@@ -87,7 +87,7 @@ func newProviderRegistry(records []ProviderRecord, fallbackGeminiBase *url.URL, 
 		switch strings.ToLower(record.Type) {
 		case providerGemini:
 			out[record.Name] = NewGeminiProvider(parsed, client)
-		case providerOpenAI, providerOpenAICompatible:
+		case providerOpenAI, providerOpenAIResponses:
 			out[record.Name] = NewOpenAIProvider(parsed, client)
 		}
 	}

@@ -82,15 +82,14 @@ type UsageQuery struct {
 }
 
 type ProviderRecord struct {
-	ID                int64  `json:"id"`
-	Name              string `json:"name"`
-	Type              string `json:"type"`
-	PresetID          string `json:"preset_id"`
-	BaseURL           string `json:"base_url"`
-	SupportsResponses bool   `json:"supports_responses"`
-	Enabled           bool   `json:"enabled"`
-	CreatedAt         string `json:"created_at,omitempty"`
-	UpdatedAt         string `json:"updated_at,omitempty"`
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	PresetID  string `json:"preset_id"`
+	BaseURL   string `json:"base_url"`
+	Enabled   bool   `json:"enabled"`
+	CreatedAt string `json:"created_at,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
 }
 
 type ProviderKey struct {
@@ -140,18 +139,17 @@ type ModelRoute struct {
 }
 
 type RouteTarget struct {
-	ID                int64
-	ModelID           int64
-	ModelName         string
-	SelectionPolicy   string
-	ProviderID        int64
-	ProviderName      string
-	ProviderType      string
-	SupportsResponses bool
-	UpstreamModel     string
-	QuotaFamily       string
-	Priority          int
-	Weight            int
+	ID              int64
+	ModelID         int64
+	ModelName       string
+	SelectionPolicy string
+	ProviderID      int64
+	ProviderName    string
+	ProviderType    string
+	UpstreamModel   string
+	QuotaFamily     string
+	Priority        int
+	Weight          int
 }
 
 type RouteSession struct {
