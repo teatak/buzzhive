@@ -543,12 +543,12 @@ func (s *Server) handleUserAPIKeys(c *cart.Context, actor AppUser) error {
 }
 
 type providerWriteRequest struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	PresetID string `json:"preset_id"`
-	BaseURL  string `json:"base_url"`
-	Enabled  *bool  `json:"enabled"`
+	ID        int64    `json:"id"`
+	Name      string   `json:"name"`
+	Protocols []string `json:"protocols"`
+	PresetID  string   `json:"preset_id"`
+	BaseURL   string   `json:"base_url"`
+	Enabled   *bool    `json:"enabled"`
 }
 
 type providerKeyWriteRequest struct {
@@ -581,7 +581,6 @@ type modelRouteWriteRequest struct {
 	ModelID       int64  `json:"model_id"`
 	ProviderID    int64  `json:"provider_id"`
 	UpstreamModel string `json:"upstream_model"`
-	QuotaFamily   string `json:"quota_family"`
 	Enabled       *bool  `json:"enabled"`
 	Priority      *int   `json:"priority"`
 	Weight        *int   `json:"weight"`
@@ -601,11 +600,11 @@ func (s *Server) handleProviders(c *cart.Context) error {
 			return jsonError(c, http.StatusBadRequest, err)
 		}
 		created, err := s.store.CreateProvider(ProviderRecord{
-			Name:     req.Name,
-			Type:     req.Type,
-			PresetID: req.PresetID,
-			BaseURL:  req.BaseURL,
-			Enabled:  boolWithDefault(req.Enabled, true),
+			Name:      req.Name,
+			Protocols: req.Protocols,
+			PresetID:  req.PresetID,
+			BaseURL:   req.BaseURL,
+			Enabled:   boolWithDefault(req.Enabled, true),
 		})
 		if err != nil {
 			return jsonError(c, http.StatusBadRequest, err)
@@ -626,8 +625,8 @@ func (s *Server) handleProviders(c *cart.Context) error {
 		if req.Name != "" {
 			existing.Name = req.Name
 		}
-		if req.Type != "" {
-			existing.Type = req.Type
+		if req.Protocols != nil {
+			existing.Protocols = req.Protocols
 		}
 		existing.PresetID = req.PresetID
 		if req.BaseURL != "" {
@@ -934,7 +933,6 @@ func (s *Server) handleModelRoutes(c *cart.Context) error {
 			ModelID:       req.ModelID,
 			ProviderID:    req.ProviderID,
 			UpstreamModel: req.UpstreamModel,
-			QuotaFamily:   req.QuotaFamily,
 			Enabled:       boolWithDefault(req.Enabled, true),
 			Priority:      intWithDefault(req.Priority, 0),
 			Weight:        intWithDefault(req.Weight, 1),
@@ -961,9 +959,7 @@ func (s *Server) handleModelRoutes(c *cart.Context) error {
 		if req.UpstreamModel != "" {
 			route.UpstreamModel = req.UpstreamModel
 		}
-		if req.QuotaFamily != "" {
-			route.QuotaFamily = req.QuotaFamily
-		}
+
 		if req.Enabled != nil {
 			route.Enabled = *req.Enabled
 		}

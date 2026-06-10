@@ -9,7 +9,7 @@ import (
 
 func (s *Store) Providers() ([]ProviderRecord, error) {
 	rows, err := s.query(`
-		SELECT id, name, type, preset_id, base_url, enabled, created_at, updated_at
+		SELECT id, name, preset_id, base_url, protocols, enabled, created_at, updated_at
 		FROM providers
 		ORDER BY name`)
 	if err != nil {
@@ -21,11 +21,13 @@ func (s *Store) Providers() ([]ProviderRecord, error) {
 	for rows.Next() {
 		var item ProviderRecord
 		var enabled int
+		var protocolsStr string
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.PresetID, &item.BaseURL, &enabled, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.PresetID, &item.BaseURL, &protocolsStr, &enabled, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		item.Enabled = enabled != 0
+		item.Protocols = splitProtocols(protocolsStr)
 		item.CreatedAt = formatStoreTime(createdAt)
 		item.UpdatedAt = formatStoreTime(updatedAt)
 		out = append(out, item)
@@ -36,27 +38,29 @@ func (s *Store) Providers() ([]ProviderRecord, error) {
 func (s *Store) Provider(id int64) (ProviderRecord, error) {
 	var item ProviderRecord
 	var enabled int
+	var protocolsStr string
 	var createdAt, updatedAt time.Time
 	err := s.queryRow(`
-		SELECT id, name, type, preset_id, base_url, enabled, created_at, updated_at
+		SELECT id, name, preset_id, base_url, protocols, enabled, created_at, updated_at
 		FROM providers
 		WHERE id = ?`,
 		id,
-	).Scan(&item.ID, &item.Name, &item.Type, &item.PresetID, &item.BaseURL, &enabled, &createdAt, &updatedAt)
+	).Scan(&item.ID, &item.Name, &item.PresetID, &item.BaseURL, &protocolsStr, &enabled, &createdAt, &updatedAt)
 	item.Enabled = enabled != 0
+	item.Protocols = splitProtocols(protocolsStr)
 	item.CreatedAt = formatStoreTime(createdAt)
 	item.UpdatedAt = formatStoreTime(updatedAt)
 	return item, err
 }
 
 func (s *Store) CreateProvider(provider ProviderRecord) (ProviderRecord, error) {
-	if provider.Name == "" || provider.Type == "" || provider.BaseURL == "" {
-		return ProviderRecord{}, errors.New("name, type and base_url are required")
+	if provider.Name == "" || provider.BaseURL == "" {
+		return ProviderRecord{}, errors.New("name and base_url are required")
 	}
 	now := storeNow()
 	id, err := s.insertReturningID(
-		`INSERT INTO providers (name, type, preset_id, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		provider.Name, provider.Type, provider.PresetID, provider.BaseURL, boolInt(provider.Enabled), now, now,
+		`INSERT INTO providers (name, preset_id, base_url, protocols, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		provider.Name, provider.PresetID, provider.BaseURL, strings.Join(provider.Protocols, ","), boolInt(provider.Enabled), now, now,
 	)
 	if err != nil {
 		return ProviderRecord{}, err
@@ -65,12 +69,12 @@ func (s *Store) CreateProvider(provider ProviderRecord) (ProviderRecord, error) 
 }
 
 func (s *Store) UpdateProvider(provider ProviderRecord) (ProviderRecord, error) {
-	if provider.ID == 0 || provider.Name == "" || provider.Type == "" || provider.BaseURL == "" {
-		return ProviderRecord{}, errors.New("id, name, type and base_url are required")
+	if provider.ID == 0 || provider.Name == "" || provider.BaseURL == "" {
+		return ProviderRecord{}, errors.New("id, name and base_url are required")
 	}
 	_, err := s.exec(
-		`UPDATE providers SET name = ?, type = ?, preset_id = ?, base_url = ?, enabled = ?, updated_at = ? WHERE id = ?`,
-		provider.Name, provider.Type, provider.PresetID, provider.BaseURL, boolInt(provider.Enabled), storeNow(), provider.ID,
+		`UPDATE providers SET name = ?, preset_id = ?, base_url = ?, protocols = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+		provider.Name, provider.PresetID, provider.BaseURL, strings.Join(provider.Protocols, ","), boolInt(provider.Enabled), storeNow(), provider.ID,
 	)
 	if err != nil {
 		return ProviderRecord{}, err
@@ -357,9 +361,7 @@ func (s *Store) ModelRoutes(modelID int64) ([]ModelRoute, error) {
 			mr.model_id,
 			mr.provider_id,
 			p.name,
-			p.type,
 			mr.upstream_model,
-			mr.quota_family,
 			mr.enabled,
 			mr.priority,
 			mr.weight
@@ -383,9 +385,7 @@ func (s *Store) ModelRoutes(modelID int64) ([]ModelRoute, error) {
 			&item.ModelID,
 			&item.ProviderID,
 			&item.ProviderName,
-			&item.ProviderType,
 			&item.UpstreamModel,
-			&item.QuotaFamily,
 			&enabled,
 			&item.Priority,
 			&item.Weight,
@@ -426,8 +426,8 @@ func (s *Store) CreateModelRoute(route ModelRoute) (ModelRoute, error) {
 	}
 	now := storeNow()
 	id, err := s.insertReturningID(
-		`INSERT INTO model_routes (model_id, provider_id, upstream_model, quota_family, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		route.ModelID, route.ProviderID, route.UpstreamModel, route.QuotaFamily, boolInt(route.Enabled), route.Priority, route.Weight, now, now,
+		`INSERT INTO model_routes (model_id, provider_id, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		route.ModelID, route.ProviderID, route.UpstreamModel, boolInt(route.Enabled), route.Priority, route.Weight, now, now,
 	)
 	if err != nil {
 		return ModelRoute{}, err
@@ -449,8 +449,8 @@ func (s *Store) UpdateModelRoute(route ModelRoute) (ModelRoute, error) {
 		route.Weight = 1
 	}
 	_, err := s.exec(
-		`UPDATE model_routes SET model_id = ?, provider_id = ?, upstream_model = ?, quota_family = ?, enabled = ?, priority = ?, weight = ?, updated_at = ? WHERE id = ?`,
-		route.ModelID, route.ProviderID, route.UpstreamModel, route.QuotaFamily, boolInt(route.Enabled), route.Priority, route.Weight, storeNow(), route.ID,
+		`UPDATE model_routes SET model_id = ?, provider_id = ?, upstream_model = ?, enabled = ?, priority = ?, weight = ?, updated_at = ? WHERE id = ?`,
+		route.ModelID, route.ProviderID, route.UpstreamModel, boolInt(route.Enabled), route.Priority, route.Weight, storeNow(), route.ID,
 	)
 	if err != nil {
 		return ModelRoute{}, err

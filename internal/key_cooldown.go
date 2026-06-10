@@ -48,10 +48,7 @@ func keyCooldownStorageKey(target RouteTarget, key APIKey) string {
 	if provider == "" {
 		provider = stringID(key.ProviderID, key.ProviderName)
 	}
-	model := target.QuotaFamily
-	if model == "" {
-		model = target.UpstreamModel
-	}
+	model := target.UpstreamModel
 	keyID := stringID(key.ProviderKeyID, key.Name)
 	if keyID == "" {
 		keyID = stringID(key.ID, key.Name)

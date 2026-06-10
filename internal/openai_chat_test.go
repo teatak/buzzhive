@@ -20,10 +20,10 @@ func createGeminiRouteTestStore(t *testing.T, baseURL, publicModel, upstreamMode
 
 	store := openTestStore(t)
 	provider, err := store.CreateProvider(ProviderRecord{
-		Name:    providerGemini,
-		Type:    providerGemini,
-		BaseURL: baseURL,
-		Enabled: true,
+		Name:      providerGemini,
+		Protocols: []string{providerGemini},
+		BaseURL:   baseURL,
+		Enabled:   true,
 	})
 	if err != nil {
 		store.Close()
@@ -1781,10 +1781,10 @@ func TestOpenAIChatUsesModelRouteUpstreamModel(t *testing.T) {
 	}
 	store := openTestStore(t)
 	provider, err := store.CreateProvider(ProviderRecord{
-		Name:    providerGemini,
-		Type:    providerGemini,
-		BaseURL: upstream.URL,
-		Enabled: true,
+		Name:      providerGemini,
+		Protocols: []string{providerGemini},
+		BaseURL:   upstream.URL,
+		Enabled:   true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1807,7 +1807,7 @@ func TestOpenAIChatUsesModelRouteUpstreamModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.exec(
-		`INSERT INTO model_routes (model_id, provider_id, upstream_model, quota_family, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, '', 1, 0, 1, ?, ?)`,
+		`INSERT INTO model_routes (model_id, provider_id, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, 1, 0, 1, ?, ?)`,
 		modelID, providerID, "gemini-upstream", now, now,
 	); err != nil {
 		t.Fatal(err)
@@ -2034,8 +2034,8 @@ func TestOpenAIChatPassesThroughOpenAICompatibleProvider(t *testing.T) {
 
 	now := storeNow()
 	providerID, err := store.insertReturningID(
-		`INSERT INTO providers (name, type, preset_id, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		"openrouter", "openai", "openrouter", upstream.URL+"/v1", now, now,
+		`INSERT INTO providers (name, preset_id, base_url, protocols, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
+		"openrouter", "openrouter", upstream.URL+"/v1", "openai", now, now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2054,7 +2054,7 @@ func TestOpenAIChatPassesThroughOpenAICompatibleProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.exec(
-		`INSERT INTO model_routes (model_id, provider_id, upstream_model, quota_family, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, '', 1, 0, 1, ?, ?)`,
+		`INSERT INTO model_routes (model_id, provider_id, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, 1, 0, 1, ?, ?)`,
 		modelID, providerID, "gpt-upstream", now, now,
 	); err != nil {
 		t.Fatal(err)
@@ -2163,8 +2163,8 @@ func TestOpenAIResponsesPassesThroughOpenAICompatibleProvider(t *testing.T) {
 
 	now := storeNow()
 	providerID, err := store.insertReturningID(
-		`INSERT INTO providers (name, type, preset_id, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		"openrouter", "openai-responses", "openrouter", upstream.URL+"/v1", now, now,
+		`INSERT INTO providers (name, preset_id, base_url, protocols, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
+		"openrouter", "openrouter", upstream.URL+"/v1", "openai-responses", now, now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2183,7 +2183,7 @@ func TestOpenAIResponsesPassesThroughOpenAICompatibleProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.exec(
-		`INSERT INTO model_routes (model_id, provider_id, upstream_model, quota_family, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, '', 1, 0, 1, ?, ?)`,
+		`INSERT INTO model_routes (model_id, provider_id, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, 1, 0, 1, ?, ?)`,
 		modelID, providerID, "openai/gpt-oss-120b", now, now,
 	); err != nil {
 		t.Fatal(err)
@@ -2294,8 +2294,8 @@ func TestOpenAICompatibleStreamPassThroughFlushesChunks(t *testing.T) {
 
 	now := storeNow()
 	providerID, err := store.insertReturningID(
-		`INSERT INTO providers (name, type, preset_id, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		"openrouter", "openai", "openrouter", upstream.URL, now, now,
+		`INSERT INTO providers (name, preset_id, base_url, protocols, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
+		"openrouter", "openrouter", upstream.URL, "openai", now, now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2314,7 +2314,7 @@ func TestOpenAICompatibleStreamPassThroughFlushesChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.exec(
-		`INSERT INTO model_routes (model_id, provider_id, upstream_model, quota_family, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, '', 1, 0, 1, ?, ?)`,
+		`INSERT INTO model_routes (model_id, provider_id, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, 1, 0, 1, ?, ?)`,
 		modelID, providerID, "gpt-upstream", now, now,
 	); err != nil {
 		t.Fatal(err)
@@ -2512,10 +2512,10 @@ func TestOpenAIChatSwitchesModelRoutesWhenRouteKeysCooling(t *testing.T) {
 	}
 	store := openTestStore(t)
 	provider, err := store.CreateProvider(ProviderRecord{
-		Name:    providerGemini,
-		Type:    providerGemini,
-		BaseURL: upstream.URL,
-		Enabled: true,
+		Name:      providerGemini,
+		Protocols: []string{providerGemini},
+		BaseURL:   upstream.URL,
+		Enabled:   true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2544,7 +2544,7 @@ func TestOpenAIChatSwitchesModelRoutesWhenRouteKeysCooling(t *testing.T) {
 		{"gemini-b"},
 	} {
 		if _, err := store.exec(
-			`INSERT INTO model_routes (model_id, provider_id, upstream_model, quota_family, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, '', 1, 0, 1, ?, ?)`,
+			`INSERT INTO model_routes (model_id, provider_id, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, 1, 0, 1, ?, ?)`,
 			modelID, providerID, target.model, now, now,
 		); err != nil {
 			t.Fatal(err)

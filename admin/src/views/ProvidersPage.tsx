@@ -49,20 +49,25 @@ type ProviderKeyForm = {
   labels: string;
 };
 
-const providerTypes = ["gemini", "openai", "openai-responses", "anthropic"];
+const supportedProtocols = ["openai", "openai-responses", "anthropic", "gemini"];
 
 const defaultBaseURL: Record<string, string> = {
   gemini: "https://generativelanguage.googleapis.com",
   openai: "https://api.openai.com/v1",
   "openai-responses": "https://api.openai.com/v1",
   anthropic: "https://api.anthropic.com",
-  mimo: "",
+  mimo: "https://api.xiaomimimo.com/v1",
+  deepseek: "https://api.deepseek.com",
+  qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  moonshot: "https://api.moonshot.cn/v1",
+  zhipu: "https://open.bigmodel.cn/api/paas/v4",
+  openrouter: "https://openrouter.ai/api/v1",
 };
 
 const providerDefaults: ProviderForm = {
   id: 0,
   name: "",
-  type: "openai",
+  protocols: ["openai"],
   preset_id: "",
   base_url: "",
   enabled: true,
@@ -146,14 +151,7 @@ export function ProvidersPage(props: {
     setKeyOpen(true);
   }
 
-  function changeType(type: string) {
-    setForm((current) => ({
-      ...current,
-      type,
-      preset_id: type,
-      base_url: defaultBaseURL[type] || "",
-    }));
-  }
+
 
   async function saveProvider() {
     setSaving(true);
@@ -342,13 +340,19 @@ export function ProvidersPage(props: {
                 <Button type="button" variant="ghost" size="icon" onClick={() => setSelectedProviderID(null)} aria-label={t("providers.back_to_providers")}>
                   <ArrowLeft />
                 </Button>
-                <ProviderPresetIcon presetID={selectedProvider.preset_id || selectedProvider.type} className="h-11 w-11" />
+                 <ProviderPresetIcon presetID={selectedProvider.preset_id} className="h-11 w-11" />
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <CardTitle>{selectedProvider.name}</CardTitle>
                     <StatusBadge enabled={selectedProvider.enabled} />
                   </div>
-                  <div className="mt-1 truncate text-sm text-muted-foreground">{providerTypeLabel(selectedProvider.type, t)}</div>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {selectedProvider.protocols?.map((proto) => (
+                      <Badge key={proto} variant="secondary" className="mono text-xs px-2 py-0.5">
+                        {providerProtocolLabel(proto, t)}
+                      </Badge>
+                    )) || "-"}
+                  </div>
                   <div className="mt-2 max-w-3xl text-sm text-muted-foreground [overflow-wrap:anywhere]">{selectedProvider.base_url || "-"}</div>
                 </div>
               </div>
@@ -365,8 +369,8 @@ export function ProvidersPage(props: {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <ProviderStat label={t("providers.type")} value={providerTypeLabel(selectedProvider.type, t)} />
+             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <ProviderStat label={t("providers.protocols")} value={selectedProvider.protocols?.join(", ") || "-"} />
               <ProviderStat label={t("providers.preset")} value={selectedProvider.preset_id || "-"} mono />
               <ProviderStat label={t("nav.provider_keys")} value={String(selectedProviderKeys.length)} />
             </div>
@@ -478,13 +482,14 @@ export function ProvidersPage(props: {
                   <CardContent className="px-4">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="flex min-w-0 items-start gap-3">
-                        <ProviderPresetIcon presetID={provider.preset_id || provider.type} className="h-10 w-10" />
+                         <ProviderPresetIcon presetID={provider.preset_id} className="h-10 w-10" />
                         <div className="min-w-0">
                           <div className="flex min-w-0 items-center gap-2">
                             <div className="truncate text-base font-semibold">{provider.name}</div>
                             <StatusBadge enabled={provider.enabled} />
                           </div>
                           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
+                            <ProviderChip label={t("providers.protocols")} value={provider.protocols?.join(", ") || "-"} mono />
                             <ProviderChip label={t("providers.preset")} value={provider.preset_id || "-"} mono />
                             <ProviderChip label={t("nav.provider_keys")} value={String(keys.length)} />
                           </div>
@@ -513,12 +518,26 @@ export function ProvidersPage(props: {
           <DialogHeader><DialogTitle>{editingProviderID ? t("providers.edit_provider") : t("providers.new_provider")}</DialogTitle></DialogHeader>
           <div className="grid gap-4 py-4">
             <FormTextField label={t("providers.name")} value={form.name} onChange={(name) => setForm({ ...form, name })} />
-            <FormSelectField
-              label={t("providers.type")}
-              value={form.type}
-              options={providerTypes.map((type) => ({ value: type, label: providerTypeLabel(type, t) }))}
-              onChange={changeType}
-            />
+            <FormStaticField label={t("providers.protocols")}>
+              <div className="flex flex-wrap gap-4 rounded-md border p-3 bg-muted/20">
+                {supportedProtocols.map((proto) => (
+                  <label key={proto} className="flex items-center gap-2 cursor-pointer text-sm font-medium">
+                    <Checkbox
+                      checked={form.protocols?.includes(proto)}
+                      onCheckedChange={(checked) => {
+                        setForm((current) => {
+                          const nextProtocols = checked
+                            ? [...(current.protocols || []), proto]
+                            : (current.protocols || []).filter((p) => p !== proto);
+                          return { ...current, protocols: nextProtocols };
+                        });
+                      }}
+                    />
+                    <span>{providerProtocolLabel(proto, t)}</span>
+                  </label>
+                ))}
+              </div>
+            </FormStaticField>
             <FormTextField label={t("providers.base_url")} value={form.base_url} onChange={(base_url) => setForm({ ...form, base_url })} />
             {!editingProviderID && (
               <FormTextareaField label={t("provider_keys.optional_keys")} className="mono min-h-28" value={providerKeySecret} onChange={setProviderKeySecret} />
@@ -533,7 +552,7 @@ export function ProvidersPage(props: {
               onChange={(value) => setForm({ ...form, enabled: value === "1" })}
             />
           </div>
-          <DialogFooter><Button disabled={saving || !form.name || !form.type} onClick={() => void saveProvider()}>{t("common.save")}</Button></DialogFooter>
+           <DialogFooter><Button disabled={saving || !form.name || !form.protocols?.length} onClick={() => void saveProvider()}>{t("common.save")}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -578,7 +597,7 @@ export function ProvidersPage(props: {
               <div className="rounded-md border p-3 text-sm">
                 <div className="flex items-center gap-2">
                   <strong>{providerPresetDisplayName(selectedPreset, t)}</strong>
-                  <Badge variant="secondary">{selectedPreset.type}</Badge>
+                  <Badge variant="outline">{selectedPreset.protocols?.join(", ")}</Badge>
                   {selectedPresetExists && <Badge variant="outline">{t("providers.already_exists")}</Badge>}
                 </div>
                 <div className="mt-2 text-muted-foreground">{selectedPreset.description}</div>
@@ -720,21 +739,20 @@ function providerPresetIcon(presetID: string): BrandIconComponent | null {
   }
 }
 
-function providerTypeLabel(type: string, t: (key: string) => string) {
-  switch (type) {
+function providerProtocolLabel(proto: string, t: (key: string) => string) {
+  switch (proto) {
     case "gemini":
-      return t("providers.type_gemini");
+      return t("providers.type_gemini") || "Gemini";
     case "openai":
-      return t("providers.type_openai");
+      return t("providers.type_openai") || "OpenAI";
     case "openai-responses":
-      return t("providers.type_openai_responses");
+      return t("providers.type_openai_responses") || "OpenAI Responses";
     case "anthropic":
-      return t("providers.type_anthropic");
+      return t("providers.type_anthropic") || "Anthropic";
     default:
-      return type;
+      return proto;
   }
 }
-
 function providerPresetDisplayName(preset: ProviderPreset, t: (key: string) => string) {
   const key = `providers.preset_${preset.id}`;
   const label = t(key);

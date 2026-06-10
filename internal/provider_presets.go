@@ -1,26 +1,26 @@
 package buzzhive
 
 type ProviderPreset struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	BaseURL     string `json:"base_url"`
-	Description string `json:"description"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Protocols   []string `json:"protocols"`
+	BaseURL     string   `json:"base_url"`
+	Description string   `json:"description"`
 }
 
 func providerPresets() []ProviderPreset {
 	return []ProviderPreset{
-		{ID: "gemini", Name: "Google Gemini", Type: providerGemini, BaseURL: "https://generativelanguage.googleapis.com", Description: "Google Gemini native API."},
-		{ID: "openai", Name: "OpenAI", Type: providerOpenAI, BaseURL: "https://api.openai.com/v1", Description: "OpenAI official API."},
-		{ID: "openai-responses", Name: "OpenAI Responses", Type: providerOpenAIResponses, BaseURL: "https://api.openai.com/v1", Description: "OpenAI official Responses API."},
-		{ID: "anthropic", Name: "Anthropic Claude", Type: providerAnthropic, BaseURL: "https://api.anthropic.com", Description: "Anthropic native Messages API."},
-		{ID: "mimo", Name: "Mimo", Type: providerOpenAI, BaseURL: "https://api.xiaomimimo.com/v1", Description: "Xiaomi Mimo standard OpenAI-compatible endpoint."},
-		{ID: "mimo-plan", Name: "Mimo Plan", Type: providerOpenAI, BaseURL: "https://token-plan-cn.xiaomimimo.com/v1", Description: "Xiaomi Mimo subscription endpoint."},
-		{ID: "deepseek", Name: "DeepSeek", Type: providerOpenAI, BaseURL: "https://api.deepseek.com", Description: "DeepSeek OpenAI-compatible endpoint."},
-		{ID: "qwen", Name: "Qwen", Type: providerOpenAI, BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", Description: "Alibaba Bailian Qwen OpenAI-compatible endpoint."},
-		{ID: "moonshot", Name: "Kimi", Type: providerOpenAI, BaseURL: "https://api.moonshot.cn/v1", Description: "Moonshot Kimi OpenAI-compatible endpoint."},
-		{ID: "zhipu", Name: "GLM", Type: providerOpenAI, BaseURL: "https://open.bigmodel.cn/api/paas/v4", Description: "Zhipu GLM OpenAI-compatible endpoint."},
-		{ID: "openrouter", Name: "OpenRouter", Type: providerOpenAI, BaseURL: "https://openrouter.ai/api/v1", Description: "OpenRouter OpenAI-compatible router."},
+		{ID: "gemini", Name: "Google Gemini", Protocols: []string{"gemini"}, BaseURL: "https://generativelanguage.googleapis.com", Description: "Google Gemini native API."},
+		{ID: "openai", Name: "OpenAI", Protocols: []string{"openai"}, BaseURL: "https://api.openai.com/v1", Description: "OpenAI official API."},
+		{ID: "openai-responses", Name: "OpenAI Responses", Protocols: []string{"openai-responses"}, BaseURL: "https://api.openai.com/v1", Description: "OpenAI official Responses API."},
+		{ID: "anthropic", Name: "Anthropic Claude", Protocols: []string{"anthropic"}, BaseURL: "https://api.anthropic.com", Description: "Anthropic native Messages API."},
+		{ID: "mimo", Name: "Mimo", Protocols: []string{"openai"}, BaseURL: "https://api.xiaomimimo.com/v1", Description: "Xiaomi Mimo standard OpenAI-compatible endpoint."},
+		{ID: "mimo-plan", Name: "Mimo Plan", Protocols: []string{"openai"}, BaseURL: "https://token-plan-cn.xiaomimimo.com/v1", Description: "Xiaomi Mimo subscription endpoint."},
+		{ID: "deepseek", Name: "DeepSeek", Protocols: []string{"openai"}, BaseURL: "https://api.deepseek.com", Description: "DeepSeek OpenAI-compatible endpoint."},
+		{ID: "qwen", Name: "Qwen", Protocols: []string{"openai"}, BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", Description: "Alibaba Bailian Qwen OpenAI-compatible endpoint."},
+		{ID: "moonshot", Name: "Kimi", Protocols: []string{"openai"}, BaseURL: "https://api.moonshot.cn/v1", Description: "Moonshot Kimi OpenAI-compatible endpoint."},
+		{ID: "zhipu", Name: "GLM", Protocols: []string{"openai"}, BaseURL: "https://open.bigmodel.cn/api/paas/v4", Description: "Zhipu GLM OpenAI-compatible endpoint."},
+		{ID: "openrouter", Name: "OpenRouter", Protocols: []string{"openai"}, BaseURL: "https://openrouter.ai/api/v1", Description: "OpenRouter OpenAI-compatible router."},
 	}
 }
 
@@ -35,10 +35,10 @@ func findProviderPreset(id string) (ProviderPreset, bool) {
 
 func (p ProviderPreset) Provider() ProviderRecord {
 	return ProviderRecord{
-		Name:     p.Name,
-		Type:     p.Type,
-		PresetID: p.ID,
-		BaseURL:  p.BaseURL,
-		Enabled:  true,
+		Name:      p.Name,
+		Protocols: p.Protocols,
+		PresetID:  p.ID,
+		BaseURL:   p.BaseURL,
+		Enabled:   true,
 	}
 }

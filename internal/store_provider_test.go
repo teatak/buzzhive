@@ -14,10 +14,10 @@ func TestProviderAPIKeysUseProviderTables(t *testing.T) {
 	store := openTestStore(t)
 
 	provider, err := store.CreateProvider(ProviderRecord{
-		Name:    providerGemini,
-		Type:    providerGemini,
-		BaseURL: "https://gemini.example.test",
-		Enabled: true,
+		Name:      providerGemini,
+		Protocols: []string{providerGemini},
+		BaseURL:   "https://gemini.example.test",
+		Enabled:   true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -72,8 +72,8 @@ func TestDisableProviderKey(t *testing.T) {
 
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	providerID, err := store.insertReturningID(
-		`INSERT INTO providers (name, type, preset_id, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		"openrouter", "openai", "openrouter", "https://openrouter.example.test/v1", now, now,
+		`INSERT INTO providers (name, preset_id, base_url, protocols, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
+		"openrouter", "openrouter", "https://openrouter.example.test/v1", "openai", now, now,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -109,10 +109,10 @@ func TestProviderManagementCRUD(t *testing.T) {
 	store := openTestStore(t)
 
 	provider, err := store.CreateProvider(ProviderRecord{
-		Name:    "openrouter",
-		Type:    "openai",
-		BaseURL: "https://openrouter.example.test/v1",
-		Enabled: true,
+		Name:      "openrouter",
+		Protocols: []string{"openai"},
+		BaseURL:   "https://openrouter.example.test/v1",
+		Enabled:   true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func TestAdminProviderRoutesCreateRuntimeProvider(t *testing.T) {
 	srv := newAdminRouteTestServer(t)
 	adminToken := createAdminRouteTestSession(t, srv, "admin", "admin")
 
-	body := bytes.NewBufferString(`{"name":"openai","type":"openai","base_url":"https://api.openai.example/v1","enabled":true}`)
+	body := bytes.NewBufferString(`{"name":"openai","protocols":["openai"],"base_url":"https://api.openai.example/v1","enabled":true}`)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/providers", body)
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	rr := httptest.NewRecorder()
@@ -252,7 +252,7 @@ func TestAdminProviderRoutesCreateRuntimeProvider(t *testing.T) {
 		t.Fatalf("runtime providers = %+v, want openai", srv.providers)
 	}
 
-	updateBody := bytes.NewBufferString(`{"id":` + strconv.FormatInt(provider.ID, 10) + `,"name":"openai","type":"openai","preset_id":"","base_url":"https://api.openai.example/v2","enabled":true}`)
+	updateBody := bytes.NewBufferString(`{"id":` + strconv.FormatInt(provider.ID, 10) + `,"name":"openai","protocols":["openai"],"preset_id":"","base_url":"https://api.openai.example/v2","enabled":true}`)
 	req = httptest.NewRequest(http.MethodPut, "/admin/api/providers", updateBody)
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	rr = httptest.NewRecorder()

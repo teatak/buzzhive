@@ -84,10 +84,19 @@ func newProviderRegistry(records []ProviderRecord, fallbackGeminiBase *url.URL, 
 		if err != nil {
 			return nil, err
 		}
-		switch strings.ToLower(record.Type) {
-		case providerGemini:
+		hasGemini := false
+		hasOpenAI := false
+		for _, proto := range record.Protocols {
+			switch strings.ToLower(proto) {
+			case providerGemini:
+				hasGemini = true
+			case providerOpenAI, providerOpenAIResponses:
+				hasOpenAI = true
+			}
+		}
+		if hasGemini {
 			out[record.Name] = NewGeminiProvider(parsed, client)
-		case providerOpenAI, providerOpenAIResponses:
+		} else if hasOpenAI {
 			out[record.Name] = NewOpenAIProvider(parsed, client)
 		}
 	}

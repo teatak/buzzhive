@@ -7,7 +7,7 @@ export type UserAPIKey = { id: number; user_id: number; name: string; token: str
 export type ProviderRecord = {
   id: number;
   name: string;
-  type: string;
+  protocols: string[];
   preset_id: string;
   base_url: string;
   enabled: boolean;
@@ -16,7 +16,7 @@ export type ProviderRecord = {
 export type ProviderPreset = {
   id: string;
   name: string;
-  type: string;
+  protocols: string[];
   base_url: string;
   description: string;
 };
@@ -70,10 +70,8 @@ export type ModelRoute = {
   model_id: number;
   provider_id: number;
   provider_name?: string;
-  provider_type?: string;
   upstream_model: string;
   body_override?: string;
-  quota_family: string;
   enabled: boolean;
   priority: number;
   weight: number;

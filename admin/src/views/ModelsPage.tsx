@@ -89,7 +89,6 @@ const routeDefaults = {
   model_id: 0,
   provider_id: 0,
   upstream_model: "",
-  quota_family: "",
   enabled: true,
   priority: 0,
   weight: 1,
@@ -180,7 +179,6 @@ export function ModelsPage(props: ModelsPageProps) {
       model_id: modelID,
       provider_id: providerID,
       upstream_model: upstreamModel,
-      quota_family: "",
     });
     setRouteOpen(true);
   }
@@ -277,7 +275,6 @@ export function ModelsPage(props: ModelsPageProps) {
                     <TableRow>
                       <TableHead>{t("models.provider")}</TableHead>
                       <TableHead>{t("models.upstream_model")}</TableHead>
-                      <TableHead>{t("models.quota_family")}</TableHead>
                       <TableHead className="right">{t("models.priority")}</TableHead>
                       <TableHead className="right">{t("models.weight")}</TableHead>
                       <TableHead>{t("common.status")}</TableHead>
@@ -289,7 +286,6 @@ export function ModelsPage(props: ModelsPageProps) {
                       <TableRow key={route.id}>
                         <TableCell className="mono">{route.provider_name ?? providerName.get(route.provider_id) ?? route.provider_id}</TableCell>
                         <TableCell className="mono">{route.upstream_model}</TableCell>
-                        <TableCell className="mono">{route.quota_family || "-"}</TableCell>
                         <TableCell className="right mono">{route.priority}</TableCell>
                         <TableCell className="right mono">{route.weight}</TableCell>
                         <TableCell><StatusBadge enabled={route.enabled} /></TableCell>
@@ -500,14 +496,6 @@ export function ModelsPage(props: ModelsPageProps) {
                 ...routeForm,
                 upstream_model,
               })}
-            />
-            <FormTextField
-              label={t("models.quota_family")}
-              tip={t("models.tip_quota_family")}
-              value={routeForm.quota_family}
-              onChange={(quota_family) => {
-                setRouteForm({ ...routeForm, quota_family });
-              }}
             />
             <FormNumberField label={t("models.priority")} tip={t("models.tip_priority")} value={routeForm.priority} onChange={(priority) => setRouteForm({ ...routeForm, priority })} />
             <FormNumberField label={t("models.weight")} tip={t("models.tip_weight")} value={routeForm.weight} onChange={(weight) => setRouteForm({ ...routeForm, weight })} />

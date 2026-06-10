@@ -34,15 +34,18 @@ func (s *Store) schemaStatements() []string {
 		`CREATE TABLE IF NOT EXISTS providers (
 			id BIGSERIAL PRIMARY KEY,
 			name TEXT NOT NULL UNIQUE,
-			type TEXT NOT NULL,
 			preset_id TEXT NOT NULL DEFAULT '',
 			base_url TEXT NOT NULL,
+			protocols TEXT NOT NULL DEFAULT '',
 			supports_responses INTEGER NOT NULL DEFAULT 0,
 			enabled INTEGER NOT NULL DEFAULT 1,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
+		`ALTER TABLE providers DROP COLUMN IF EXISTS type`,
+		`ALTER TABLE providers DROP COLUMN IF EXISTS vendor`,
 		`ALTER TABLE providers ADD COLUMN IF NOT EXISTS supports_responses INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE providers ADD COLUMN IF NOT EXISTS protocols TEXT NOT NULL DEFAULT ''`,
 		`CREATE TABLE IF NOT EXISTS provider_keys (
 			id BIGSERIAL PRIMARY KEY,
 			provider_id BIGINT NOT NULL,
@@ -63,6 +66,7 @@ func (s *Store) schemaStatements() []string {
 			UNIQUE(provider_id, name),
 			FOREIGN KEY (provider_id) REFERENCES providers(id)
 		)`,
+		`ALTER TABLE provider_keys DROP COLUMN IF EXISTS provider_account_id`,
 		`CREATE TABLE IF NOT EXISTS models (
 			id BIGSERIAL PRIMARY KEY,
 			name TEXT NOT NULL UNIQUE,
@@ -82,7 +86,6 @@ func (s *Store) schemaStatements() []string {
 			model_id BIGINT NOT NULL,
 			provider_id BIGINT NOT NULL,
 			upstream_model TEXT NOT NULL,
-			quota_family TEXT NOT NULL DEFAULT '',
 			enabled INTEGER NOT NULL DEFAULT 1,
 			priority INTEGER NOT NULL DEFAULT 0,
 			weight INTEGER NOT NULL DEFAULT 1,
@@ -91,6 +94,7 @@ func (s *Store) schemaStatements() []string {
 			FOREIGN KEY (model_id) REFERENCES models(id),
 			FOREIGN KEY (provider_id) REFERENCES providers(id)
 		)`,
+		`ALTER TABLE model_routes DROP COLUMN IF EXISTS quota_family`,
 		`CREATE TABLE IF NOT EXISTS usage_logs (
 			id BIGSERIAL PRIMARY KEY,
 			user_id BIGINT NOT NULL DEFAULT 0,
@@ -156,6 +160,8 @@ func (s *Store) schemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_usage_stats_hourly_key_bucket ON usage_stats_hourly(user_api_key_id, bucket_start)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_stats_daily_user_bucket ON usage_stats_daily(user_id, bucket_start)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_stats_daily_key_bucket ON usage_stats_daily(user_api_key_id, bucket_start)`,
-		`UPDATE providers SET type = 'openai' WHERE type = 'openai-compatible'`,
+		`UPDATE providers SET protocols = 'openai' WHERE (protocols = '' OR protocols IS NULL) AND preset_id IN ('openai', 'openai-responses', 'mimo', 'mimo-plan', 'deepseek', 'qwen', 'moonshot', 'zhipu', 'openrouter')`,
+		`UPDATE providers SET protocols = 'anthropic' WHERE (protocols = '' OR protocols IS NULL) AND preset_id = 'anthropic'`,
+		`UPDATE providers SET protocols = 'gemini' WHERE (protocols = '' OR protocols IS NULL) AND preset_id = 'gemini'`,
 	}
 }
