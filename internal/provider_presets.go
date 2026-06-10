@@ -11,8 +11,7 @@ type ProviderPreset struct {
 func providerPresets() []ProviderPreset {
 	return []ProviderPreset{
 		{ID: "gemini", Name: "Google Gemini", Protocols: []string{"gemini"}, BaseURL: "https://generativelanguage.googleapis.com", Description: "Google Gemini native API."},
-		{ID: "openai", Name: "OpenAI", Protocols: []string{"openai"}, BaseURL: "https://api.openai.com/v1", Description: "OpenAI official API."},
-		{ID: "openai-responses", Name: "OpenAI Responses", Protocols: []string{"openai-responses"}, BaseURL: "https://api.openai.com/v1", Description: "OpenAI official Responses API."},
+		{ID: "openai", Name: "OpenAI", Protocols: []string{"openai", "openai-responses"}, BaseURL: "https://api.openai.com/v1", Description: "OpenAI official API."},
 		{ID: "anthropic", Name: "Anthropic Claude", Protocols: []string{"anthropic"}, BaseURL: "https://api.anthropic.com", Description: "Anthropic native Messages API."},
 		{ID: "mimo", Name: "Mimo", Protocols: []string{"openai"}, BaseURL: "https://api.xiaomimimo.com/v1", Description: "Xiaomi Mimo standard OpenAI-compatible endpoint."},
 		{ID: "mimo-plan", Name: "Mimo Plan", Protocols: []string{"openai"}, BaseURL: "https://token-plan-cn.xiaomimimo.com/v1", Description: "Xiaomi Mimo subscription endpoint."},
