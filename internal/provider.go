@@ -86,18 +86,23 @@ func newProviderRegistry(records []ProviderRecord, fallbackGeminiBase *url.URL, 
 		}
 		hasGemini := false
 		hasOpenAI := false
+		hasAnthropic := false
 		for _, proto := range record.Protocols {
 			switch strings.ToLower(proto) {
 			case providerGemini:
 				hasGemini = true
 			case providerOpenAI, providerOpenAIResponses:
 				hasOpenAI = true
+			case providerAnthropic:
+				hasAnthropic = true
 			}
 		}
 		if hasGemini {
 			out[record.Name] = NewGeminiProvider(parsed, client)
 		} else if hasOpenAI {
 			out[record.Name] = NewOpenAIProvider(parsed, client)
+		} else if hasAnthropic {
+			out[record.Name] = NewAnthropicProvider(parsed, client)
 		}
 	}
 	if out[providerGemini] == nil {
@@ -261,6 +266,50 @@ func (p OpenAIProvider) Forward(ctx context.Context, req ProviderRequest, key AP
 	httpReq.Header.Set("Accept-Encoding", "identity")
 	httpReq.Header.Del("x-goog-api-key")
 	httpReq.Header.Set("Authorization", "Bearer "+key.Key)
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+type AnthropicProvider struct {
+	baseURL *url.URL
+	client  *http.Client
+}
+
+func NewAnthropicProvider(baseURL *url.URL, client *http.Client) AnthropicProvider {
+	return AnthropicProvider{baseURL: baseURL, client: client}
+}
+
+func (p AnthropicProvider) Forward(ctx context.Context, req ProviderRequest, key APIKey) (*http.Response, error) {
+	upstream := *p.baseURL
+	upstream.Path = providerRequestPath(upstream.Path, req.Path)
+	upstream.RawQuery = req.RawQuery
+	q := upstream.Query()
+	q.Del("key")
+	upstream.RawQuery = q.Encode()
+
+	method := req.Method
+	if method == "" {
+		method = http.MethodPost
+	}
+	providerCtx, cancel := context.WithCancel(ctx)
+	httpReq, err := http.NewRequestWithContext(providerCtx, method, upstream.String(), bytes.NewReader(req.Body))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	httpReq.Header = cleanHeaders(req.Headers)
+	httpReq.Header.Del("Authorization")
+	httpReq.Header.Set("Accept-Encoding", "identity")
+	httpReq.Header.Del("x-goog-api-key")
+	httpReq.Header.Set("x-api-key", key.Key)
+	if httpReq.Header.Get("anthropic-version") == "" {
+		httpReq.Header.Set("anthropic-version", "2023-06-01")
+	}
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
 		cancel()

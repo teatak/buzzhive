@@ -155,6 +155,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			s.handleOpenAIChatCompletions(w, r, body, user)
+		case "/v1/messages", "/v1/complete":
+			body, ok := readRequestBody(w, r)
+			if !ok {
+				return
+			}
+			s.handleAnthropicPassthrough(w, r, body, user)
 		case "/v1/responses":
 			body, ok := readRequestBody(w, r)
 			if !ok {

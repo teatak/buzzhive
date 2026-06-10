@@ -225,7 +225,7 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 	}
 	target := targets[0]
 	if isOpenAIProviderType(target.ProviderType) {
-		s.proxyOpenAIRaw(w, r, body, user, req.Model, targets)
+		s.proxyRaw(w, r, body, user, req.Model, targets)
 		return
 	}
 
@@ -474,7 +474,7 @@ func (s *Server) proxyOpenAIChat(w http.ResponseWriter, r *http.Request, body []
 	s.recordProviderResultUsage(user, model, result, http.StatusOK, usage)
 }
 
-func (s *Server) proxyOpenAIRaw(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken, model string, targets []RouteTarget) {
+func (s *Server) proxyRaw(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken, model string, targets []RouteTarget) {
 	reqDiag := openAIDiagnosticRequestFromBody(body)
 	result := s.doProviderTargetLoop(r.Context(), user, model, targets, func(target RouteTarget) ProviderRequest {
 		return ProviderRequest{
