@@ -13,11 +13,11 @@ import (
 )
 
 const (
-	providerGemini           = "gemini"
-	providerOpenAI           = "openai"
-	providerOpenAIResponses  = "openai-responses"
-	providerAnthropic        = "anthropic"
-	providerOllama           = "ollama"
+	providerGemini          = "gemini"
+	providerOpenAI          = "openai"
+	providerOpenAIResponses = "openai-responses"
+	providerAnthropic       = "anthropic"
+	providerOllama          = "ollama"
 )
 
 var errModelRouteNotFound = errors.New("model route not found")
@@ -72,43 +72,47 @@ func NewOpenAIProvider(baseURL *url.URL, client *http.Client) OpenAIProvider {
 func newProviderRegistry(records []ProviderRecord, fallbackGeminiBase *url.URL, client *http.Client) (map[string]Provider, error) {
 	out := make(map[string]Provider)
 	if len(records) == 0 {
-		out[providerGemini] = NewGeminiProvider(fallbackGeminiBase, client)
+		out[providerRuntimeKey(providerGemini, providerGemini)] = NewGeminiProvider(fallbackGeminiBase, client)
 		return out, nil
 	}
 	for _, record := range records {
-		baseURL := strings.TrimSpace(record.BaseURL)
-		if baseURL == "" && record.Name == providerGemini {
-			baseURL = fallbackGeminiBase.String()
-		}
-		parsed, err := url.Parse(baseURL)
-		if err != nil {
-			return nil, err
-		}
-		hasGemini := false
-		hasOpenAI := false
-		hasAnthropic := false
-		for _, proto := range record.Protocols {
-			switch strings.ToLower(proto) {
+		for _, endpoint := range record.Endpoints {
+			if !endpoint.Enabled {
+				continue
+			}
+			proto := strings.ToLower(strings.TrimSpace(endpoint.Protocol))
+			baseURL := strings.TrimSpace(endpoint.BaseURL)
+			if baseURL == "" && record.Name == providerGemini && proto == providerGemini {
+				baseURL = fallbackGeminiBase.String()
+			}
+			if proto == "" || baseURL == "" {
+				continue
+			}
+			parsed, err := url.Parse(baseURL)
+			if err != nil {
+				return nil, err
+			}
+			switch proto {
 			case providerGemini:
-				hasGemini = true
+				out[providerRuntimeKey(record.Name, proto)] = NewGeminiProvider(parsed, client)
 			case providerOpenAI, providerOpenAIResponses:
-				hasOpenAI = true
+				out[providerRuntimeKey(record.Name, proto)] = NewOpenAIProvider(parsed, client)
 			case providerAnthropic:
-				hasAnthropic = true
+				out[providerRuntimeKey(record.Name, proto)] = NewAnthropicProvider(parsed, client)
 			}
 		}
-		if hasGemini {
-			out[record.Name] = NewGeminiProvider(parsed, client)
-		} else if hasOpenAI {
-			out[record.Name] = NewOpenAIProvider(parsed, client)
-		} else if hasAnthropic {
-			out[record.Name] = NewAnthropicProvider(parsed, client)
-		}
 	}
-	if out[providerGemini] == nil {
-		out[providerGemini] = NewGeminiProvider(fallbackGeminiBase, client)
+	if out[providerRuntimeKey(providerGemini, providerGemini)] == nil {
+		out[providerRuntimeKey(providerGemini, providerGemini)] = NewGeminiProvider(fallbackGeminiBase, client)
 	}
 	return out, nil
+}
+
+func providerRuntimeKey(providerName string, protocol string) string {
+	if protocol == "" {
+		return providerName
+	}
+	return providerName + ":" + protocol
 }
 
 func (s *Server) resolveRouteTarget(publicModel string) (RouteTarget, error) {
@@ -187,6 +191,16 @@ func expandWeightedTargets(targets []RouteTarget) []RouteTarget {
 			weight = 100
 		}
 		for i := 0; i < weight; i++ {
+			out = append(out, target)
+		}
+	}
+	return out
+}
+
+func routeTargetsByProtocol(targets []RouteTarget, protocol string) []RouteTarget {
+	out := targets[:0]
+	for _, target := range targets {
+		if target.ProviderType == protocol {
 			out = append(out, target)
 		}
 	}
@@ -363,7 +377,10 @@ func (s *Server) doProviderAttemptLoop(ctx context.Context, user AuthToken, mode
 		req.Model = target.UpstreamModel
 	}
 	s.runtimeMu.Lock()
-	provider := s.providers[req.ProviderName]
+	provider := s.providers[providerRuntimeKey(req.ProviderName, target.ProviderType)]
+	if provider == nil {
+		provider = s.providers[req.ProviderName]
+	}
 	s.runtimeMu.Unlock()
 	if provider == nil {
 		return ProviderAttemptResult{

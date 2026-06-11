@@ -13,7 +13,6 @@ func (s *Store) ProviderAPIKeys(providerName string) ([]APIKey, error) {
 			pk.id,
 			pk.provider_id,
 			p.name,
-			p.protocols,
 			pk.id,
 			pk.name,
 			pk.secret,
@@ -39,12 +38,10 @@ func (s *Store) ProviderAPIKeys(providerName string) ([]APIKey, error) {
 		var key APIKey
 		var enabled int
 		var disabledAt sql.NullTime
-		var protocolsStr string
 		if err := rows.Scan(
 			&key.ProviderKeyID,
 			&key.ProviderID,
 			&key.ProviderName,
-			&protocolsStr,
 			&key.ID,
 			&key.Name,
 			&key.Key,
@@ -57,22 +54,7 @@ func (s *Store) ProviderAPIKeys(providerName string) ([]APIKey, error) {
 		); err != nil {
 			return nil, err
 		}
-		
-		protos := splitProtocols(protocolsStr)
-		hasOpenAI := false
-		for _, proto := range protos {
-			if proto == providerOpenAI || proto == providerOpenAIResponses {
-				hasOpenAI = true
-				key.ProviderType = proto
-				break
-			}
-		}
-		if !hasOpenAI && len(protos) > 0 {
-			key.ProviderType = protos[0]
-		} else if len(protos) == 0 {
-			key.ProviderType = ""
-		}
-		
+
 		key.Enabled = enabled != 0
 		key.DisabledAt = formatNullStoreTime(disabledAt)
 		out = append(out, key)
@@ -82,7 +64,7 @@ func (s *Store) ProviderAPIKeys(providerName string) ([]APIKey, error) {
 
 func (s *Store) EnabledProviders() ([]ProviderRecord, error) {
 	rows, err := s.query(`
-		SELECT id, name, preset_id, base_url, protocols, enabled, created_at, updated_at
+		SELECT id, name, preset_id, enabled, created_at, updated_at
 		FROM providers
 		WHERE enabled = 1
 		ORDER BY name`)
@@ -95,34 +77,97 @@ func (s *Store) EnabledProviders() ([]ProviderRecord, error) {
 	for rows.Next() {
 		var item ProviderRecord
 		var enabled int
-		var protocolsStr string
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&item.ID, &item.Name, &item.PresetID, &item.BaseURL, &protocolsStr, &enabled, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.PresetID, &enabled, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		item.Enabled = enabled != 0
-		item.Protocols = splitProtocols(protocolsStr)
 		item.CreatedAt = formatStoreTime(createdAt)
 		item.UpdatedAt = formatStoreTime(updatedAt)
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return s.hydrateProviderEndpoints(out)
 }
 
-func splitProtocols(s string) []string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
+func normalizeProviderEndpoints(provider ProviderRecord) ([]ProviderEndpoint, error) {
+	out := make([]ProviderEndpoint, 0, len(provider.Endpoints))
+	seen := make(map[string]bool)
+	for _, endpoint := range provider.Endpoints {
+		endpoint.Protocol = strings.ToLower(strings.TrimSpace(endpoint.Protocol))
+		endpoint.BaseURL = strings.TrimSpace(endpoint.BaseURL)
+		if endpoint.Protocol == "" || endpoint.BaseURL == "" {
+			continue
+		}
+		if seen[endpoint.Protocol] {
+			return nil, errors.New("duplicate provider endpoint protocol")
+		}
+		seen[endpoint.Protocol] = true
+		endpoint.Enabled = true
+		out = append(out, endpoint)
 	}
-	parts := strings.Split(s, ",")
-	var out []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
+	if len(out) == 0 {
+		return nil, errors.New("at least one provider endpoint is required")
+	}
+	return out, nil
+}
+
+func (s *Store) hydrateProviderEndpoints(providers []ProviderRecord) ([]ProviderRecord, error) {
+	if len(providers) == 0 {
+		return providers, nil
+	}
+	ids := make([]string, len(providers))
+	args := make([]any, len(providers))
+	indexByID := make(map[int64]int, len(providers))
+	for i, provider := range providers {
+		ids[i] = "?"
+		args[i] = provider.ID
+		indexByID[provider.ID] = i
+	}
+	rows, err := s.query(`
+		SELECT id, provider_id, protocol, base_url, enabled
+		FROM provider_endpoints
+		WHERE provider_id IN (`+strings.Join(ids, ",")+`)
+		ORDER BY provider_id, id`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var endpoint ProviderEndpoint
+		var enabled int
+		if err := rows.Scan(&endpoint.ID, &endpoint.ProviderID, &endpoint.Protocol, &endpoint.BaseURL, &enabled); err != nil {
+			return nil, err
+		}
+		endpoint.Enabled = enabled != 0
+		if index, ok := indexByID[endpoint.ProviderID]; ok {
+			providers[index].Endpoints = append(providers[index].Endpoints, endpoint)
 		}
 	}
-	return out
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return providers, nil
+}
+
+func (s *Store) replaceProviderEndpoints(providerID int64, endpoints []ProviderEndpoint) error {
+	if _, err := s.exec(`DELETE FROM provider_endpoints WHERE provider_id = ?`, providerID); err != nil {
+		return err
+	}
+	now := storeNow()
+	for _, endpoint := range endpoints {
+		if _, err := s.exec(
+			`INSERT INTO provider_endpoints (provider_id, protocol, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			providerID, endpoint.Protocol, endpoint.BaseURL, boolInt(endpoint.Enabled), now, now,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) RuntimeProviderAPIKeys() ([]APIKey, error) {
@@ -131,7 +176,6 @@ func (s *Store) RuntimeProviderAPIKeys() ([]APIKey, error) {
 			pk.id,
 			pk.provider_id,
 			p.name,
-			p.protocols,
 			pk.id,
 			pk.name,
 			pk.secret,
@@ -155,12 +199,10 @@ func (s *Store) RuntimeProviderAPIKeys() ([]APIKey, error) {
 		var key APIKey
 		var enabled int
 		var disabledAt sql.NullTime
-		var protocolsStr string
 		if err := rows.Scan(
 			&key.ProviderKeyID,
 			&key.ProviderID,
 			&key.ProviderName,
-			&protocolsStr,
 			&key.ID,
 			&key.Name,
 			&key.Key,
@@ -173,22 +215,7 @@ func (s *Store) RuntimeProviderAPIKeys() ([]APIKey, error) {
 		); err != nil {
 			return nil, err
 		}
-		
-		protos := splitProtocols(protocolsStr)
-		hasOpenAI := false
-		for _, proto := range protos {
-			if proto == providerOpenAI || proto == providerOpenAIResponses {
-				hasOpenAI = true
-				key.ProviderType = proto
-				break
-			}
-		}
-		if !hasOpenAI && len(protos) > 0 {
-			key.ProviderType = protos[0]
-		} else if len(protos) == 0 {
-			key.ProviderType = ""
-		}
-		
+
 		key.Enabled = enabled != 0
 		key.DisabledAt = formatNullStoreTime(disabledAt)
 		out = append(out, key)
@@ -214,17 +241,20 @@ func (s *Store) ResolveModelRoutes(publicModel string) ([]RouteTarget, bool, err
 			m.selection_policy,
 			p.id,
 			p.name,
-			p.protocols,
+			pe.id,
+			pe.protocol,
 			mr.upstream_model,
 			mr.priority,
 			mr.weight
 		FROM models m
 		JOIN model_routes mr ON mr.model_id = m.id
 		JOIN providers p ON p.id = mr.provider_id
+		JOIN provider_endpoints pe ON pe.provider_id = p.id
 		WHERE m.name = ?
 			AND m.enabled = 1
 			AND mr.enabled = 1
 			AND p.enabled = 1
+			AND pe.enabled = 1
 		ORDER BY mr.priority DESC, mr.weight DESC, mr.id
 		`,
 		publicModel,
@@ -236,7 +266,6 @@ func (s *Store) ResolveModelRoutes(publicModel string) ([]RouteTarget, bool, err
 
 	var out []RouteTarget
 	for rows.Next() {
-		var protocolsStr string
 		if err := rows.Scan(
 			&target.ID,
 			&target.ModelID,
@@ -244,29 +273,15 @@ func (s *Store) ResolveModelRoutes(publicModel string) ([]RouteTarget, bool, err
 			&target.SelectionPolicy,
 			&target.ProviderID,
 			&target.ProviderName,
-			&protocolsStr,
+			&target.ProviderEndpointID,
+			&target.ProviderType,
 			&target.UpstreamModel,
 			&target.Priority,
 			&target.Weight,
 		); err != nil {
 			return nil, false, err
 		}
-		
-		protos := splitProtocols(protocolsStr)
-		hasOpenAI := false
-		for _, proto := range protos {
-			if proto == providerOpenAI || proto == providerOpenAIResponses {
-				hasOpenAI = true
-				target.ProviderType = proto
-				break
-			}
-		}
-		if !hasOpenAI && len(protos) > 0 {
-			target.ProviderType = protos[0]
-		} else if len(protos) == 0 {
-			target.ProviderType = ""
-		}
-		
+
 		out = append(out, target)
 	}
 	if err := rows.Err(); err != nil {

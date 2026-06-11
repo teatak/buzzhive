@@ -9,7 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/teatak/cart/v2"
+	"github.com/teatak/buzzhive/internal/protocol"
+	"github.com/teatak/cart/v3"
 )
 
 type TokenUsage struct {
@@ -171,7 +172,7 @@ func tokenUsageFromOpenAIResponseBody(raw []byte) TokenUsage {
 	}
 }
 
-func tokenUsageFromGeminiResponseBody(raw []byte, resp geminiGenerateResponse) TokenUsage {
+func tokenUsageFromGeminiResponseBody(raw []byte, resp protocol.GeminiGenerateResponse) TokenUsage {
 	var envelope struct {
 		UsageMetadata json.RawMessage `json:"usageMetadata"`
 	}

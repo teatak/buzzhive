@@ -27,14 +27,15 @@ import {
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Checkbox } from "../components/ui/checkbox";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { Input } from "../components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { EnabledToggleButton } from "../components/enabled-toggle-button";
 import { FormNumberField, FormSelectField, FormStaticField, FormTextareaField, FormTextField } from "../components/form-fields";
 import { useLocale } from "../i18n/locale";
-import type { ProviderKey, ProviderPreset, ProviderRecord } from "../types/admin";
+import type { ProviderEndpoint, ProviderKey, ProviderPreset, ProviderRecord } from "../types/admin";
 
 type ProviderForm = ProviderRecord;
 
@@ -67,9 +68,8 @@ const defaultBaseURL: Record<string, string> = {
 const providerDefaults: ProviderForm = {
   id: 0,
   name: "",
-  protocols: ["openai"],
   preset_id: "",
-  base_url: "",
+  endpoints: [{ id: 0, provider_id: 0, protocol: "openai", base_url: defaultBaseURL.openai, enabled: true }],
   enabled: true,
 };
 
@@ -83,6 +83,29 @@ const keyDefaults: ProviderKeyForm = {
   weight: 1,
   labels: "",
 };
+
+function providerWithEndpoints(provider: ProviderRecord): ProviderRecord {
+  return { ...provider, endpoints: provider.endpoints || [] };
+}
+
+function normalizedEndpoints(provider: ProviderRecord) {
+  return (provider.endpoints || [])
+    .map((endpoint) => ({
+      ...endpoint,
+      protocol: endpoint.protocol.trim(),
+      base_url: endpoint.base_url.trim(),
+      enabled: endpoint.enabled !== false,
+    }))
+    .filter((endpoint) => endpoint.protocol && endpoint.base_url);
+}
+
+function firstAvailableProtocol(endpoints: ProviderEndpoint[]) {
+  return supportedProtocols.find((protocol) => !endpoints.some((endpoint) => endpoint.protocol === protocol)) ?? "";
+}
+
+function providerEndpointProtocols(provider: ProviderRecord) {
+  return (provider.endpoints || []).filter((endpoint) => endpoint.enabled !== false).map((endpoint) => endpoint.protocol);
+}
 
 export function ProvidersPage(props: {
   token: string;
@@ -125,9 +148,55 @@ export function ProvidersPage(props: {
 
   function openProvider(provider?: ProviderRecord) {
     setEditingProviderID(provider?.id ?? null);
-    setForm(provider ? { ...provider } : { ...providerDefaults });
+    setForm(provider ? providerWithEndpoints(provider) : { ...providerDefaults, endpoints: [...providerDefaults.endpoints] });
     setProviderKeySecret("");
     setOpen(true);
+  }
+
+  function addEndpoint() {
+    setForm((current) => {
+      const endpoints = current.endpoints || [];
+      const protocol = firstAvailableProtocol(endpoints);
+      if (!protocol) return current;
+      const nextEndpoint: ProviderEndpoint = {
+        id: 0,
+        provider_id: current.id,
+        protocol,
+        base_url: defaultBaseURL[protocol] || "",
+        enabled: true,
+      };
+      return { ...current, endpoints: [...endpoints, nextEndpoint] };
+    });
+  }
+
+  function removeEndpoint(index: number) {
+    setForm((current) => {
+      return { ...current, endpoints: (current.endpoints || []).filter((_, endpointIndex) => endpointIndex !== index) };
+    });
+  }
+
+  function setEndpointProtocol(index: number, protocol: string) {
+    setForm((current) => {
+      const endpoints = current.endpoints || [];
+      return {
+        ...current,
+        endpoints: endpoints.map((endpoint, endpointIndex) => {
+          if (endpointIndex !== index) return endpoint;
+          const oldDefault = defaultBaseURL[endpoint.protocol] || "";
+          const baseURL = !endpoint.base_url || endpoint.base_url === oldDefault ? defaultBaseURL[protocol] || "" : endpoint.base_url;
+          return { ...endpoint, protocol, base_url: baseURL };
+        }),
+      };
+    });
+  }
+
+  function setEndpointBaseURL(index: number, baseURL: string) {
+    setForm((current) => {
+      return {
+        ...current,
+        endpoints: (current.endpoints || []).map((endpoint, endpointIndex) => endpointIndex === index ? { ...endpoint, base_url: baseURL } : endpoint),
+      };
+    });
   }
 
   function openKeyImport(providerID = props.providers[0]?.id ?? 0) {
@@ -157,9 +226,10 @@ export function ProvidersPage(props: {
     setSaving(true);
     try {
       const providerID = editingProviderID;
+      const endpoints = normalizedEndpoints(form);
       const saved = await request<ProviderRecord>("/admin/api/providers", props.token, {
         method: providerID ? "PUT" : "POST",
-        body: JSON.stringify(providerID ? { ...form, id: providerID } : form),
+        body: JSON.stringify({ ...(providerID ? { ...form, id: providerID } : form), endpoints }),
       });
       if (!providerID) await saveProviderKeys(saved.id, providerKeySecret);
       await props.onReload();
@@ -347,13 +417,22 @@ export function ProvidersPage(props: {
                     <StatusBadge enabled={selectedProvider.enabled} />
                   </div>
                   <div className="mt-1 flex flex-wrap gap-1.5">
-                    {selectedProvider.protocols?.map((proto) => (
+                    {providerEndpointProtocols(selectedProvider).map((proto) => (
                       <Badge key={proto} variant="secondary" className="mono text-xs px-2 py-0.5">
                         {providerProtocolLabel(proto, t)}
                       </Badge>
-                    )) || "-"}
+                    ))}
                   </div>
-                  <div className="mt-2 max-w-3xl text-sm text-muted-foreground [overflow-wrap:anywhere]">{selectedProvider.base_url || "-"}</div>
+                  <div className="mt-2 grid max-w-3xl gap-1 text-sm text-muted-foreground">
+                    {selectedProvider.endpoints?.length
+                      ? selectedProvider.endpoints.map((endpoint) => (
+                        <div key={`${endpoint.protocol}:${endpoint.base_url}`} className="flex min-w-0 gap-2 [overflow-wrap:anywhere]">
+                          <span className="shrink-0 font-medium">{providerProtocolLabel(endpoint.protocol, t)}</span>
+                          <span className="mono min-w-0">{endpoint.base_url}</span>
+                        </div>
+                      ))
+                      : "-"}
+                  </div>
                 </div>
               </div>
               <div className="flex items-center gap-1">
@@ -370,7 +449,7 @@ export function ProvidersPage(props: {
           </CardHeader>
           <CardContent className="space-y-4">
              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <ProviderStat label={t("providers.protocols")} value={selectedProvider.protocols?.join(", ") || "-"} />
+              <ProviderStat label={t("providers.endpoints")} value={providerEndpointProtocols(selectedProvider).join(", ") || "-"} />
               <ProviderStat label={t("providers.preset")} value={selectedProvider.preset_id || "-"} mono />
               <ProviderStat label={t("nav.provider_keys")} value={String(selectedProviderKeys.length)} />
             </div>
@@ -400,7 +479,7 @@ export function ProvidersPage(props: {
                         <TableCell>
                           <div className="key-token-cell">
                             <div className="key-token mono">
-                              <span>{revealedProviderKeys[key.id] ?? key.secret ?? key.secret_hint ?? "-"}</span>
+                              <span>{revealedProviderKeys[key.id] ?? key.secret ?? "-"}</span>
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <Button className="key-token-copy" variant="ghost" size="icon-sm" type="button" aria-label={t("common.copy")} onClick={() => void copyProviderKey(key)}>
@@ -489,7 +568,7 @@ export function ProvidersPage(props: {
                             <StatusBadge enabled={provider.enabled} />
                           </div>
                           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
-                            <ProviderChip label={t("providers.protocols")} value={provider.protocols?.join(", ") || "-"} mono />
+                            <ProviderChip label={t("providers.endpoints")} value={providerEndpointProtocols(provider).join(", ") || "-"} mono />
                             <ProviderChip label={t("providers.preset")} value={provider.preset_id || "-"} mono />
                             <ProviderChip label={t("nav.provider_keys")} value={String(keys.length)} />
                           </div>
@@ -518,27 +597,61 @@ export function ProvidersPage(props: {
           <DialogHeader><DialogTitle>{editingProviderID ? t("providers.edit_provider") : t("providers.new_provider")}</DialogTitle></DialogHeader>
           <div className="grid gap-4 py-4">
             <FormTextField label={t("providers.name")} value={form.name} onChange={(name) => setForm({ ...form, name })} />
-            <FormStaticField label={t("providers.protocols")}>
-              <div className="flex flex-wrap gap-4 rounded-md border p-3 bg-muted/20">
-                {supportedProtocols.map((proto) => (
-                  <label key={proto} className="flex items-center gap-2 cursor-pointer text-sm font-medium">
-                    <Checkbox
-                      checked={form.protocols?.includes(proto)}
-                      onCheckedChange={(checked) => {
-                        setForm((current) => {
-                          const nextProtocols = checked
-                            ? [...(current.protocols || []), proto]
-                            : (current.protocols || []).filter((p) => p !== proto);
-                          return { ...current, protocols: nextProtocols };
-                        });
-                      }}
-                    />
-                    <span>{providerProtocolLabel(proto, t)}</span>
-                  </label>
-                ))}
+            <FormStaticField label={t("providers.endpoints")}>
+              <div className="grid gap-2 rounded-md border bg-muted/20 p-3">
+                {(form.endpoints || []).length === 0 && (
+                  <div className="rounded-md border border-dashed bg-background/60 px-3 py-4 text-sm text-muted-foreground">
+                    {t("providers.no_endpoints")}
+                  </div>
+                )}
+                {(form.endpoints || []).map((endpoint, index) => {
+                  const usedProtocols = new Set((form.endpoints || []).map((item, itemIndex) => itemIndex === index ? "" : item.protocol));
+                  return (
+                    <div key={endpoint.id || `${endpoint.protocol}-${index}`} className="grid gap-2 sm:grid-cols-[12rem_minmax(0,1fr)_2.25rem] sm:items-center">
+                      <Select value={endpoint.protocol} onValueChange={(protocol) => setEndpointProtocol(index, protocol)}>
+                        <SelectTrigger className="h-9 w-full bg-background">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {supportedProtocols.map((proto) => (
+                            <SelectItem key={proto} value={proto} disabled={usedProtocols.has(proto)}>
+                              {providerProtocolLabel(proto, t)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        value={endpoint.base_url}
+                        onChange={(event) => setEndpointBaseURL(index, event.target.value)}
+                        placeholder={defaultBaseURL[endpoint.protocol] || "https://example.com"}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-lg"
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => removeEndpoint(index)}
+                        aria-label={t("common.delete")}
+                      >
+                        <Trash2 />
+                      </Button>
+                    </div>
+                  );
+                })}
+                <div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={addEndpoint}
+                    disabled={!firstAvailableProtocol(form.endpoints || [])}
+                  >
+                    <Plus />
+                    {t("providers.add_endpoint")}
+                  </Button>
+                </div>
               </div>
             </FormStaticField>
-            <FormTextField label={t("providers.base_url")} value={form.base_url} onChange={(base_url) => setForm({ ...form, base_url })} />
             {!editingProviderID && (
               <FormTextareaField label={t("provider_keys.optional_keys")} className="mono min-h-28" value={providerKeySecret} onChange={setProviderKeySecret} />
             )}
@@ -552,7 +665,7 @@ export function ProvidersPage(props: {
               onChange={(value) => setForm({ ...form, enabled: value === "1" })}
             />
           </div>
-           <DialogFooter><Button disabled={saving || !form.name || !form.protocols?.length} onClick={() => void saveProvider()}>{t("common.save")}</Button></DialogFooter>
+           <DialogFooter><Button disabled={saving || !form.name || normalizedEndpoints(form).length === 0} onClick={() => void saveProvider()}>{t("common.save")}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 

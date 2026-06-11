@@ -3,7 +3,6 @@ package buzzhive
 import (
 	"bufio"
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,184 +10,9 @@ import (
 	"log"
 	"net/http"
 	"strings"
+
+	"github.com/teatak/buzzhive/internal/protocol"
 )
-
-var errUnsupportedOpenAIContent = errors.New("only text, data URL image, and input_audio chat content are supported in this version")
-
-type openAIChatRequest struct {
-	Model            string               `json:"model"`
-	Messages         []openAIMessage      `json:"messages"`
-	Stream           bool                 `json:"stream"`
-	N                *int                 `json:"n,omitempty"`
-	Tools            json.RawMessage      `json:"tools,omitempty"`
-	ToolChoice       json.RawMessage      `json:"tool_choice,omitempty"`
-	Temperature      *float64             `json:"temperature,omitempty"`
-	TopP             *float64             `json:"top_p,omitempty"`
-	MaxTokens        *int                 `json:"max_tokens,omitempty"`
-	MaxOutputTokens  *int                 `json:"max_completion_tokens,omitempty"`
-	Stop             any                  `json:"stop,omitempty"`
-	PresencePenalty  *float64             `json:"presence_penalty,omitempty"`
-	FrequencyPenalty *float64             `json:"frequency_penalty,omitempty"`
-	LogitBias        json.RawMessage      `json:"logit_bias,omitempty"`
-	Logprobs         *bool                `json:"logprobs,omitempty"`
-	TopLogprobs      *int                 `json:"top_logprobs,omitempty"`
-	Seed             *int64               `json:"seed,omitempty"`
-	User             string               `json:"user,omitempty"`
-	Metadata         json.RawMessage      `json:"metadata,omitempty"`
-	ReasoningEffort  *string              `json:"reasoning_effort,omitempty"`
-	ResponseFormat   json.RawMessage      `json:"response_format,omitempty"`
-	StreamOptions    *openAIStreamOptions `json:"stream_options,omitempty"`
-}
-
-type openAIStreamOptions struct {
-	IncludeUsage bool `json:"include_usage,omitempty"`
-}
-
-type openAIMessage struct {
-	Role       string           `json:"role"`
-	Content    json.RawMessage  `json:"content"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
-}
-
-type openAIChatResponse struct {
-	ID      string         `json:"id"`
-	Object  string         `json:"object"`
-	Created int64          `json:"created"`
-	Model   string         `json:"model"`
-	Choices []openAIChoice `json:"choices"`
-	Usage   *openAIUsage   `json:"usage,omitempty"`
-}
-
-type openAIChoice struct {
-	Index        int                `json:"index"`
-	Message      *openAIMessageOut  `json:"message,omitempty"`
-	Delta        *openAIStreamDelta `json:"delta,omitempty"`
-	FinishReason *string            `json:"finish_reason"`
-}
-
-type openAIMessageOut struct {
-	Role      string           `json:"role"`
-	Content   *string          `json:"content"`
-	ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
-}
-
-type openAIStreamDelta struct {
-	Role      string           `json:"role,omitempty"`
-	Content   string           `json:"content,omitempty"`
-	ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
-}
-
-type openAIToolCall struct {
-	Index    *int                   `json:"index,omitempty"`
-	ID       string                 `json:"id"`
-	Type     string                 `json:"type"`
-	Function openAIToolCallFunction `json:"function"`
-}
-
-type openAIToolCallFunction struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
-
-type openAIUsage struct {
-	PromptTokens            int                            `json:"prompt_tokens"`
-	CompletionTokens        int                            `json:"completion_tokens"`
-	TotalTokens             int                            `json:"total_tokens"`
-	PromptTokensDetails     *openAIPromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
-	CompletionTokensDetails *openAICompletionTokensDetails `json:"completion_tokens_details,omitempty"`
-}
-
-type openAIPromptTokensDetails struct {
-	CachedTokens int `json:"cached_tokens"`
-}
-
-type openAICompletionTokensDetails struct {
-	ReasoningTokens int `json:"reasoning_tokens"`
-}
-
-type geminiGenerateRequest struct {
-	Contents          []geminiContent         `json:"contents"`
-	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
-	Tools             []geminiTool            `json:"tools,omitempty"`
-	ToolConfig        *geminiToolConfig       `json:"toolConfig,omitempty"`
-	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
-}
-
-type geminiContent struct {
-	Role  string       `json:"role,omitempty"`
-	Parts []geminiPart `json:"parts"`
-}
-
-type geminiPart struct {
-	Text             string                  `json:"text,omitempty"`
-	InlineData       *geminiInlineData       `json:"inlineData,omitempty"`
-	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
-	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
-	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
-}
-
-type geminiInlineData struct {
-	MimeType string `json:"mimeType"`
-	Data     string `json:"data"`
-}
-
-type geminiTool struct {
-	FunctionDeclarations []geminiFunctionDeclaration `json:"functionDeclarations,omitempty"`
-}
-
-type geminiFunctionDeclaration struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
-}
-
-type geminiFunctionCall struct {
-	Name string          `json:"name"`
-	Args json.RawMessage `json:"args,omitempty"`
-}
-
-type geminiFunctionResponse struct {
-	Name     string          `json:"name"`
-	Response json.RawMessage `json:"response"`
-}
-
-type geminiToolConfig struct {
-	FunctionCallingConfig *geminiFunctionCallingConfig `json:"functionCallingConfig,omitempty"`
-}
-
-type geminiFunctionCallingConfig struct {
-	Mode                 string   `json:"mode,omitempty"`
-	AllowedFunctionNames []string `json:"allowedFunctionNames,omitempty"`
-}
-
-type geminiGenerationConfig struct {
-	Temperature      *float64              `json:"temperature,omitempty"`
-	TopP             *float64              `json:"topP,omitempty"`
-	MaxOutputTokens  *int                  `json:"maxOutputTokens,omitempty"`
-	StopSequences    []string              `json:"stopSequences,omitempty"`
-	ResponseMimeType string                `json:"responseMimeType,omitempty"`
-	ResponseSchema   json.RawMessage       `json:"responseSchema,omitempty"`
-	ThinkingConfig   *geminiThinkingConfig `json:"thinkingConfig,omitempty"`
-}
-
-type geminiThinkingConfig struct {
-	ThinkingLevel string `json:"thinkingLevel,omitempty"`
-}
-
-type geminiGenerateResponse struct {
-	Candidates []struct {
-		Content      geminiContent `json:"content"`
-		FinishReason string        `json:"finishReason"`
-	} `json:"candidates"`
-	UsageMetadata struct {
-		PromptTokenCount        int `json:"promptTokenCount"`
-		CandidatesTokenCount    int `json:"candidatesTokenCount"`
-		TotalTokenCount         int `json:"totalTokenCount"`
-		CachedContentTokenCount int `json:"cachedContentTokenCount"`
-		ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
-	} `json:"usageMetadata"`
-}
 
 func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken) {
 	if r.Method != http.MethodPost {
@@ -196,7 +20,7 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	var req openAIChatRequest
+	var req protocol.OpenAIChatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
@@ -223,13 +47,18 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 		writeOpenAIError(w, http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
+	targets = openAIChatTargets(targets)
+	if len(targets) == 0 {
+		writeOpenAIError(w, http.StatusBadRequest, "unsupported_endpoint", "selected upstream does not support OpenAI Chat Completions")
+		return
+	}
 	target := targets[0]
-	if isOpenAIProviderType(target.ProviderType) {
+	if protocol.ShouldPassthrough(providerOpenAI, target.ProviderType) {
 		s.proxyRaw(w, r, body, user, req.Model, targets)
 		return
 	}
 
-	canonicalReq, err := openAIToCanonicalChatRequest(req)
+	canonicalReq, err := protocol.OpenAIChatToCanonical(req)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
@@ -241,7 +70,7 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 	}
 	canonicalReq.ThinkingLevel = thinkingLevel
 	s.applyToolSignatures(&canonicalReq)
-	geminiReq, err := canonicalToGeminiGenerateRequest(canonicalReq)
+	geminiReq, err := protocol.CanonicalToGeminiGenerateRequest(canonicalReq)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
@@ -259,7 +88,7 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 	s.proxyOpenAIChat(w, r, geminiBody, user, req.Model, targets)
 }
 
-func validateOpenAIChatParameterSupport(req openAIChatRequest) error {
+func validateOpenAIChatParameterSupport(req protocol.OpenAIChatRequest) error {
 	if req.N != nil {
 		if *req.N < 1 {
 			return errors.New("n must be at least 1")
@@ -273,6 +102,16 @@ func validateOpenAIChatParameterSupport(req openAIChatRequest) error {
 	}
 	if req.TopLogprobs != nil {
 		return errors.New("top_logprobs is not supported")
+	}
+	return nil
+}
+
+func openAIChatTargets(targets []RouteTarget) []RouteTarget {
+	for _, protocol := range []string{providerOpenAI, providerGemini} {
+		out := routeTargetsByProtocol(targets, protocol)
+		if len(out) > 0 {
+			return out
+		}
 	}
 	return nil
 }
@@ -308,123 +147,6 @@ func geminiThinkingLevelForOpenAIReasoningEffort(effort *string, model string) (
 	}
 }
 
-func openAIStopSequences(value any) []string {
-	switch stop := value.(type) {
-	case string:
-		return []string{stop}
-	case []any:
-		out := make([]string, 0, len(stop))
-		for _, item := range stop {
-			if text, ok := item.(string); ok {
-				out = append(out, text)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-func openAIMessageParts(raw json.RawMessage) ([]canonicalPart, error) {
-	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
-		return nil, nil
-	}
-	var text string
-	if err := json.Unmarshal(raw, &text); err == nil {
-		return []canonicalPart{{Type: "text", Text: text}}, nil
-	}
-	var parts []openAIContentPart
-	if err := json.Unmarshal(raw, &parts); err != nil {
-		return nil, errUnsupportedOpenAIContent
-	}
-	out := make([]canonicalPart, 0, len(parts))
-	for _, part := range parts {
-		switch part.Type {
-		case "text", "input_text":
-			out = append(out, canonicalPart{Type: "text", Text: part.Text})
-		case "image_url":
-			mimeType, data, err := parseOpenAIImageDataURL(part.ImageURL.URL)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, canonicalPart{Type: "image", MimeType: mimeType, Data: data})
-		case "input_audio":
-			mimeType, data, err := parseOpenAIInputAudio(part.InputAudio.Data, part.InputAudio.Format)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, canonicalPart{Type: "audio", MimeType: mimeType, Data: data})
-		default:
-			return nil, errUnsupportedOpenAIContent
-		}
-	}
-	return out, nil
-}
-
-type openAIContentPart struct {
-	Type     string `json:"type"`
-	Text     string `json:"text"`
-	ImageURL struct {
-		URL string `json:"url"`
-	} `json:"image_url"`
-	InputAudio struct {
-		Data   string `json:"data"`
-		Format string `json:"format"`
-	} `json:"input_audio"`
-}
-
-func parseOpenAIImageDataURL(value string) (string, string, error) {
-	const prefix = "data:"
-	if !strings.HasPrefix(value, prefix) {
-		return "", "", errUnsupportedOpenAIContent
-	}
-	metaAndData := strings.SplitN(strings.TrimPrefix(value, prefix), ",", 2)
-	if len(metaAndData) != 2 {
-		return "", "", errUnsupportedOpenAIContent
-	}
-	meta := metaAndData[0]
-	data := metaAndData[1]
-	if !strings.HasSuffix(meta, ";base64") || data == "" {
-		return "", "", errUnsupportedOpenAIContent
-	}
-	mimeType := strings.TrimSuffix(meta, ";base64")
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-	if _, err := base64.StdEncoding.DecodeString(data); err != nil {
-		return "", "", errUnsupportedOpenAIContent
-	}
-	return mimeType, data, nil
-}
-
-func parseOpenAIInputAudio(data string, format string) (string, string, error) {
-	data = strings.TrimSpace(data)
-	format = strings.ToLower(strings.TrimSpace(format))
-	if data == "" || format == "" {
-		return "", "", errUnsupportedOpenAIContent
-	}
-	if _, err := base64.StdEncoding.DecodeString(data); err != nil {
-		return "", "", errUnsupportedOpenAIContent
-	}
-	mimeType, ok := openAIAudioMimeTypes[format]
-	if !ok {
-		return "", "", errUnsupportedOpenAIContent
-	}
-	return mimeType, data, nil
-}
-
-var openAIAudioMimeTypes = map[string]string{
-	"wav":  "audio/wav",
-	"mp3":  "audio/mpeg",
-	"mpeg": "audio/mpeg",
-	"mpga": "audio/mpeg",
-	"webm": "audio/webm",
-	"ogg":  "audio/ogg",
-	"flac": "audio/flac",
-	"m4a":  "audio/mp4",
-	"aac":  "audio/aac",
-}
-
 func (s *Server) proxyOpenAIChat(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken, model string, targets []RouteTarget) {
 	result := s.doProviderTargetLoop(r.Context(), user, model, targets, func(target RouteTarget) ProviderRequest {
 		return ProviderRequest{
@@ -454,7 +176,7 @@ func (s *Server) proxyOpenAIChat(w http.ResponseWriter, r *http.Request, body []
 	}
 
 	raw := drain(resp.Body, 8*1024*1024)
-	var geminiResp geminiGenerateResponse
+	var geminiResp protocol.GeminiGenerateResponse
 	if err := json.Unmarshal(raw, &geminiResp); err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "server_error", err.Error())
 		s.recordProviderResultUsage(user, model, result, http.StatusBadGateway)
@@ -462,12 +184,12 @@ func (s *Server) proxyOpenAIChat(w http.ResponseWriter, r *http.Request, body []
 	}
 	usage := tokenUsageFromGeminiResponseBody(raw, geminiResp)
 
-	canonicalResp := geminiToCanonicalChatResponse(geminiResp, model, result.RequestID, startedAt)
+	canonicalResp := protocol.GeminiToCanonicalChatResponse(geminiResp, model, "chatcmpl-"+result.RequestID, startedAt.Unix(), result.RequestID)
 	if canonicalResp.FinishReason == "length" {
 		logOpenAIDiagnostic(result, model, openAIDiagnosticRequest{}, http.StatusOK, "length", &canonicalResp.Usage.CompletionTokens)
 	}
 	s.rememberToolSignatures(canonicalResp.ToolCalls)
-	out := canonicalToOpenAIChatResponse(canonicalResp)
+	out := protocol.CanonicalToOpenAIChatResponse(canonicalResp)
 	w.Header().Set("X-Proxy-Debug", strings.Join(result.Chain, " -> "))
 	w.Header().Set("X-Proxy-Key", key.Name)
 	writeJSON(w, http.StatusOK, out)
@@ -555,13 +277,7 @@ func (s *Server) proxyOpenAIChatStream(w http.ResponseWriter, r *http.Request, b
 	w.WriteHeader(http.StatusOK)
 
 	created := startedAt.Unix()
-	writeOpenAIStreamChunk(w, flusher, openAIChatResponse{
-		ID:      "chatcmpl-" + result.RequestID,
-		Object:  "chat.completion.chunk",
-		Created: created,
-		Model:   model,
-		Choices: []openAIChoice{{Index: 0, Delta: &openAIStreamDelta{Role: "assistant"}}},
-	})
+	writeOpenAIStreamChunk(w, flusher, protocol.OpenAIChatRoleStreamChunk("chatcmpl-"+result.RequestID, created, model))
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
@@ -575,20 +291,20 @@ func (s *Server) proxyOpenAIChatStream(w http.ResponseWriter, r *http.Request, b
 		if payload == "[DONE]" {
 			break
 		}
-		var geminiResp geminiGenerateResponse
+		var geminiResp protocol.GeminiGenerateResponse
 		if err := json.Unmarshal([]byte(payload), &geminiResp); err != nil {
 			continue
 		}
 		if chunkUsage := tokenUsageFromGeminiResponseBody([]byte(payload), geminiResp); !chunkUsage.IsZero() {
 			usage = chunkUsage
 		}
-		event := geminiToCanonicalStreamEvent(geminiResp, result.RequestID)
+		event := protocol.GeminiToCanonicalStreamEvent(geminiResp, result.RequestID)
 		s.rememberToolSignatures(event.ToolCalls)
 		if event.FinishReason == "length" {
 			logOpenAIDiagnostic(result, model, openAIDiagnosticRequest{Stream: true}, http.StatusOK, "length", nil)
 		}
 		if event.Text != "" || len(event.ToolCalls) > 0 || event.FinishReason != "" {
-			writeOpenAIStreamChunk(w, flusher, canonicalToOpenAIStreamChunk(event, "chatcmpl-"+result.RequestID, created, model, includeUsage))
+			writeOpenAIStreamChunk(w, flusher, protocol.CanonicalToOpenAIStreamChunk(event, "chatcmpl-"+result.RequestID, created, model, includeUsage))
 		}
 	}
 	io.WriteString(w, "data: [DONE]\n\n")
@@ -814,7 +530,7 @@ func openAIUpstreamErrorMessage(status int, raw []byte) string {
 	return text
 }
 
-func writeOpenAIStreamChunk(w io.Writer, flusher http.Flusher, chunk openAIChatResponse) {
+func writeOpenAIStreamChunk(w io.Writer, flusher http.Flusher, chunk protocol.OpenAIChatResponse) {
 	data, err := json.Marshal(chunk)
 	if err != nil {
 		return
@@ -822,36 +538,5 @@ func writeOpenAIStreamChunk(w io.Writer, flusher http.Flusher, chunk openAIChatR
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	if flusher != nil {
 		flusher.Flush()
-	}
-}
-
-func geminiResponseText(resp geminiGenerateResponse) string {
-	if len(resp.Candidates) == 0 {
-		return ""
-	}
-	var builder strings.Builder
-	for _, part := range resp.Candidates[0].Content.Parts {
-		builder.WriteString(part.Text)
-	}
-	return builder.String()
-}
-
-func geminiFinishReason(resp geminiGenerateResponse) string {
-	if len(resp.Candidates) == 0 {
-		return ""
-	}
-	return resp.Candidates[0].FinishReason
-}
-
-func openAIFinishReason(reason string) string {
-	switch reason {
-	case "", "STOP":
-		return "stop"
-	case "MAX_TOKENS":
-		return "length"
-	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII":
-		return "content_filter"
-	default:
-		return strings.ToLower(reason)
 	}
 }

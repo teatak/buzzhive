@@ -7,8 +7,15 @@ export type UserAPIKey = { id: number; user_id: number; name: string; token: str
 export type ProviderRecord = {
   id: number;
   name: string;
-  protocols: string[];
   preset_id: string;
+  endpoints: ProviderEndpoint[];
+  enabled: boolean;
+};
+
+export type ProviderEndpoint = {
+  id: number;
+  provider_id: number;
+  protocol: string;
   base_url: string;
   enabled: boolean;
 };

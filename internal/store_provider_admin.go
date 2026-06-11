@@ -9,7 +9,7 @@ import (
 
 func (s *Store) Providers() ([]ProviderRecord, error) {
 	rows, err := s.query(`
-		SELECT id, name, preset_id, base_url, protocols, enabled, created_at, updated_at
+		SELECT id, name, preset_id, enabled, created_at, updated_at
 		FROM providers
 		ORDER BY name`)
 	if err != nil {
@@ -21,62 +21,82 @@ func (s *Store) Providers() ([]ProviderRecord, error) {
 	for rows.Next() {
 		var item ProviderRecord
 		var enabled int
-		var protocolsStr string
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&item.ID, &item.Name, &item.PresetID, &item.BaseURL, &protocolsStr, &enabled, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.PresetID, &enabled, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		item.Enabled = enabled != 0
-		item.Protocols = splitProtocols(protocolsStr)
 		item.CreatedAt = formatStoreTime(createdAt)
 		item.UpdatedAt = formatStoreTime(updatedAt)
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return s.hydrateProviderEndpoints(out)
 }
 
 func (s *Store) Provider(id int64) (ProviderRecord, error) {
 	var item ProviderRecord
 	var enabled int
-	var protocolsStr string
 	var createdAt, updatedAt time.Time
 	err := s.queryRow(`
-		SELECT id, name, preset_id, base_url, protocols, enabled, created_at, updated_at
+		SELECT id, name, preset_id, enabled, created_at, updated_at
 		FROM providers
 		WHERE id = ?`,
 		id,
-	).Scan(&item.ID, &item.Name, &item.PresetID, &item.BaseURL, &protocolsStr, &enabled, &createdAt, &updatedAt)
+	).Scan(&item.ID, &item.Name, &item.PresetID, &enabled, &createdAt, &updatedAt)
+	if err != nil {
+		return item, err
+	}
 	item.Enabled = enabled != 0
-	item.Protocols = splitProtocols(protocolsStr)
 	item.CreatedAt = formatStoreTime(createdAt)
 	item.UpdatedAt = formatStoreTime(updatedAt)
-	return item, err
+	items, err := s.hydrateProviderEndpoints([]ProviderRecord{item})
+	if err != nil {
+		return item, err
+	}
+	return items[0], nil
 }
 
 func (s *Store) CreateProvider(provider ProviderRecord) (ProviderRecord, error) {
-	if provider.Name == "" || provider.BaseURL == "" {
-		return ProviderRecord{}, errors.New("name and base_url are required")
+	endpoints, err := normalizeProviderEndpoints(provider)
+	if err != nil {
+		return ProviderRecord{}, err
+	}
+	if provider.Name == "" {
+		return ProviderRecord{}, errors.New("name is required")
 	}
 	now := storeNow()
 	id, err := s.insertReturningID(
-		`INSERT INTO providers (name, preset_id, base_url, protocols, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		provider.Name, provider.PresetID, provider.BaseURL, strings.Join(provider.Protocols, ","), boolInt(provider.Enabled), now, now,
+		`INSERT INTO providers (name, preset_id, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+		provider.Name, provider.PresetID, boolInt(provider.Enabled), now, now,
 	)
 	if err != nil {
+		return ProviderRecord{}, err
+	}
+	if err := s.replaceProviderEndpoints(id, endpoints); err != nil {
 		return ProviderRecord{}, err
 	}
 	return s.Provider(id)
 }
 
 func (s *Store) UpdateProvider(provider ProviderRecord) (ProviderRecord, error) {
-	if provider.ID == 0 || provider.Name == "" || provider.BaseURL == "" {
-		return ProviderRecord{}, errors.New("id, name and base_url are required")
+	endpoints, err := normalizeProviderEndpoints(provider)
+	if err != nil {
+		return ProviderRecord{}, err
 	}
-	_, err := s.exec(
-		`UPDATE providers SET name = ?, preset_id = ?, base_url = ?, protocols = ?, enabled = ?, updated_at = ? WHERE id = ?`,
-		provider.Name, provider.PresetID, provider.BaseURL, strings.Join(provider.Protocols, ","), boolInt(provider.Enabled), storeNow(), provider.ID,
+	if provider.ID == 0 || provider.Name == "" {
+		return ProviderRecord{}, errors.New("id and name are required")
+	}
+	_, err = s.exec(
+		`UPDATE providers SET name = ?, preset_id = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+		provider.Name, provider.PresetID, boolInt(provider.Enabled), storeNow(), provider.ID,
 	)
 	if err != nil {
+		return ProviderRecord{}, err
+	}
+	if err := s.replaceProviderEndpoints(provider.ID, endpoints); err != nil {
 		return ProviderRecord{}, err
 	}
 	return s.Provider(provider.ID)
@@ -94,6 +114,7 @@ func (s *Store) DeleteProvider(id int64) error {
 	for _, stmt := range []string{
 		`DELETE FROM model_routes WHERE provider_id = ?`,
 		`DELETE FROM provider_keys WHERE provider_id = ?`,
+		`DELETE FROM provider_endpoints WHERE provider_id = ?`,
 		`DELETE FROM providers WHERE id = ?`,
 	} {
 		if _, err := tx.Exec(s.rebind(stmt), id); err != nil {

@@ -1,4 +1,4 @@
-import { Activity, BarChart3, CircleOff, KeyRound } from "lucide-react";
+import { Activity, BarChart3, CircleOff, KeyRound, Loader2 } from "lucide-react";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { ButtonGroup } from "../components/ui/button-group";
@@ -42,41 +42,41 @@ export function DashboardPage(props: {
 
   return (
     <div className="stack">
-      <section className="metrics">
-        <Card>
-          <CardContent className="metric-content">
-            <div className="metric-label"><Activity size={17} /> {t("dashboard.requests")}</div>
-            <div className="metric-value">{props.usage?.requests ?? 0}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="metric-content">
-            <div className="metric-label"><KeyRound size={17} /> {t("nav.my_keys")}</div>
-            <div className="metric-value">{props.ownActiveKeys.length}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="metric-content">
-            <div className="metric-label"><CircleOff size={17} /> {t("dashboard.errors")}</div>
-            <div className="metric-value">{props.usage?.errors ?? 0}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="metric-content">
-            <div className="metric-label"><BarChart3 size={17} /> {t("dashboard.avg_latency")}</div>
-            <div className="metric-value">{Math.round(props.usage?.avg_latency_ms ?? 0)}ms</div>
-          </CardContent>
-        </Card>
-      </section>
+      {props.usage ? (
+        <>
+          <section className="metrics">
+            <Card>
+              <CardContent className="metric-content">
+                <div className="metric-label"><Activity size={17} /> {t("dashboard.requests")}</div>
+                <div className="metric-value">{props.usage.requests}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="metric-content">
+                <div className="metric-label"><KeyRound size={17} /> {t("nav.my_keys")}</div>
+                <div className="metric-value">{props.ownActiveKeys.length}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="metric-content">
+                <div className="metric-label"><CircleOff size={17} /> {t("dashboard.errors")}</div>
+                <div className="metric-value">{props.usage.errors}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="metric-content">
+                <div className="metric-label"><BarChart3 size={17} /> {t("dashboard.avg_latency")}</div>
+                <div className="metric-value">{Math.round(props.usage.avg_latency_ms)}ms</div>
+              </CardContent>
+            </Card>
+          </section>
 
-      <section className="dashboard-usage-grid">
-        <div className="stack">
           <Card>
             <CardHeader>
               <div className="flex min-w-0 items-center gap-2">
                 <CardTitle className="shrink-0">{t("dashboard.requests")}</CardTitle>
                 <Badge variant="outline" className="shrink-0">
-                  {usageBucketLabel(props.usage?.bucket_minutes ?? 1, t)}
+                  {usageBucketLabel(props.usage.bucket_minutes, t)}
                 </Badge>
                 <Badge variant="secondary" className="min-w-0 truncate">
                   {displayMinute(props.usageFilter.from)} - {displayMinute(props.usageFilter.to)}
@@ -96,18 +96,23 @@ export function DashboardPage(props: {
                 models={props.models}
                 onChange={props.onUsageFilterChange}
               />
-              <UsageChart series={props.usageSeries} bucketMinutes={props.usage?.bucket_minutes ?? 1} onRangeSelect={props.onSelectUsageRange} />
+              <UsageChart series={props.usageSeries} bucketMinutes={props.usage.bucket_minutes} onRangeSelect={props.onSelectUsageRange} />
             </CardContent>
           </Card>
+        </>
+      ) : (
+        <DashboardLoadingPanel />
+      )}
 
+      {props.tokenUsage ? (
+        <>
           <TokenUsageMetrics usage={props.tokenUsage} />
-
           <Card>
             <CardHeader>
               <div className="flex min-w-0 items-center gap-2">
                 <CardTitle className="shrink-0">{t("usage.tokens_title")}</CardTitle>
                 <Badge variant="outline" className="shrink-0">
-                  {usageBucketLabel(props.tokenUsage?.bucket_minutes ?? 1, t)}
+                  {usageBucketLabel(props.tokenUsage.bucket_minutes, t)}
                 </Badge>
                 <Badge variant="secondary" className="min-w-0 truncate">
                   {displayMinute(props.tokenUsageFilter.from)} - {displayMinute(props.tokenUsageFilter.to)}
@@ -130,8 +135,10 @@ export function DashboardPage(props: {
               <TokenUsageChart series={props.tokenUsageSeries} />
             </CardContent>
           </Card>
-        </div>
-      </section>
+        </>
+      ) : (
+        <DashboardLoadingPanel />
+      )}
     </div>
   );
 }
@@ -214,16 +221,16 @@ function UsageFilterControls(props: { filter: UsageFilter; userAPIKeys: UserAPIK
   );
 }
 
-function TokenUsageMetrics(props: { usage: UsageSummary | null }) {
+function TokenUsageMetrics(props: { usage: UsageSummary }) {
 	const { t } = useLocale();
 	const usage = props.usage;
-	const promptTokens = usage?.prompt_tokens ?? 0;
-	const cachedTokens = usage?.cached_tokens ?? 0;
+	const promptTokens = usage.prompt_tokens;
+	const cachedTokens = usage.cached_tokens;
 	const items = [
-		{ label: t("usage.total_tokens"), value: usage?.total_tokens ?? 0 },
+		{ label: t("usage.total_tokens"), value: usage.total_tokens },
 		{ label: t("usage.input_cached_tokens_metric"), value: cachedTokens },
 		{ label: t("usage.input_uncached_tokens_metric"), value: Math.max(0, promptTokens - cachedTokens) },
-		{ label: t("usage.output_tokens"), value: usage?.completion_tokens ?? 0 },
+		{ label: t("usage.output_tokens"), value: usage.completion_tokens },
 	];
 
   return (
@@ -240,7 +247,15 @@ function TokenUsageMetrics(props: { usage: UsageSummary | null }) {
   );
 }
 
-
+function DashboardLoadingPanel() {
+  return (
+    <Card>
+      <CardContent className="flex min-h-[27.6rem] items-center justify-center">
+        <Loader2 className="size-7 animate-spin text-muted-foreground" />
+      </CardContent>
+    </Card>
+  );
+}
 
 function isRange(filter: UsageFilter, range: { from: string; to: string }) {
   return filter.from === range.from && filter.to === range.to;

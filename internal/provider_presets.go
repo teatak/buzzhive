@@ -33,11 +33,18 @@ func findProviderPreset(id string) (ProviderPreset, bool) {
 }
 
 func (p ProviderPreset) Provider() ProviderRecord {
+	endpoints := make([]ProviderEndpoint, 0, len(p.Protocols))
+	for _, protocol := range p.Protocols {
+		endpoints = append(endpoints, ProviderEndpoint{
+			Protocol: protocol,
+			BaseURL:  p.BaseURL,
+			Enabled:  true,
+		})
+	}
 	return ProviderRecord{
 		Name:      p.Name,
-		Protocols: p.Protocols,
 		PresetID:  p.ID,
-		BaseURL:   p.BaseURL,
+		Endpoints: endpoints,
 		Enabled:   true,
 	}
 }

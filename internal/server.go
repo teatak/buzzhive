@@ -174,6 +174,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/v1beta/models/") {
+		model, _, ok := parseGeminiModelAction(r.URL.Path)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Gemini endpoint not found"})
+			return
+		}
+		body, ok := readRequestBody(w, r)
+		if !ok {
+			return
+		}
+		s.proxy(w, r, body, user, model)
+		return
+	}
 
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 }

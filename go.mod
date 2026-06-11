@@ -8,10 +8,12 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-require github.com/teatak/cart/v2 v2.1.8
+require (
+	github.com/redis/go-redis/v9 v9.20.0
+	github.com/teatak/cart/v3 v3.0.0
+)
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/redis/go-redis/v9 v9.20.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 )

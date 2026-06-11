@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/teatak/buzzhive/internal/protocol"
 )
 
 func createGeminiRouteTestStore(t *testing.T, baseURL, publicModel, upstreamModel, keySecret string) (*Store, []APIKey) {
@@ -20,10 +22,13 @@ func createGeminiRouteTestStore(t *testing.T, baseURL, publicModel, upstreamMode
 
 	store := openTestStore(t)
 	provider, err := store.CreateProvider(ProviderRecord{
-		Name:      providerGemini,
-		Protocols: []string{providerGemini},
-		BaseURL:   baseURL,
-		Enabled:   true,
+		Name: providerGemini,
+		Endpoints: []ProviderEndpoint{{
+			Protocol: providerGemini,
+			BaseURL:  baseURL,
+			Enabled:  true,
+		}},
+		Enabled: true,
 	})
 	if err != nil {
 		store.Close()
@@ -151,13 +156,13 @@ func TestValidateOpenAIChatParameterSupport(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		req     openAIChatRequest
+		req     protocol.OpenAIChatRequest
 		wantErr string
 	}{
-		{name: "default", req: openAIChatRequest{}},
-		{name: "n one", req: openAIChatRequest{N: &one}},
-		{name: "logprobs false", req: openAIChatRequest{Logprobs: &falseValue}},
-		{name: "ignored compatible params", req: openAIChatRequest{
+		{name: "default", req: protocol.OpenAIChatRequest{}},
+		{name: "n one", req: protocol.OpenAIChatRequest{N: &one}},
+		{name: "logprobs false", req: protocol.OpenAIChatRequest{Logprobs: &falseValue}},
+		{name: "ignored compatible params", req: protocol.OpenAIChatRequest{
 			Seed:             int64PtrForTest(123),
 			PresencePenalty:  float64PtrForTest(0.2),
 			FrequencyPenalty: float64PtrForTest(0.3),
@@ -165,10 +170,10 @@ func TestValidateOpenAIChatParameterSupport(t *testing.T) {
 			User:             "alice",
 			Metadata:         json.RawMessage(`{"trace":"ok"}`),
 		}},
-		{name: "n zero", req: openAIChatRequest{N: &zero}, wantErr: "n must be at least 1"},
-		{name: "n greater than one", req: openAIChatRequest{N: &two}, wantErr: "n greater than 1 is not supported"},
-		{name: "logprobs true", req: openAIChatRequest{Logprobs: &trueValue}, wantErr: "logprobs is not supported"},
-		{name: "top logprobs", req: openAIChatRequest{TopLogprobs: &topLogprobs}, wantErr: "top_logprobs is not supported"},
+		{name: "n zero", req: protocol.OpenAIChatRequest{N: &zero}, wantErr: "n must be at least 1"},
+		{name: "n greater than one", req: protocol.OpenAIChatRequest{N: &two}, wantErr: "n greater than 1 is not supported"},
+		{name: "logprobs true", req: protocol.OpenAIChatRequest{Logprobs: &trueValue}, wantErr: "logprobs is not supported"},
+		{name: "top logprobs", req: protocol.OpenAIChatRequest{TopLogprobs: &topLogprobs}, wantErr: "top_logprobs is not supported"},
 	}
 
 	for _, tt := range tests {
@@ -278,7 +283,7 @@ func TestOpenAIRetryErrorUsesMappedRateLimitError(t *testing.T) {
 func TestOpenAIChatCompletionsRoutesToGemini(t *testing.T) {
 	var upstreamPath string
 	var upstreamKey string
-	var upstreamBody geminiGenerateRequest
+	var upstreamBody protocol.GeminiGenerateRequest
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamPath = r.URL.Path
 		upstreamKey = r.URL.Query().Get("key")
@@ -366,7 +371,7 @@ func TestOpenAIChatCompletionsRoutesToGemini(t *testing.T) {
 		t.Fatalf("contents = %+v", upstreamBody.Contents)
 	}
 
-	var got openAIChatResponse
+	var got protocol.OpenAIChatResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +428,7 @@ func TestOpenAIChatCompletionsRoutesToGemini(t *testing.T) {
 }
 
 func TestOpenAIChatReasoningEffortRoutesToGeminiThinkingLevel(t *testing.T) {
-	var upstreamBody geminiGenerateRequest
+	var upstreamBody protocol.GeminiGenerateRequest
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
 			t.Fatal(err)
@@ -517,7 +522,7 @@ func TestOpenAIChatResponseFormatRoutesToGemini(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var upstreamBody geminiGenerateRequest
+			var upstreamBody protocol.GeminiGenerateRequest
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
 					t.Fatal(err)
@@ -601,9 +606,9 @@ func TestOpenAIChatResponseFormatRoutesToGemini(t *testing.T) {
 }
 
 func TestOpenAIChatRejectsUnsupportedResponseFormat(t *testing.T) {
-	_, err := openAIToCanonicalChatRequest(openAIChatRequest{
+	_, err := protocol.OpenAIChatToCanonical(protocol.OpenAIChatRequest{
 		Model: "gemini-3.5-flash",
-		Messages: []openAIMessage{{
+		Messages: []protocol.OpenAIMessage{{
 			Role:    "user",
 			Content: json.RawMessage(`"hi"`),
 		}},
@@ -615,7 +620,7 @@ func TestOpenAIChatRejectsUnsupportedResponseFormat(t *testing.T) {
 }
 
 func TestOpenAIChatTextPartsRouteToGemini(t *testing.T) {
-	var upstreamBody geminiGenerateRequest
+	var upstreamBody protocol.GeminiGenerateRequest
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
 			t.Fatal(err)
@@ -693,7 +698,7 @@ func TestOpenAIChatTextPartsRouteToGemini(t *testing.T) {
 }
 
 func TestOpenAIChatToolsRouteToGemini(t *testing.T) {
-	var upstreamBody geminiGenerateRequest
+	var upstreamBody protocol.GeminiGenerateRequest
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
 			t.Fatal(err)
@@ -774,7 +779,7 @@ func TestOpenAIChatToolsRouteToGemini(t *testing.T) {
 }
 
 func TestOpenAIChatToolChoiceRoutesToGeminiToolConfig(t *testing.T) {
-	var upstreamBody geminiGenerateRequest
+	var upstreamBody protocol.GeminiGenerateRequest
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
 			t.Fatal(err)
@@ -852,9 +857,9 @@ func TestOpenAIChatToolChoiceRoutesToGeminiToolConfig(t *testing.T) {
 }
 
 func TestOpenAIChatToolChoiceRejectsUnknownFunction(t *testing.T) {
-	_, err := openAIToCanonicalChatRequest(openAIChatRequest{
+	_, err := protocol.OpenAIChatToCanonical(protocol.OpenAIChatRequest{
 		Model: "gemini-3.5-flash",
-		Messages: []openAIMessage{{
+		Messages: []protocol.OpenAIMessage{{
 			Role:    "user",
 			Content: json.RawMessage(`"hi"`),
 		}},
@@ -880,9 +885,9 @@ func TestOpenAIChatToolChoiceModes(t *testing.T) {
 		{name: "required", raw: json.RawMessage(`"required"`), mode: "ANY"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			req, err := openAIToCanonicalChatRequest(openAIChatRequest{
+			req, err := protocol.OpenAIChatToCanonical(protocol.OpenAIChatRequest{
 				Model: "gemini-3.5-flash",
-				Messages: []openAIMessage{{
+				Messages: []protocol.OpenAIMessage{{
 					Role:    "user",
 					Content: json.RawMessage(`"hi"`),
 				}},
@@ -968,7 +973,7 @@ func TestOpenAIChatGeminiFunctionCallToOpenAIToolCall(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
 	}
-	var got openAIChatResponse
+	var got protocol.OpenAIChatResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
@@ -991,7 +996,7 @@ func TestOpenAIChatGeminiFunctionCallToOpenAIToolCall(t *testing.T) {
 
 func TestOpenAIChatReplaysGeminiThoughtSignature(t *testing.T) {
 	var calls int
-	var secondBody geminiGenerateRequest
+	var secondBody protocol.GeminiGenerateRequest
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.Header().Set("Content-Type", "application/json")
@@ -1072,7 +1077,7 @@ func TestOpenAIChatReplaysGeminiThoughtSignature(t *testing.T) {
 	if firstRR.Code != http.StatusOK {
 		t.Fatalf("first status = %d, body = %s", firstRR.Code, firstRR.Body.String())
 	}
-	var firstResp openAIChatResponse
+	var firstResp protocol.OpenAIChatResponse
 	if err := json.Unmarshal(firstRR.Body.Bytes(), &firstResp); err != nil {
 		t.Fatal(err)
 	}
@@ -1108,16 +1113,16 @@ func TestOpenAIChatReplaysGeminiThoughtSignature(t *testing.T) {
 
 func TestOpenAIChatReplaysGeminiThoughtSignatureByFunctionArguments(t *testing.T) {
 	srv := &Server{}
-	srv.rememberToolSignatures([]canonicalToolCall{{
+	srv.rememberToolSignatures([]protocol.ChatToolCall{{
 		ID:        "call_old",
 		Name:      "search",
 		Arguments: `{"b":2,"a":1}`,
 		Signature: "sig-abc",
 	}})
-	req := &canonicalChatRequest{
-		Messages: []canonicalMessage{{
+	req := &protocol.ChatRequest{
+		Messages: []protocol.ChatMessage{{
 			Role: "assistant",
-			Parts: []canonicalPart{{
+			Parts: []protocol.ChatPart{{
 				Type:       "tool_call",
 				ToolCallID: "call_new",
 				Name:       "search",
@@ -1134,9 +1139,9 @@ func TestOpenAIChatReplaysGeminiThoughtSignatureByFunctionArguments(t *testing.T
 }
 
 func TestOpenAIChatToolResultConvertsToGeminiFunctionResponse(t *testing.T) {
-	req := openAIChatRequest{
+	req := protocol.OpenAIChatRequest{
 		Model: "gemini-3.5-flash",
-		Messages: []openAIMessage{
+		Messages: []protocol.OpenAIMessage{
 			{
 				Role:    "user",
 				Content: json.RawMessage(`"what is the weather"`),
@@ -1144,10 +1149,10 @@ func TestOpenAIChatToolResultConvertsToGeminiFunctionResponse(t *testing.T) {
 			{
 				Role:    "assistant",
 				Content: json.RawMessage(`null`),
-				ToolCalls: []openAIToolCall{{
+				ToolCalls: []protocol.OpenAIToolCall{{
 					ID:   "call_1",
 					Type: "function",
-					Function: openAIToolCallFunction{
+					Function: protocol.OpenAIToolCallFunction{
 						Name:      "get_weather",
 						Arguments: `{"city":"Paris"}`,
 					},
@@ -1161,11 +1166,11 @@ func TestOpenAIChatToolResultConvertsToGeminiFunctionResponse(t *testing.T) {
 		},
 	}
 
-	canonicalReq, err := openAIToCanonicalChatRequest(req)
+	canonicalReq, err := protocol.OpenAIChatToCanonical(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	geminiReq, err := canonicalToGeminiGenerateRequest(canonicalReq)
+	geminiReq, err := protocol.CanonicalToGeminiGenerateRequest(canonicalReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1205,7 +1210,7 @@ func TestOpenAIChatToolResultConvertsToGeminiFunctionResponse(t *testing.T) {
 }
 
 func TestOpenAIChatToolResultRoutesToGemini(t *testing.T) {
-	var upstreamBody geminiGenerateRequest
+	var upstreamBody protocol.GeminiGenerateRequest
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
 			t.Fatal(err)
@@ -1315,7 +1320,7 @@ func TestOpenAIChatToolResultRoutesToGemini(t *testing.T) {
 		t.Fatalf("response = %+v", payload)
 	}
 
-	var got openAIChatResponse
+	var got protocol.OpenAIChatResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
@@ -1325,9 +1330,9 @@ func TestOpenAIChatToolResultRoutesToGemini(t *testing.T) {
 }
 
 func TestOpenAIChatRejectsUnknownToolCallID(t *testing.T) {
-	_, err := openAIToCanonicalChatRequest(openAIChatRequest{
+	_, err := protocol.OpenAIChatToCanonical(protocol.OpenAIChatRequest{
 		Model: "gemini-3.5-flash",
-		Messages: []openAIMessage{
+		Messages: []protocol.OpenAIMessage{
 			{Role: "user", Content: json.RawMessage(`"hi"`)},
 			{Role: "tool", ToolCallID: "missing", Content: json.RawMessage(`"ok"`)},
 		},
@@ -1338,7 +1343,7 @@ func TestOpenAIChatRejectsUnknownToolCallID(t *testing.T) {
 }
 
 func TestOpenAIChatToolsStreamTranslatesGeminiFunctionCall(t *testing.T) {
-	var upstreamBody geminiGenerateRequest
+	var upstreamBody protocol.GeminiGenerateRequest
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
 			t.Fatal(err)
@@ -1401,13 +1406,13 @@ func TestOpenAIChatToolsStreamTranslatesGeminiFunctionCall(t *testing.T) {
 	if len(upstreamBody.Tools) != 1 || len(upstreamBody.Tools[0].FunctionDeclarations) != 1 {
 		t.Fatalf("tools = %+v", upstreamBody.Tools)
 	}
-	var toolChunk openAIChatResponse
+	var toolChunk protocol.OpenAIChatResponse
 	for _, line := range strings.Split(rr.Body.String(), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "data: ") || line == "data: [DONE]" {
 			continue
 		}
-		var chunk openAIChatResponse
+		var chunk protocol.OpenAIChatResponse
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &chunk); err != nil {
 			t.Fatal(err)
 		}
@@ -1439,9 +1444,9 @@ func TestOpenAIChatToolsStreamTranslatesGeminiFunctionCall(t *testing.T) {
 }
 
 func TestOpenAIChatToolsStreamStoresThoughtSignatureForNextTurn(t *testing.T) {
-	var upstreamBodies []geminiGenerateRequest
+	var upstreamBodies []protocol.GeminiGenerateRequest
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var upstreamBody geminiGenerateRequest
+		var upstreamBody protocol.GeminiGenerateRequest
 		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
 			t.Fatal(err)
 		}
@@ -1515,13 +1520,13 @@ func TestOpenAIChatToolsStreamStoresThoughtSignatureForNextTurn(t *testing.T) {
 		t.Fatalf("first status = %d, body = %s", firstRR.Code, firstRR.Body.String())
 	}
 
-	var streamedCall openAIToolCall
+	var streamedCall protocol.OpenAIToolCall
 	for _, line := range strings.Split(firstRR.Body.String(), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "data: ") || line == "data: [DONE]" {
 			continue
 		}
-		var chunk openAIChatResponse
+		var chunk protocol.OpenAIChatResponse
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &chunk); err != nil {
 			t.Fatal(err)
 		}
@@ -1572,7 +1577,7 @@ func TestOpenAIChatToolsStreamStoresThoughtSignatureForNextTurn(t *testing.T) {
 }
 
 func TestOpenAIChatImageDataURLPartRoutesToGemini(t *testing.T) {
-	var upstreamBody geminiGenerateRequest
+	var upstreamBody protocol.GeminiGenerateRequest
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
 			t.Fatal(err)
@@ -1651,7 +1656,7 @@ func TestOpenAIChatImageDataURLPartRoutesToGemini(t *testing.T) {
 }
 
 func TestOpenAIChatInputAudioPartRoutesToGemini(t *testing.T) {
-	var upstreamBody geminiGenerateRequest
+	var upstreamBody protocol.GeminiGenerateRequest
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
 			t.Fatal(err)
@@ -1730,9 +1735,9 @@ func TestOpenAIChatInputAudioPartRoutesToGemini(t *testing.T) {
 }
 
 func TestOpenAIChatRejectsRemoteImageURLPart(t *testing.T) {
-	_, err := openAIToCanonicalChatRequest(openAIChatRequest{
+	_, err := protocol.OpenAIChatToCanonical(protocol.OpenAIChatRequest{
 		Model: "gemini-3.5-flash",
-		Messages: []openAIMessage{{
+		Messages: []protocol.OpenAIMessage{{
 			Role:    "user",
 			Content: json.RawMessage(`[{"type":"image_url","image_url":{"url":"https://example.com/image.png"}}]`),
 		}},
@@ -1781,10 +1786,13 @@ func TestOpenAIChatUsesModelRouteUpstreamModel(t *testing.T) {
 	}
 	store := openTestStore(t)
 	provider, err := store.CreateProvider(ProviderRecord{
-		Name:      providerGemini,
-		Protocols: []string{providerGemini},
-		BaseURL:   upstream.URL,
-		Enabled:   true,
+		Name: providerGemini,
+		Endpoints: []ProviderEndpoint{{
+			Protocol: providerGemini,
+			BaseURL:  upstream.URL,
+			Enabled:  true,
+		}},
+		Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2034,10 +2042,16 @@ func TestOpenAIChatPassesThroughOpenAICompatibleProvider(t *testing.T) {
 
 	now := storeNow()
 	providerID, err := store.insertReturningID(
-		`INSERT INTO providers (name, preset_id, base_url, protocols, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		"openrouter", "openrouter", upstream.URL+"/v1", "openai", now, now,
+		`INSERT INTO providers (name, preset_id, enabled, created_at, updated_at) VALUES (?, ?, 1, ?, ?)`,
+		"openrouter", "openrouter", now, now,
 	)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.exec(
+		`INSERT INTO provider_endpoints (provider_id, protocol, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)`,
+		providerID, providerOpenAI, upstream.URL+"/v1", now, now,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.exec(
@@ -2163,10 +2177,16 @@ func TestOpenAIResponsesPassesThroughOpenAICompatibleProvider(t *testing.T) {
 
 	now := storeNow()
 	providerID, err := store.insertReturningID(
-		`INSERT INTO providers (name, preset_id, base_url, protocols, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		"openrouter", "openrouter", upstream.URL+"/v1", "openai-responses", now, now,
+		`INSERT INTO providers (name, preset_id, enabled, created_at, updated_at) VALUES (?, ?, 1, ?, ?)`,
+		"openrouter", "openrouter", now, now,
 	)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.exec(
+		`INSERT INTO provider_endpoints (provider_id, protocol, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)`,
+		providerID, providerOpenAIResponses, upstream.URL+"/v1", now, now,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.exec(
@@ -2263,6 +2283,222 @@ func TestOpenAIResponsesPassesThroughOpenAICompatibleProvider(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesRoutesToOpenAIChat(t *testing.T) {
+	var upstreamPath string
+	var upstreamBody protocol.OpenAIChatRequest
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"id":"chatcmpl-upstream",
+			"object":"chat.completion",
+			"created":123,
+			"model":"gpt-upstream",
+			"choices":[{"message":{"role":"assistant","content":"hello from chat"},"finish_reason":"stop"}],
+			"usage":{
+				"prompt_tokens":7,
+				"completion_tokens":5,
+				"total_tokens":12,
+				"prompt_tokens_details":{"cached_tokens":2},
+				"completion_tokens_details":{"reasoning_tokens":3}
+			}
+		}`))
+	}))
+	defer upstream.Close()
+
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := openTestStore(t)
+	defer store.Close()
+
+	provider, err := store.CreateProvider(ProviderRecord{
+		Name: "openrouter",
+		Endpoints: []ProviderEndpoint{{
+			Protocol: providerOpenAI,
+			BaseURL:  upstream.URL + "/v1",
+			Enabled:  true,
+		}},
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateProviderKey(ProviderKey{ProviderID: provider.ID, Name: "or-main", Secret: "sk-secret", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	model, err := store.CreateModel(Model{Name: "public-response-chat", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateModelRoute(ModelRoute{ModelID: model.ID, ProviderID: provider.ID, UpstreamModel: "gpt-upstream", Enabled: true, Weight: 1}); err != nil {
+		t.Fatal(err)
+	}
+	providerRecords, err := store.EnabledProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers, err := newProviderRegistry(providerRecords, upstreamURL, upstream.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := store.RuntimeProviderAPIKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{
+		store:     store,
+		upstream:  upstreamURL,
+		client:    upstream.Client(),
+		providers: providers,
+		authTokens: map[string]AuthToken{
+			"bh_valid": {Name: "alice-key", UserName: "alice", Valid: true},
+		},
+		keyState: &KeyState{
+			keys:         keys,
+			cooldown:     time.Minute,
+			rpdCooldown:  time.Hour,
+			exhausted:    make(map[string]time.Time),
+			cooldownHits: make(map[string]int),
+			rpdLike:      make(map[string]bool),
+			errors:       make(map[string]KeyError),
+		},
+		stats: Stats{
+			StartedAt: time.Now(),
+			Exhausted: make(map[string]string),
+			RPDLike:   make(map[string]bool),
+			KeyErrors: make(map[string]KeyError),
+		},
+	}
+	srv.cfg.Retry.MaxAttempts = 2
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"public-response-chat","instructions":"be brief","input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer bh_valid")
+	rr := httptest.NewRecorder()
+
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if upstreamPath != "/v1/chat/completions" {
+		t.Fatalf("upstream path = %q", upstreamPath)
+	}
+	if upstreamBody.Model != "gpt-upstream" || len(upstreamBody.Messages) != 2 {
+		t.Fatalf("upstream body = %+v", upstreamBody)
+	}
+	var got protocol.OpenAIResponsesResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Object != "response" || got.Model != "public-response-chat" || got.Output[0].Content[0].Text != "hello from chat" {
+		t.Fatalf("response = %+v", got)
+	}
+	if got.Usage == nil || got.Usage.InputTokens != 7 || got.Usage.InputTokensDetails.CachedTokens != 2 || got.Usage.OutputTokensDetails.ReasoningTokens != 3 {
+		t.Fatalf("usage = %+v", got.Usage)
+	}
+}
+
+func TestOpenAIResponsesRoutesToGemini(t *testing.T) {
+	var upstreamPath string
+	var upstreamKey string
+	var upstreamBody protocol.GeminiGenerateRequest
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPath = r.URL.Path
+		upstreamKey = r.URL.Query().Get("key")
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"candidates": [{
+				"content": {"role": "model", "parts": [{"text": "hello from gemini"}]},
+				"finishReason": "STOP"
+			}],
+			"usageMetadata": {
+				"promptTokenCount": 3,
+				"candidatesTokenCount": 4,
+				"totalTokenCount": 7,
+				"cachedContentTokenCount": 1,
+				"thoughtsTokenCount": 2
+			}
+		}`))
+	}))
+	defer upstream.Close()
+
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, keys := createGeminiRouteTestStore(t, upstream.URL, "public-response-gemini", "gemini-3.5-flash", "AIza-secret")
+	defer store.Close()
+	srv := &Server{
+		store:    store,
+		upstream: upstreamURL,
+		client:   upstream.Client(),
+		providers: map[string]Provider{
+			providerGemini: NewGeminiProvider(upstreamURL, upstream.Client()),
+		},
+		authTokens: map[string]AuthToken{
+			"bh_valid": {Name: "alice-key", UserName: "alice", Valid: true},
+		},
+		keyState: &KeyState{
+			keys:         keys,
+			cooldown:     time.Minute,
+			rpdCooldown:  time.Hour,
+			exhausted:    make(map[string]time.Time),
+			cooldownHits: make(map[string]int),
+			rpdLike:      make(map[string]bool),
+			errors:       make(map[string]KeyError),
+		},
+		stats: Stats{
+			StartedAt: time.Now(),
+			Exhausted: make(map[string]string),
+			RPDLike:   make(map[string]bool),
+			KeyErrors: make(map[string]KeyError),
+		},
+	}
+	srv.cfg.Retry.MaxAttempts = 2
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"public-response-gemini","instructions":"be brief","input":"hi"}`))
+	req.Header.Set("Authorization", "Bearer bh_valid")
+	rr := httptest.NewRecorder()
+
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if upstreamPath != "/v1beta/models/gemini-3.5-flash:generateContent" {
+		t.Fatalf("upstream path = %q", upstreamPath)
+	}
+	if upstreamKey != "AIza-secret" {
+		t.Fatalf("upstream key = %q", upstreamKey)
+	}
+	if upstreamBody.SystemInstruction == nil || upstreamBody.SystemInstruction.Parts[0].Text != "be brief" {
+		t.Fatalf("system instruction = %+v", upstreamBody.SystemInstruction)
+	}
+	if len(upstreamBody.Contents) != 1 || upstreamBody.Contents[0].Parts[0].Text != "hi" {
+		t.Fatalf("contents = %+v", upstreamBody.Contents)
+	}
+	var got protocol.OpenAIResponsesResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Object != "response" || got.Model != "public-response-gemini" || got.Output[0].Content[0].Text != "hello from gemini" {
+		t.Fatalf("response = %+v", got)
+	}
+	if got.Usage == nil || got.Usage.InputTokens != 3 || got.Usage.InputTokensDetails.CachedTokens != 1 || got.Usage.OutputTokensDetails.ReasoningTokens != 2 {
+		t.Fatalf("usage = %+v", got.Usage)
+	}
+}
+
 func TestOpenAICompatibleStreamPassThroughFlushesChunks(t *testing.T) {
 	var releaseSecondOnce sync.Once
 	releaseSecond := make(chan struct{})
@@ -2294,10 +2530,16 @@ func TestOpenAICompatibleStreamPassThroughFlushesChunks(t *testing.T) {
 
 	now := storeNow()
 	providerID, err := store.insertReturningID(
-		`INSERT INTO providers (name, preset_id, base_url, protocols, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		"openrouter", "openrouter", upstream.URL, "openai", now, now,
+		`INSERT INTO providers (name, preset_id, enabled, created_at, updated_at) VALUES (?, ?, 1, ?, ?)`,
+		"openrouter", "openrouter", now, now,
 	)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.exec(
+		`INSERT INTO provider_endpoints (provider_id, protocol, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)`,
+		providerID, providerOpenAI, upstream.URL, now, now,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.exec(
@@ -2512,10 +2754,13 @@ func TestOpenAIChatSwitchesModelRoutesWhenRouteKeysCooling(t *testing.T) {
 	}
 	store := openTestStore(t)
 	provider, err := store.CreateProvider(ProviderRecord{
-		Name:      providerGemini,
-		Protocols: []string{providerGemini},
-		BaseURL:   upstream.URL,
-		Enabled:   true,
+		Name: providerGemini,
+		Endpoints: []ProviderEndpoint{{
+			Protocol: providerGemini,
+			BaseURL:  upstream.URL,
+			Enabled:  true,
+		}},
+		Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)

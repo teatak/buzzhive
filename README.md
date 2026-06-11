@@ -14,8 +14,7 @@ BuzzHive is a self-hosted LLM API proxy with multi-user API keys, provider key r
 
 ## Architecture Docs
 
-- [Model routing plan](docs/model-routing-plan.zh-CN.md): model-centric provider / key / route architecture.
-- [Model routing task list](docs/model-routing-tasks.zh-CN.md): current completion status and remaining work.
+- [Canonical protocol task](docs/canonical-protocol-task.zh-CN.md): passthrough-first protocol conversion plan.
 
 ## Quick Install
 
@@ -135,9 +134,37 @@ Public API:
 ```text
 GET  http://127.0.0.1:9622/v1/models
 POST http://127.0.0.1:9622/v1/chat/completions
+POST http://127.0.0.1:9622/v1/responses
+POST http://127.0.0.1:9622/v1/messages
+POST http://127.0.0.1:9622/v1beta/models/{model}:generateContent
+POST http://127.0.0.1:9622/v1beta/models/{model}:streamGenerateContent
 ```
 
-BuzzHive currently exposes an OpenAI-compatible API. Put the user-visible BuzzHive model name in the OpenAI `model` field; the backend routes it to configured providers such as Gemini or OpenAI-compatible upstreams.
+BuzzHive exposes OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini GenerateContent-compatible endpoints. Put the user-visible BuzzHive model name in the request model field or Gemini URL path; the backend routes it to the configured provider route.
+
+## API Protocols
+
+Client-facing endpoints:
+
+| Protocol | Endpoint |
+| --- | --- |
+| OpenAI Chat Completions | `POST /v1/chat/completions` |
+| OpenAI Responses | `POST /v1/responses` |
+| Anthropic Messages | `POST /v1/messages` |
+| Gemini GenerateContent | `POST /v1beta/models/{model}:generateContent` |
+| Gemini StreamGenerateContent | `POST /v1beta/models/{model}:streamGenerateContent` |
+| OpenAI-compatible models list | `GET /v1/models` |
+
+Provider endpoints can be configured per provider protocol:
+
+| Provider protocol | Typical base URL |
+| --- | --- |
+| `openai` | `https://api.openai.com/v1` |
+| `openai-responses` | `https://api.openai.com/v1` |
+| `anthropic` | `https://api.anthropic.com` |
+| `gemini` | `https://generativelanguage.googleapis.com` |
+
+Routing is passthrough-first: when the inbound protocol and provider protocol match, BuzzHive forwards the original request. When they differ, BuzzHive converts through its internal canonical protocol layer. Core text, image, basic tool call, usage, and text streaming paths are covered; advanced streamed tool deltas, hosted tools, file input, and reasoning/thinking content streaming are future enhancements.
 
 On first launch, create the initial admin user in the admin UI. Then create user API keys in the UI and pass them as:
 

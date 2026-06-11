@@ -22,9 +22,9 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 
 func maskSecret(value string) string {
 	if len(value) <= 10 {
-		return "****"
+		return strings.Repeat("*", len(value))
 	}
-	return value[:6] + strings.Repeat(".", len(value)-10) + value[len(value)-4:]
+	return value[:6] + strings.Repeat("*", len(value)-10) + value[len(value)-4:]
 }
 
 func randomHex(size int) string {

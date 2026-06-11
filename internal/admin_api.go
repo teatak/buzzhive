@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/teatak/cart/v2"
+	"github.com/teatak/cart/v3"
 )
 
 func (s *Server) newAdminAPI() http.Handler {
@@ -543,12 +543,11 @@ func (s *Server) handleUserAPIKeys(c *cart.Context, actor AppUser) error {
 }
 
 type providerWriteRequest struct {
-	ID        int64    `json:"id"`
-	Name      string   `json:"name"`
-	Protocols []string `json:"protocols"`
-	PresetID  string   `json:"preset_id"`
-	BaseURL   string   `json:"base_url"`
-	Enabled   *bool    `json:"enabled"`
+	ID        int64              `json:"id"`
+	Name      string             `json:"name"`
+	PresetID  string             `json:"preset_id"`
+	Endpoints []ProviderEndpoint `json:"endpoints"`
+	Enabled   *bool              `json:"enabled"`
 }
 
 type providerKeyWriteRequest struct {
@@ -601,9 +600,8 @@ func (s *Server) handleProviders(c *cart.Context) error {
 		}
 		created, err := s.store.CreateProvider(ProviderRecord{
 			Name:      req.Name,
-			Protocols: req.Protocols,
 			PresetID:  req.PresetID,
-			BaseURL:   req.BaseURL,
+			Endpoints: req.Endpoints,
 			Enabled:   boolWithDefault(req.Enabled, true),
 		})
 		if err != nil {
@@ -625,12 +623,9 @@ func (s *Server) handleProviders(c *cart.Context) error {
 		if req.Name != "" {
 			existing.Name = req.Name
 		}
-		if req.Protocols != nil {
-			existing.Protocols = req.Protocols
-		}
 		existing.PresetID = req.PresetID
-		if req.BaseURL != "" {
-			existing.BaseURL = req.BaseURL
+		if req.Endpoints != nil {
+			existing.Endpoints = req.Endpoints
 		}
 		if req.Enabled != nil {
 			existing.Enabled = *req.Enabled

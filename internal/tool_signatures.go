@@ -3,9 +3,11 @@ package buzzhive
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/teatak/buzzhive/internal/protocol"
 )
 
-func (s *Server) rememberToolSignatures(toolCalls []canonicalToolCall) {
+func (s *Server) rememberToolSignatures(toolCalls []protocol.ChatToolCall) {
 	if len(toolCalls) == 0 {
 		return
 	}
@@ -27,7 +29,7 @@ func (s *Server) rememberToolSignatures(toolCalls []canonicalToolCall) {
 	}
 }
 
-func (s *Server) applyToolSignatures(req *canonicalChatRequest) {
+func (s *Server) applyToolSignatures(req *protocol.ChatRequest) {
 	s.toolSigMu.Lock()
 	defer s.toolSigMu.Unlock()
 	if len(s.toolSigs) == 0 {

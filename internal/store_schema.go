@@ -35,8 +35,6 @@ func (s *Store) schemaStatements() []string {
 			id BIGSERIAL PRIMARY KEY,
 			name TEXT NOT NULL UNIQUE,
 			preset_id TEXT NOT NULL DEFAULT '',
-			base_url TEXT NOT NULL,
-			protocols TEXT NOT NULL DEFAULT '',
 			supports_responses INTEGER NOT NULL DEFAULT 0,
 			enabled INTEGER NOT NULL DEFAULT 1,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -45,7 +43,17 @@ func (s *Store) schemaStatements() []string {
 		`ALTER TABLE providers DROP COLUMN IF EXISTS type`,
 		`ALTER TABLE providers DROP COLUMN IF EXISTS vendor`,
 		`ALTER TABLE providers ADD COLUMN IF NOT EXISTS supports_responses INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE providers ADD COLUMN IF NOT EXISTS protocols TEXT NOT NULL DEFAULT ''`,
+		`CREATE TABLE IF NOT EXISTS provider_endpoints (
+			id BIGSERIAL PRIMARY KEY,
+			provider_id BIGINT NOT NULL,
+			protocol TEXT NOT NULL,
+			base_url TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			UNIQUE(provider_id, protocol),
+			FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS provider_keys (
 			id BIGSERIAL PRIMARY KEY,
 			provider_id BIGINT NOT NULL,
@@ -152,6 +160,7 @@ func (s *Store) schemaStatements() []string {
 			PRIMARY KEY (bucket_start, user_id, user_api_key_id, model)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_keys_provider_id ON provider_keys(provider_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_provider_endpoints_provider_id ON provider_endpoints(provider_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_model_routes_model_id ON model_routes(model_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_model_routes_provider_id ON model_routes(provider_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_user_created ON usage_logs(user_id, created_at)`,
@@ -160,8 +169,26 @@ func (s *Store) schemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_usage_stats_hourly_key_bucket ON usage_stats_hourly(user_api_key_id, bucket_start)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_stats_daily_user_bucket ON usage_stats_daily(user_id, bucket_start)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_stats_daily_key_bucket ON usage_stats_daily(user_api_key_id, bucket_start)`,
-		`UPDATE providers SET protocols = 'openai' WHERE (protocols = '' OR protocols IS NULL) AND preset_id IN ('openai', 'openai-responses', 'mimo', 'mimo-plan', 'deepseek', 'qwen', 'moonshot', 'zhipu', 'openrouter')`,
-		`UPDATE providers SET protocols = 'anthropic' WHERE (protocols = '' OR protocols IS NULL) AND preset_id = 'anthropic'`,
-		`UPDATE providers SET protocols = 'gemini' WHERE (protocols = '' OR protocols IS NULL) AND preset_id = 'gemini'`,
+		`DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_name = 'providers' AND column_name = 'base_url'
+			) AND EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_name = 'providers' AND column_name = 'protocols'
+			) THEN
+				EXECUTE $migrate$
+					INSERT INTO provider_endpoints (provider_id, protocol, base_url, enabled, created_at, updated_at)
+					SELECT p.id, trim(proto), p.base_url, p.enabled, now(), now()
+					FROM providers p
+					CROSS JOIN LATERAL regexp_split_to_table(p.protocols, ',') AS proto
+					WHERE trim(proto) <> '' AND p.base_url <> ''
+					ON CONFLICT (provider_id, protocol) DO NOTHING
+				$migrate$;
+			END IF;
+		END $$`,
+		`ALTER TABLE providers DROP COLUMN IF EXISTS base_url`,
+		`ALTER TABLE providers DROP COLUMN IF EXISTS protocols`,
 	}
 }

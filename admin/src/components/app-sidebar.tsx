@@ -12,6 +12,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarRail,
 } from "@/components/ui/sidebar";
 
 type AppSidebarProps = {
@@ -31,17 +32,27 @@ const items: Array<{ view: View; labelKey: string; icon: typeof Gauge; adminOnly
 export function AppSidebar({ role, view, onNavigate }: AppSidebarProps) {
   const { t } = useLocale();
   return (
-    <Sidebar>
+    <Sidebar collapsible="icon">
       <SidebarHeader>
-        <div className="flex items-center gap-2 px-2 py-1.5">
-          <div className="flex size-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 via-indigo-600 to-blue-600 text-white shadow-sm">
-            <BrandLogo className="size-7" />
-          </div>
-          <div className="grid flex-1 text-left text-sm leading-tight">
-            <span className="truncate font-semibold">BuzzHive</span>
-            <span className="truncate text-xs text-muted-foreground">{t("app.subtitle")}</span>
-          </div>
-        </div>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              asChild
+              size="lg"
+              className="cursor-default duration-300 ease-in-out hover:bg-transparent hover:text-sidebar-foreground"
+            >
+              <div>
+                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 via-indigo-600 to-blue-600 text-white shadow-sm transition-transform duration-300 ease-in-out">
+                  <BrandLogo className="size-7!" />
+                </div>
+                <div className="grid flex-1 text-left text-sm leading-tight transition-transform duration-300 ease-in-out">
+                  <span className="truncate font-semibold">BuzzHive</span>
+                  <span className="truncate text-xs text-muted-foreground">{t("app.subtitle")}</span>
+                </div>
+              </div>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
@@ -53,6 +64,7 @@ export function AppSidebar({ role, view, onNavigate }: AppSidebarProps) {
                   <SidebarMenuButton
                     type="button"
                     isActive={view === item.view}
+                    tooltip={t(item.labelKey)}
                     className="hover:bg-primary/10 hover:text-foreground dark:hover:bg-primary/25 dark:hover:text-white data-[active=true]:bg-indigo-600 data-[active=true]:text-white data-[active=true]:hover:bg-indigo-600 data-[active=true]:hover:text-white"
                     onClick={() => onNavigate(item.view)}
                   >
@@ -65,6 +77,7 @@ export function AppSidebar({ role, view, onNavigate }: AppSidebarProps) {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+      <SidebarRail className="!cursor-w-resize [[data-side=left][data-state=collapsed]_&]:!cursor-e-resize [[data-side=right][data-state=collapsed]_&]:!cursor-w-resize" />
     </Sidebar>
   );
 }

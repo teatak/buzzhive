@@ -14,8 +14,7 @@ BuzzHive 是一个自托管 LLM API 代理，支持多用户 API Key、提供方
 
 ## 架构文档
 
-- [模型路由计划](docs/model-routing-plan.zh-CN.md)：以 Model 为核心的 provider / key / route 架构。
-- [模型路由任务清单](docs/model-routing-tasks.zh-CN.md)：当前完成度和剩余任务。
+- [Canonical 协议转换层任务](docs/canonical-protocol-task.zh-CN.md)：透传优先的协议转换层计划。
 
 ## 快速安装
 
@@ -135,9 +134,37 @@ http://127.0.0.1:9622/admin/
 ```text
 GET  http://127.0.0.1:9622/v1/models
 POST http://127.0.0.1:9622/v1/chat/completions
+POST http://127.0.0.1:9622/v1/responses
+POST http://127.0.0.1:9622/v1/messages
+POST http://127.0.0.1:9622/v1beta/models/{model}:generateContent
+POST http://127.0.0.1:9622/v1beta/models/{model}:streamGenerateContent
 ```
 
-BuzzHive 对外第一版只提供 OpenAI-compatible API。OpenAI `model` 字段填写用户可见的 BuzzHive 模型名，后端再路由到 Gemini、OpenAI-compatible 等上游 provider。
+BuzzHive 对外支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 和 Gemini GenerateContent 兼容接口。请求中的 `model` 字段或 Gemini URL 路径中的模型名填写用户可见的 BuzzHive 模型名，后端再路由到配置好的 provider route。
+
+## API 协议
+
+客户端入口：
+
+| 协议 | 地址 |
+| --- | --- |
+| OpenAI Chat Completions | `POST /v1/chat/completions` |
+| OpenAI Responses | `POST /v1/responses` |
+| Anthropic Messages | `POST /v1/messages` |
+| Gemini GenerateContent | `POST /v1beta/models/{model}:generateContent` |
+| Gemini StreamGenerateContent | `POST /v1beta/models/{model}:streamGenerateContent` |
+| OpenAI-compatible 模型列表 | `GET /v1/models` |
+
+Provider endpoint 可按协议单独配置：
+
+| Provider 协议 | 常见 Base URL |
+| --- | --- |
+| `openai` | `https://api.openai.com/v1` |
+| `openai-responses` | `https://api.openai.com/v1` |
+| `anthropic` | `https://api.anthropic.com` |
+| `gemini` | `https://generativelanguage.googleapis.com` |
+
+路由策略是透传优先：入口协议和 provider 协议一致时直接透传；不一致时通过内部 Canonical 协议层转换。当前已覆盖普通文本、图片、基础工具调用、usage 统计和文本流式转换；流式工具调用增量、hosted tools、file input、reasoning/thinking 内容流式回传属于后续增强。
 
 首次启动时，在管理后台创建初始管理员。之后在 UI 中创建用户 API Key，并这样调用：
 

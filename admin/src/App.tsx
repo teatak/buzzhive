@@ -58,6 +58,8 @@ type ConfirmAction = {
   onConfirm: () => Promise<void>;
 };
 
+const HOLD_DASHBOARD_USAGE_REQUESTS = false;
+
 function asList<T>(value: T[] | null | undefined): T[] {
   return value ?? [];
 }
@@ -138,16 +140,23 @@ export function App() {
   }
 
   async function loadDashboard(activeToken = token) {
-    const [nextStats, nextUsage, nextTokenUsage, nextUserAPIKeys, nextModels] = await Promise.all([
+    const [nextStats, nextUserAPIKeys, nextModels] = await Promise.all([
       request<Stats>("/admin/api/stats", activeToken),
-      request<UsageSummary>(usagePath(usageFilter), activeToken),
-      request<UsageSummary>(usagePath(tokenUsageFilter), activeToken),
       request<UserAPIKey[]>("/admin/api/user-api-keys", activeToken),
       request<Model[]>("/admin/api/models", activeToken),
     ]);
     setStats(nextStats);
-    setUsage(nextUsage);
-    setTokenUsage(nextTokenUsage);
+    if (HOLD_DASHBOARD_USAGE_REQUESTS) {
+      setUsage(null);
+      setTokenUsage(null);
+    } else {
+      const [nextUsage, nextTokenUsage] = await Promise.all([
+        request<UsageSummary>(usagePath(usageFilter), activeToken),
+        request<UsageSummary>(usagePath(tokenUsageFilter), activeToken),
+      ]);
+      setUsage(nextUsage);
+      setTokenUsage(nextTokenUsage);
+    }
     setUserAPIKeys(asList(nextUserAPIKeys));
     setModels(asList(nextModels));
   }
@@ -432,6 +441,10 @@ export function App() {
 
   useEffect(() => {
     if (!token || !session || view !== "dashboard") return;
+    if (HOLD_DASHBOARD_USAGE_REQUESTS) {
+      setUsage(null);
+      return;
+    }
     request<UsageSummary>(usagePath(usageFilter), token)
       .then(setUsage)
       .catch((error) => toast.error(error instanceof Error ? error.message : tNow("toast.action_failed")));
@@ -439,6 +452,10 @@ export function App() {
 
   useEffect(() => {
     if (!token || !session || view !== "dashboard") return;
+    if (HOLD_DASHBOARD_USAGE_REQUESTS) {
+      setTokenUsage(null);
+      return;
+    }
     request<UsageSummary>(usagePath(tokenUsageFilter), token)
       .then(setTokenUsage)
       .catch((error) => toast.error(error instanceof Error ? error.message : tNow("toast.action_failed")));
