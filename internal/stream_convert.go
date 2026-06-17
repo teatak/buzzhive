@@ -263,7 +263,10 @@ func readAnthropicStreamAsCanonical(r io.Reader, onEvent func(protocol.ChatStrea
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		var event struct {
-			Type  string `json:"type"`
+			Type    string `json:"type"`
+			Message struct {
+				Usage protocol.AnthropicUsage `json:"usage"`
+			} `json:"message"`
 			Delta struct {
 				Type       string `json:"type"`
 				Text       string `json:"text"`
@@ -275,21 +278,32 @@ func readAnthropicStreamAsCanonical(r io.Reader, onEvent func(protocol.ChatStrea
 			continue
 		}
 		switch event.Type {
+		case "message_start":
+			usage = mergeAnthropicStreamUsage(usage, event.Message.Usage)
 		case "content_block_delta":
 			if event.Delta.Type == "text_delta" {
 				onEvent(protocol.ChatStreamEvent{Text: event.Delta.Text})
 			}
 		case "message_delta":
-			usage = protocol.ChatUsage{
-				PromptTokens:     event.Usage.InputTokens,
-				CompletionTokens: event.Usage.OutputTokens,
-				TotalTokens:      event.Usage.InputTokens + event.Usage.OutputTokens,
-				CachedTokens:     event.Usage.CacheReadInputTokens,
-			}
+			usage = mergeAnthropicStreamUsage(usage, event.Usage)
 			onEvent(protocol.ChatStreamEvent{FinishReason: "stop", Usage: usage})
 		}
 	}
 	return usage
+}
+
+func mergeAnthropicStreamUsage(current protocol.ChatUsage, next protocol.AnthropicUsage) protocol.ChatUsage {
+	if next.InputTokens != 0 {
+		current.PromptTokens = next.InputTokens
+	}
+	if next.OutputTokens != 0 {
+		current.CompletionTokens = next.OutputTokens
+	}
+	if next.CacheReadInputTokens != 0 {
+		current.CachedTokens = next.CacheReadInputTokens
+	}
+	current.TotalTokens = current.PromptTokens + current.CompletionTokens
+	return current
 }
 
 func canonicalUsageZero(usage protocol.ChatUsage) bool {

@@ -69,6 +69,16 @@ export function naturalDayRange(date = new Date()): { from: string; to: string }
   return { from: isoMinute(from), to: isoMinute(to) };
 }
 
+export function recentDaysRange(days: number, date = new Date()): { from: string; to: string } {
+  const span = Math.max(1, days);
+  const to = new Date(date);
+  to.setHours(0, 0, 0, 0);
+  to.setDate(to.getDate() + 1);
+  const from = new Date(to);
+  from.setDate(from.getDate() - span);
+  return { from: isoMinute(from), to: isoMinute(to) };
+}
+
 export function naturalMonthRange(date = new Date()): { from: string; to: string } {
   const from = new Date(date.getFullYear(), date.getMonth(), 1);
   const to = new Date(date.getFullYear(), date.getMonth() + 1, 1);

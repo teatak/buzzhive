@@ -251,3 +251,22 @@ func TestAnthropicStreamRoutesToOpenAIChat(t *testing.T) {
 		t.Fatalf("stream body = %s", body)
 	}
 }
+
+func TestReadAnthropicStreamUsageMergesMessageStart(t *testing.T) {
+	stream := strings.NewReader(
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":25,"output_tokens":1,"cache_read_input_tokens":7}}}` + "\n\n" +
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}` + "\n\n" +
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":15}}` + "\n\n",
+	)
+	var events []protocol.ChatStreamEvent
+	usage := readAnthropicStreamAsCanonical(stream, func(event protocol.ChatStreamEvent) {
+		events = append(events, event)
+	})
+
+	if usage.PromptTokens != 25 || usage.CompletionTokens != 15 || usage.TotalTokens != 40 || usage.CachedTokens != 7 {
+		t.Fatalf("usage = %+v", usage)
+	}
+	if len(events) != 2 || events[0].Text != "hello" || events[1].FinishReason != "stop" {
+		t.Fatalf("events = %+v", events)
+	}
+}

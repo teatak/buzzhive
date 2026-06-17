@@ -105,7 +105,6 @@ func normalizeProviderEndpoints(provider ProviderRecord) ([]ProviderEndpoint, er
 			return nil, errors.New("duplicate provider endpoint protocol")
 		}
 		seen[endpoint.Protocol] = true
-		endpoint.Enabled = true
 		out = append(out, endpoint)
 	}
 	if len(out) == 0 {

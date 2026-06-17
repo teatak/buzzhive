@@ -156,6 +156,7 @@ func CanonicalToAnthropicMessagesRequest(req ChatRequest) (AnthropicMessagesRequ
 	}
 	out.Tools = tools
 	out.ToolChoice = canonicalToolChoiceToAnthropic(req.ToolChoice)
+	var systemContent []AnthropicContent
 	for _, message := range req.Messages {
 		content, err := canonicalPartsToAnthropicContent(message.Parts)
 		if err != nil {
@@ -165,13 +166,16 @@ func CanonicalToAnthropicMessagesRequest(req ChatRequest) (AnthropicMessagesRequ
 			continue
 		}
 		if message.Role == "system" || message.Role == "developer" {
-			out.System = content
+			systemContent = append(systemContent, content...)
 			continue
 		}
 		out.Messages = append(out.Messages, AnthropicMessage{
 			Role:    canonicalRoleToAnthropic(message.Role),
 			Content: content,
 		})
+	}
+	if len(systemContent) > 0 {
+		out.System = systemContent
 	}
 	return out, nil
 }

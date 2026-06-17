@@ -3,6 +3,8 @@ import { ChartContainer, ChartTooltip } from "../../components/ui/chart";
 import { tNow } from "../../i18n/locale";
 import type { UsagePoint } from "../../types/admin";
 import { formatCompactNumber } from "../../lib/utils";
+import { ChartDayBands } from "./ChartDayBands";
+import { useUsageRangeSelection } from "./useUsageRangeSelection";
 
 type TokenUsagePoint = UsagePoint & {
   input_uncached_tokens: number;
@@ -12,35 +14,49 @@ type TokenUsagePoint = UsagePoint & {
 
 const tokenBarAnimationDuration = 180;
 
-export function TokenUsageChart(props: { series: UsagePoint[] }) {
+export function TokenUsageChart(props: { series: UsagePoint[]; bucketMinutes?: number; onRangeSelect?: (from: string, to: string) => void }) {
   const chartData = props.series.map(toTokenUsagePoint);
+  const selection = useUsageRangeSelection({ ...props, coordinateMode: "band" });
 
   return (
-    <ChartContainer
-      className="h-60 w-full"
-      config={{
-        input_cached_tokens: { label: tNow("usage.input_cached_tokens"), color: "var(--chart-1)" },
-        input_uncached_tokens: { label: tNow("usage.input_uncached_tokens"), color: "var(--chart-2)" },
-        reasoning_tokens: { label: tNow("usage.reasoning_tokens"), color: "var(--chart-3)" },
-        output_text_tokens: { label: tNow("usage.output_text_tokens"), color: "var(--chart-4)" },
-      }}
-    >
-      <BarChart data={chartData} margin={{ left: 8, right: 8, top: 12, bottom: 0 }}>
-        <CartesianGrid vertical={false} />
-        <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={32} />
-        <YAxis tickLine={false} axisLine={false} width={44} allowDecimals={false} tickFormatter={formatCompactNumber} />
-        <ChartTooltip
-          isAnimationActive={false}
-          animationDuration={0}
-          wrapperStyle={{ transition: "none" }}
-          content={<TokenUsageTooltip />}
-        />
-        <Bar dataKey="output_text_tokens" stackId="tokens" fill="var(--color-output_text_tokens)" radius={[0, 0, 4, 4]} animationDuration={tokenBarAnimationDuration} />
-        <Bar dataKey="reasoning_tokens" stackId="tokens" fill="var(--color-reasoning_tokens)" animationDuration={tokenBarAnimationDuration} />
-        <Bar dataKey="input_uncached_tokens" stackId="tokens" fill="var(--color-input_uncached_tokens)" animationDuration={tokenBarAnimationDuration} />
-        <Bar dataKey="input_cached_tokens" stackId="tokens" fill="var(--color-input_cached_tokens)" radius={[4, 4, 0, 0]} animationDuration={tokenBarAnimationDuration} />
-      </BarChart>
-    </ChartContainer>
+    <div className="relative cursor-col-resize select-none" {...selection.handlers}>
+      {selection.hasSelection && (
+        <div className="pointer-events-none absolute top-3 right-2 bottom-7 left-[3.25rem] z-20">
+          <div
+            className="h-full rounded-sm bg-primary/15 ring-1 ring-primary/35"
+            style={selection.selectionStyle}
+          />
+        </div>
+      )}
+      <ChartDayBands series={props.series} bucketMinutes={props.bucketMinutes} coordinateMode="band" />
+      <ChartContainer
+        className="relative z-10 h-60 w-full"
+        config={{
+          input_cached_tokens: { label: tNow("usage.input_cached_tokens"), color: "var(--chart-1)" },
+          input_uncached_tokens: { label: tNow("usage.input_uncached_tokens"), color: "var(--chart-2)" },
+          reasoning_tokens: { label: tNow("usage.reasoning_tokens"), color: "var(--chart-3)" },
+          output_text_tokens: { label: tNow("usage.output_text_tokens"), color: "var(--chart-4)" },
+        }}
+      >
+        <BarChart key={selection.chartStateKey} data={chartData} margin={{ left: 8, right: 8, top: 12, bottom: 0 }}>
+          <CartesianGrid vertical={false} />
+          <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={32} />
+          <YAxis tickLine={false} axisLine={false} width={44} allowDecimals={false} tickFormatter={formatCompactNumber} />
+          <ChartTooltip
+            isAnimationActive={false}
+            animationDuration={0}
+            active={selection.hideTooltip ? false : undefined}
+            cursor={selection.hideTooltip ? false : undefined}
+            wrapperStyle={{ transition: "none", visibility: selection.hideTooltip ? "hidden" : undefined }}
+            content={<TokenUsageTooltip />}
+          />
+          <Bar dataKey="output_text_tokens" stackId="tokens" fill="var(--color-output_text_tokens)" radius={[0, 0, 4, 4]} animationDuration={tokenBarAnimationDuration} />
+          <Bar dataKey="reasoning_tokens" stackId="tokens" fill="var(--color-reasoning_tokens)" animationDuration={tokenBarAnimationDuration} />
+          <Bar dataKey="input_uncached_tokens" stackId="tokens" fill="var(--color-input_uncached_tokens)" animationDuration={tokenBarAnimationDuration} />
+          <Bar dataKey="input_cached_tokens" stackId="tokens" fill="var(--color-input_cached_tokens)" radius={[4, 4, 0, 0]} animationDuration={tokenBarAnimationDuration} />
+        </BarChart>
+      </ChartContainer>
+    </div>
   );
 }
 

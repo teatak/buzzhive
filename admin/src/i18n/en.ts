@@ -23,6 +23,7 @@ export const dict: Record<string, string> = {
   "common.status": "Status",
   "common.this_month": "This month",
   "common.today": "Today",
+  "common.last_3_days": "Last 3 days",
   "common.unknown": "unknown",
   "common.user_menu": "User menu",
   "language.switch": "Switch interface language",

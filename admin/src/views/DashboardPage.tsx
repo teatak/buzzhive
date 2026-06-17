@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { TokenUsageChart } from "../features/usage/TokenUsageChart";
 import { UsageChart } from "../features/usage/UsageChart";
 import { useLocale } from "../i18n/locale";
-import { displayMinute, naturalMonthRange } from "../lib/date";
+import { displayMinute, naturalMonthRange, recentDaysRange } from "../lib/date";
 import { modelDisplayName } from "../lib/model";
 import { cn, formatCompactNumber } from "../lib/utils";
 import type { Model, UsagePoint, UsageSummary, UserAPIKey } from "../types/admin";
@@ -37,6 +37,7 @@ export function DashboardPage(props: {
   onSelectUsageRange: (from: string, to: string) => void;
   onTokenUsageFilterChange: (filter: UsageFilter) => void;
   onResetTokenUsageToToday: () => void;
+  onSelectTokenUsageRange: (from: string, to: string) => void;
 }) {
   const { t } = useLocale();
 
@@ -132,7 +133,7 @@ export function DashboardPage(props: {
                 models={props.models}
                 onChange={props.onTokenUsageFilterChange}
               />
-              <TokenUsageChart series={props.tokenUsageSeries} />
+              <TokenUsageChart series={props.tokenUsageSeries} bucketMinutes={props.tokenUsage.bucket_minutes} onRangeSelect={props.onSelectTokenUsageRange} />
             </CardContent>
           </Card>
         </>
@@ -164,6 +165,7 @@ function UsageRangeAction(props: { filter: UsageFilter; isToday: boolean; onChan
     <CardAction className="row-span-1 self-center">
       <ButtonGroup aria-label={t("usage.range_shortcuts")}>
         <RangeShortcut label={t("common.today")} active={props.isToday} onClick={props.onResetToday} />
+        <RangeShortcut label={t("common.last_3_days")} active={isRange(props.filter, recentDaysRange(3))} onClick={() => props.onChange({ ...props.filter, ...recentDaysRange(3) })} />
         <RangeShortcut label={t("common.this_month")} active={isRange(props.filter, naturalMonthRange())} onClick={() => props.onChange({ ...props.filter, ...naturalMonthRange() })} />
       </ButtonGroup>
     </CardAction>

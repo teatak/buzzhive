@@ -59,6 +59,16 @@ func TestEnsureSchemaTimestampColumns(t *testing.T) {
 	}
 }
 
+func TestEnsureSchemaDropsUnusedProviderColumns(t *testing.T) {
+	store := openTestStore(t)
+
+	for _, column := range []string{"supports_responses", "base_url", "protocols"} {
+		if postgresColumnExists(t, store.db, "providers", column) {
+			t.Fatalf("providers.%s should not exist", column)
+		}
+	}
+}
+
 func postgresTableExists(t *testing.T, db *sql.DB, table string) bool {
 	t.Helper()
 	var exists bool
@@ -84,4 +94,23 @@ func postgresColumnInfo(t *testing.T, db *sql.DB, table, column string) (string,
 		t.Fatal(err)
 	}
 	return dataType, nullable, defaultExpr.String
+}
+
+func postgresColumnExists(t *testing.T, db *sql.DB, table, column string) bool {
+	t.Helper()
+	var exists bool
+	err := db.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = current_schema()
+				AND table_name = $1
+				AND column_name = $2
+		)`,
+		table, column,
+	).Scan(&exists)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return exists
 }

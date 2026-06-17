@@ -23,6 +23,7 @@ export const dict: Record<string, string> = {
   "common.status": "狀態",
   "common.this_month": "本月",
   "common.today": "今天",
+  "common.last_3_days": "最近 3 天",
   "common.unknown": "未知",
   "common.user_menu": "使用者選單",
   "language.switch": "切換介面語言",

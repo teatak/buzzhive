@@ -65,6 +65,7 @@ func TestCanonicalToAnthropicMessagesRequest(t *testing.T) {
 		MaxOutputTokens: &maxTokens,
 		Messages: []ChatMessage{
 			{Role: "system", Parts: []ChatPart{{Type: "text", Text: "be brief"}}},
+			{Role: "developer", Parts: []ChatPart{{Type: "text", Text: "use json"}}},
 			{Role: "user", Parts: []ChatPart{{Type: "text", Text: "hello"}}},
 			{Role: "assistant", Parts: []ChatPart{{
 				Type:       "tool_call",
@@ -85,6 +86,10 @@ func TestCanonicalToAnthropicMessagesRequest(t *testing.T) {
 	}
 	if req.System == nil || len(req.Messages) != 3 {
 		t.Fatalf("request = %+v", req)
+	}
+	system, ok := req.System.([]AnthropicContent)
+	if !ok || len(system) != 2 || system[0].Text != "be brief" || system[1].Text != "use json" {
+		t.Fatalf("system = %+v", req.System)
 	}
 	if req.Messages[1].Content[0].Type != "tool_use" || req.Messages[1].Content[0].ID != "toolu_1" {
 		t.Fatalf("tool use = %+v", req.Messages[1])

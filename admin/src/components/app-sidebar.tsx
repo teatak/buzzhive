@@ -1,5 +1,6 @@
 import { Boxes, Gauge, KeyRound, Server, UserRound } from "lucide-react";
 import type { View } from "@/types/admin";
+import { AppSidebarRail } from "@/components/app-sidebar-rail";
 import { BrandLogo } from "@/components/brand-logo";
 import { useLocale } from "@/i18n/locale";
 import {
@@ -12,7 +13,6 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarRail,
 } from "@/components/ui/sidebar";
 
 type AppSidebarProps = {
@@ -77,7 +77,7 @@ export function AppSidebar({ role, view, onNavigate }: AppSidebarProps) {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarRail className="!cursor-w-resize [[data-side=left][data-state=collapsed]_&]:!cursor-e-resize [[data-side=right][data-state=collapsed]_&]:!cursor-w-resize" />
+      <AppSidebarRail />
     </Sidebar>
   );
 }

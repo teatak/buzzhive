@@ -606,6 +606,7 @@ export function App() {
               onSelectUsageRange={(from, to) => setUsageFilter((current) => ({ ...current, from, to }))}
               onTokenUsageFilterChange={setTokenUsageFilter}
               onResetTokenUsageToToday={() => setTokenUsageFilter((current) => ({ ...current, ...naturalDayRange() }))}
+              onSelectTokenUsageRange={(from, to) => setTokenUsageFilter((current) => ({ ...current, from, to }))}
             />
           )}
 

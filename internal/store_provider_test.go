@@ -182,6 +182,48 @@ func TestProviderManagementCRUD(t *testing.T) {
 	}
 }
 
+func TestProviderEndpointDisabledIsPreservedAndExcludedFromRoutes(t *testing.T) {
+	store := openTestStore(t)
+
+	provider, err := store.CreateProvider(ProviderRecord{
+		Name: "disabled-endpoint-provider",
+		Endpoints: []ProviderEndpoint{{
+			Protocol: providerOpenAI,
+			BaseURL:  "https://disabled.example.test/v1",
+			Enabled:  false,
+		}},
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.Endpoints) != 1 || provider.Endpoints[0].Enabled {
+		t.Fatalf("provider endpoints = %+v", provider.Endpoints)
+	}
+
+	model, err := store.CreateModel(Model{Name: "disabled-route-model", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateModelRoute(ModelRoute{
+		ModelID:       model.ID,
+		ProviderID:    provider.ID,
+		UpstreamModel: "upstream-model",
+		Enabled:       true,
+		Weight:        1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, ok, err := store.ResolveModelRoutes("disabled-route-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok || len(targets) != 0 {
+		t.Fatalf("resolved disabled endpoint targets = %+v, ok=%v", targets, ok)
+	}
+}
+
 func TestAdminModelUpdateAllowsEmptyDisplayName(t *testing.T) {
 	srv := newAdminRouteTestServer(t)
 	adminToken := createAdminRouteTestSession(t, srv, "admin", "admin")
