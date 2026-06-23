@@ -1,7 +1,7 @@
 import { Boxes, Gauge, KeyRound, Server, UserRound } from "lucide-react";
 import type { View } from "@/types/admin";
 import { AppSidebarRail } from "@/components/app-sidebar-rail";
-import { BrandLogo } from "@/components/brand-logo";
+import { BrandIcon } from "@/components/brand-logo";
 import { useLocale } from "@/i18n/locale";
 import {
   Sidebar,
@@ -36,21 +36,13 @@ export function AppSidebar({ role, view, onNavigate }: AppSidebarProps) {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton
-              asChild
-              size="lg"
-              className="cursor-default duration-300 ease-in-out hover:bg-transparent hover:text-sidebar-foreground"
-            >
-              <div>
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 via-indigo-600 to-blue-600 text-white shadow-sm transition-transform duration-300 ease-in-out">
-                  <BrandLogo className="size-7!" />
-                </div>
-                <div className="grid flex-1 text-left text-sm leading-tight transition-transform duration-300 ease-in-out">
-                  <span className="truncate font-semibold">BuzzHive</span>
-                  <span className="truncate text-xs text-muted-foreground">{t("app.subtitle")}</span>
-                </div>
+            <div className="flex h-12 min-w-0 items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm">
+              <BrandIcon className="size-8 transition-transform duration-300 ease-in-out" />
+              <div className="grid flex-1 text-left text-sm leading-tight transition-transform duration-300 ease-in-out">
+                <span className="truncate font-semibold">BuzzHive</span>
+                <span className="truncate text-xs text-muted-foreground">{t("app.subtitle")}</span>
               </div>
-            </SidebarMenuButton>
+            </div>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>

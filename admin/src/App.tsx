@@ -24,7 +24,7 @@ import type {
   UserAPIKey,
   View,
 } from "./types/admin";
-import { BrandLogo } from "./components/brand-logo";
+import { BrandIcon } from "./components/brand-logo";
 import { Alert, AlertDescription } from "./components/ui/alert";
 import {
   AlertDialog,
@@ -495,7 +495,7 @@ export function App() {
           <LocaleToggle />
         </div>
         <div className="login-brand">
-          <div className="mark login-mark"><BrandLogo className="size-5" /></div>
+          <BrandIcon className="size-8" />
           <div>
             <h1>BuzzHive</h1>
             <p>{t("common.loading_admin")}</p>
@@ -514,7 +514,7 @@ export function App() {
         </div>
         <div className="login-shell">
           <div className="login-brand">
-            <div className="mark login-mark"><BrandLogo className="size-[35px]" /></div>
+            <BrandIcon className="size-10" />
             <div>
               <h1>BuzzHive</h1>
               <p>{t("app.subtitle")}</p>

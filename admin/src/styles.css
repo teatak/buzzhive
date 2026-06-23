@@ -181,18 +181,6 @@ button {
   min-width: 0;
 }
 
-.mark {
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  border-radius: 7px;
-  background:
-    radial-gradient(circle at 28% 18%, rgb(255 255 255 / 0.34), transparent 34%),
-    linear-gradient(135deg, #7c3aed, #4f46e5 52%, #2563eb);
-  color: white;
-  flex: 0 0 auto;
-}
 
 h1,
 h2,
@@ -343,11 +331,6 @@ td.right > * + * {
   gap: 10px;
 }
 
-.login-mark {
-  width: 40px;
-  height: 40px;
-  border-radius: 11px;
-}
 
 .form-row {
   display: grid;
