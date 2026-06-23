@@ -2,7 +2,7 @@ IMAGE ?= teatak/buzzhive
 TAG ?= latest
 PLATFORMS ?= linux/amd64,linux/arm64
 
-.PHONY: dev admin-build admin-dev docker-build docker-push docker-publish docker-publish-current version-patch version-minor version-major
+.PHONY: dev admin-build admin-dev docker-build docker-push docker-publish version-patch version-minor version-major
 
 dev: admin-build
 	@test -f config.yaml || cp config.example.yaml config.yaml
@@ -21,10 +21,7 @@ docker-build:
 docker-push:
 	docker push $(IMAGE):$(TAG)
 
-docker-publish: version-patch
-	docker buildx build --platform $(PLATFORMS) -t $(IMAGE):$(TAG) -t $(IMAGE):$$(cat VERSION) --push .
-
-docker-publish-current:
+docker-publish:
 	docker buildx build --platform $(PLATFORMS) -t $(IMAGE):$(TAG) -t $(IMAGE):$$(cat VERSION) --push .
 
 version-patch:

@@ -200,10 +200,22 @@ The old `gemini-auto` cross-model fallback and public Gemini native proxy have b
 
 ```bash
 make docker-build
+```
+
+Release flow:
+
+```bash
+make version-patch
+go test ./...
+cd admin && pnpm run build
+cd ..
+git add VERSION
+git commit -m "chore: bump version"
+git push
 make docker-publish
 ```
 
-`make docker-publish` bumps `VERSION` by patch and publishes both `latest` and that version for `linux/amd64` and `linux/arm64`.
+`make docker-publish` publishes the current committed `VERSION` as both `latest` and that version for `linux/amd64` and `linux/arm64`. It does not change `VERSION`.
 
 Useful helpers:
 
@@ -211,7 +223,6 @@ Useful helpers:
 make version-patch
 make version-minor
 make version-major
-make docker-publish-current
 ```
 
 ## Notes

@@ -200,10 +200,22 @@ make admin-dev
 
 ```bash
 make docker-build
+```
+
+发布流程：
+
+```bash
+make version-patch
+go test ./...
+cd admin && pnpm run build
+cd ..
+git add VERSION
+git commit -m "chore: bump version"
+git push
 make docker-publish
 ```
 
-`make docker-publish` 会递增 `VERSION` 的 patch 版本，并发布 `latest` 和当前版本，默认包含 `linux/amd64`、`linux/arm64`。
+`make docker-publish` 会发布当前已提交的 `VERSION`，同时打 `latest` 和版本号标签，默认包含 `linux/amd64`、`linux/arm64`。它不会修改 `VERSION`。
 
 常用命令：
 
@@ -211,7 +223,6 @@ make docker-publish
 make version-patch
 make version-minor
 make version-major
-make docker-publish-current
 ```
 
 ## 说明
