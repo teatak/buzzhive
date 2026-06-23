@@ -18,17 +18,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { request } from "../api/client";
-import {
-  ClaudeIcon,
-  DeepSeekIcon,
-  GeminiIcon,
-  MimoIcon,
-  MoonshotIcon,
-  OpenAIIcon,
-  OpenRouterIcon,
-  QwenIcon,
-  ZhipuIcon,
-} from "../components/brand-icons";
+import { BrandIcon } from "../components/brand-icons";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
@@ -560,8 +550,8 @@ function activateCard(event: KeyboardEvent<HTMLElement>, onActivate: () => void)
 
 function ModelIcon({ model, className = "h-10 w-10" }: { model: Model; className?: string }) {
   const family = modelFamily(model);
-  const Icon = modelIconForFamily(family);
-  if (Icon) return <Icon className={`${className} shrink-0`} />;
+  const brand = modelBrandForFamily(family);
+  if (brand) return <BrandIcon className={className} name={brand} />;
 
   return (
     <div className={`${className} flex shrink-0 items-center justify-center rounded-xl border border-dashed text-muted-foreground`}>
@@ -590,25 +580,19 @@ function policyLabel(t: (key: string) => string, policy: string) {
   return policy;
 }
 
-type BrandIconComponent = (props: { className?: string }) => ReturnType<typeof GeminiIcon>;
-
-function modelIconForFamily(family: string): BrandIconComponent | null {
+function modelBrandForFamily(family: string) {
   const normalized = family.toLowerCase();
-  if (normalized === "gemini") return GeminiIcon;
-  if (normalized === "openai") return OpenAIIcon;
-  if (normalized === "anthropic") return ClaudeIcon;
-  if (normalized === "mimo") return MimoIcon;
-  if (normalized === "deepseek") return DeepSeekIcon;
-  if (normalized === "qwen") return QwenIcon;
-  if (normalized === "moonshot") return MoonshotIcon;
-  if (normalized === "zhipu") return ZhipuIcon;
-  if (normalized === "openrouter") return OpenRouterIcon;
-  return null;
+  if (normalized === "anthropic") return "claude";
+  if (normalized === "mimo") return "mimo";
+  if (normalized === "moonshot") return "moonshot";
+  if (normalized === "zhipu") return "zhipu";
+  if (["gemini", "openai", "deepseek", "qwen", "openrouter"].includes(normalized)) return normalized;
+  return "";
 }
 
 function ModelPresetIcon({ preset }: { preset: ModelPreset }) {
-  const Icon = modelIconForFamily(preset.family);
-  if (Icon) return <Icon className="h-8 w-8 shrink-0" />;
+  const brand = modelBrandForFamily(preset.family);
+  if (brand) return <BrandIcon className="h-8 w-8" name={brand} />;
 
   return (
     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-dashed text-muted-foreground">

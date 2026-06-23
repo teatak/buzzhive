@@ -13,17 +13,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { request } from "../api/client";
-import {
-  ClaudeIcon,
-  DeepSeekIcon,
-  GeminiIcon,
-  MimoIcon,
-  MoonshotIcon,
-  OpenAIIcon,
-  OpenRouterIcon,
-  QwenIcon,
-  ZhipuIcon,
-} from "../components/brand-icons";
+import { BrandIcon } from "../components/brand-icons";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
@@ -813,11 +803,9 @@ function ProviderChip({ label, value, mono = false }: { label: string; value: st
   );
 }
 
-type BrandIconComponent = (props: { className?: string }) => ReturnType<typeof GeminiIcon>;
-
 function ProviderPresetIcon({ presetID, className = "h-8 w-8" }: { presetID: string; className?: string }) {
-  const Icon = providerPresetIcon(presetID);
-  if (Icon) return <Icon className={`${className} shrink-0`} />;
+  const brand = providerPresetBrand(presetID);
+  if (brand) return <BrandIcon className={className} name={brand} />;
 
   return (
     <span className={`${className} flex shrink-0 items-center justify-center rounded-lg border border-dashed text-muted-foreground`}>
@@ -826,29 +814,29 @@ function ProviderPresetIcon({ presetID, className = "h-8 w-8" }: { presetID: str
   );
 }
 
-function providerPresetIcon(presetID: string): BrandIconComponent | null {
+function providerPresetBrand(presetID: string) {
   switch (presetID) {
     case "gemini":
-      return GeminiIcon;
+      return "gemini";
     case "openai":
-      return OpenAIIcon;
+      return "openai";
     case "anthropic":
-      return ClaudeIcon;
+      return "claude";
     case "mimo":
     case "mimo-plan":
-      return MimoIcon;
+      return "mimo";
     case "deepseek":
-      return DeepSeekIcon;
+      return "deepseek";
     case "qwen":
-      return QwenIcon;
+      return "qwen";
     case "moonshot":
-      return MoonshotIcon;
+      return "moonshot";
     case "zhipu":
-      return ZhipuIcon;
+      return "zhipu";
     case "openrouter":
-      return OpenRouterIcon;
+      return "openrouter";
     default:
-      return null;
+      return "";
   }
 }
 

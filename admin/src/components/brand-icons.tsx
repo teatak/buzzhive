@@ -1,4 +1,7 @@
+import type { CSSProperties } from "react";
 import { useId } from "react";
+
+import { cn } from "../lib/utils";
 
 export function GeminiIcon({ className }: { className?: string }) {
   const uid = useId().replace(/:/g, "");
@@ -58,9 +61,16 @@ export function ClaudeIcon({ className }: { className?: string }) {
 
 export function MimoIcon({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden>
-      <rect width="24" height="24" rx="5" fill="#FF6900" />
-      <text x="12" y="17" textAnchor="middle" fontFamily="system-ui, -apple-system, 'Helvetica Neue', sans-serif" fontSize="13" fontWeight="700" fill="#ffffff">Mi</text>
+    <svg viewBox="0 0 52.917 52.917" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden>
+      <g transform="translate(-9.6659 -106.33)">
+        <g transform="matrix(.35278 0 0 -.35278 -186.45 261.78)">
+          <g transform="matrix(1.4354 0 0 1.4355 -242.08 -126.56)" fill="currentColor">
+            <path d="m637.87 362.27h-8.221c-0.352 0-0.637-0.28-0.637-0.625v-37.509c0-0.342 0.285-0.622 0.637-0.622h8.221c0.349 0 0.638 0.28 0.638 0.622v37.509c0 0.345-0.289 0.625-0.638 0.625" />
+            <path d="m609.8 362.27h-31.315c-0.352 0-0.635-0.28-0.635-0.625v-37.509c0-0.342 0.283-0.622 0.635-0.622h8.223c0.35 0 0.64 0.28 0.64 0.622v29.439c0 0.34 0.283 0.622 0.635 0.622h17.713c4.981 0 6.395-3.815 6.395-6.276v-23.785c0-0.342 0.286-0.622 0.638-0.622h8.218c0.35 0 0.637 0.28 0.637 0.622v26.609c0 2.195-0.264 5.351-3.096 8.129-2.963 2.9-5.666 3.396-8.688 3.396" />
+            <path d="m604.04 347.33h-8.633c-0.352 0-0.641-0.28-0.641-0.623v-22.574c0-0.341 0.289-0.621 0.641-0.621h8.633c0.349 0 0.635 0.28 0.635 0.621v22.574c0 0.343-0.286 0.623-0.635 0.623" />
+          </g>
+        </g>
+      </g>
     </svg>
   );
 }
@@ -90,8 +100,7 @@ export function QwenIcon({ className }: { className?: string }) {
 export function MoonshotIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden>
-      <rect width="24" height="24" rx="5" fill="#1A237E" />
-      <text x="12" y="17" textAnchor="middle" fontFamily="system-ui, -apple-system, 'Helvetica Neue', sans-serif" fontSize="13" fontWeight="700" fill="#ffffff">K</text>
+      <path d="M6.15 5.6h1.8c.18 0 .33.15.33.34v5.03c0 .28.34.42.54.23l5.7-5.5c.06-.06.15-.1.24-.1h2.86c.29 0 .43.35.22.54l-5.24 4.96c-.17.16-.16.44.03.58l4.2 3.05c.58.42 1.2.68 1.9.78.16.02.27.16.27.32v2.36c0 .2-.17.35-.37.33a6.85 6.85 0 0 1-3.04-1.12l-4.69-3.43a.36.36 0 0 0-.47.04l-1.98 1.92a.37.37 0 0 0-.11.26v2.58c0 .18-.15.33-.33.33H6.15a.33.33 0 0 1-.33-.33V5.94c0-.19.15-.34.33-.34z" />
     </svg>
   );
 }
@@ -109,9 +118,10 @@ export function GrokIcon({ className }: { className?: string }) {
 
 export function ZhipuIcon({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden>
-      <rect width="24" height="24" rx="5" fill="#3859FF" />
-      <text x="12" y="17.5" textAnchor="middle" fontFamily="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" fontSize="14" fontWeight="700" fill="#ffffff">智</text>
+    <svg viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden>
+      <path d="m15.47 7.1-1.3 1.85c-.2.29-.54.47-.9.47h-7.1V7.09c-.01.01 9.3.01 9.3.01z" />
+      <path d="M24.3 7.1 13.14 22.91H5.7L16.86 7.1z" />
+      <path d="m14.53 22.91 1.31-1.86c.2-.29.54-.47.9-.47h7.09v2.33z" />
     </svg>
   );
 }
@@ -124,5 +134,114 @@ export function OpenRouterIcon({ className }: { className?: string }) {
         <path d="M16.778 1.844v1.919q-.569-.026-1.138-.032-.708-.008-1.415.037c-1.93.126-4.023.728-6.149 2.237-2.911 2.066-2.731 1.95-4.14 2.75-.396.223-1.342.574-2.185.798-.841.225-1.753.333-1.751.333v4.229s.768.108 1.61.333c.842.224 1.789.575 2.185.799 1.41.798 1.228.683 4.14 2.75 2.126 1.509 4.22 2.11 6.148 2.236.88.058 1.716.041 2.555.005v1.918l7.222-4.168-7.222-4.17v2.176c-.86.038-1.611.065-2.278.021-1.364-.09-2.417-.357-3.979-1.465-2.244-1.593-2.866-2.027-3.68-2.508.889-.518 1.449-.906 3.822-2.59 1.56-1.109 2.614-1.377 3.978-1.466.667-.044 1.418-.017 2.278.02v2.176L24 6.014Z" fill="#ffffff" />
       </g>
     </svg>
+  );
+}
+
+const brandBackgrounds: Record<string, string> = {
+  deepseek: "#4D6BFE",
+  gemini: "#3186FF",
+  openai: "#0D0D0D",
+  qwen: "#615CED",
+  mimo: "#FF6900",
+  moonshot: "#010103",
+  zhipu: "#2D2D2D",
+  openrouter: "#000000",
+  claude: "#D97757",
+  grok: "#000000",
+};
+
+function normalizeBrandName(name: string) {
+  switch (name.toLowerCase()) {
+    case "google":
+      return "gemini";
+    case "kimi":
+      return "moonshot";
+    case "glm":
+      return "zhipu";
+    case "anthropic":
+      return "claude";
+    default:
+      return name.toLowerCase();
+  }
+}
+
+export function brandIconName(name: string) {
+  const normalizedName = normalizeBrandName(name);
+  return brandBackgrounds[normalizedName] ? normalizedName : "";
+}
+
+function BrandMark({ name, className }: { name: string; className?: string }) {
+  switch (normalizeBrandName(name)) {
+    case "deepseek":
+      return <DeepSeekIcon className={className} />;
+    case "gemini":
+      return <GeminiIcon className={className} />;
+    case "openai":
+      return <OpenAIIcon className={className} />;
+    case "qwen":
+      return <QwenIcon className={className} />;
+    case "mimo":
+      return <MimoIcon className={className} />;
+    case "moonshot":
+      return <MoonshotIcon className={className} />;
+    case "zhipu":
+      return <ZhipuIcon className={className} />;
+    case "openrouter":
+      return <OpenRouterIcon className={className} />;
+    case "claude":
+      return <ClaudeIcon className={className} />;
+    case "grok":
+      return <GrokIcon className={className} />;
+    default:
+      return null;
+  }
+}
+
+export function BrandIcon({
+  name,
+  className,
+  iconClassName,
+  shape = "rounded",
+}: {
+  name: string;
+  className?: string;
+  iconClassName?: string;
+  shape?: "rounded" | "circle";
+}) {
+  const normalizedName = brandIconName(name);
+  if (!normalizedName) return null;
+
+  if (normalizedName === "gemini") {
+    return (
+      <span className={cn("relative inline-grid shrink-0 place-items-center", className)}>
+        <svg aria-hidden className="absolute inset-0 size-full" viewBox="0 0 24 24">
+          {shape === "circle" ? (
+            <circle cx="12" cy="12" fill="#ffffff" r="11.5" stroke="var(--border)" />
+          ) : (
+            <rect fill="#ffffff" height="23" rx="4" stroke="var(--border)" width="23" x="0.5" y="0.5" />
+          )}
+        </svg>
+        <GeminiIcon className={cn("relative size-full [&>rect]:hidden", iconClassName)} />
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className={cn("relative inline-grid shrink-0 place-items-center text-white", className)}
+      style={{ "--brand-bg": brandBackgrounds[normalizedName] } as CSSProperties}
+    >
+      <svg aria-hidden className="absolute inset-0 size-full" viewBox="0 0 24 24">
+        {shape === "circle" ? (
+          <circle cx="12" cy="12" fill="var(--brand-bg)" r="11.75" />
+        ) : (
+          <rect fill="var(--brand-bg)" height="24" rx="4" width="24" />
+        )}
+      </svg>
+      <BrandMark
+        className={cn("relative size-full [&>rect]:hidden [&_path]:fill-current [&_text]:fill-current", iconClassName)}
+        name={normalizedName}
+      />
+    </span>
   );
 }
