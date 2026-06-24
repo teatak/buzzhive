@@ -340,7 +340,7 @@ export function BrandIcon({
     <span
       className={cn(
         "inline-grid shrink-0 place-items-center overflow-hidden",
-        shape === "circle" ? "rounded-full" : "rounded",
+        shape === "circle" ? "rounded-full" : "rounded-[8px]",
         lightBackground ? "border bg-white text-black" : "text-white",
         className,
       )}

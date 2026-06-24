@@ -54,7 +54,7 @@ export function BrandIcon({
     <span
       className={cn(
         "inline-grid shrink-0 place-items-center overflow-hidden text-white",
-        shape === "circle" ? "rounded-full" : "rounded-lg",
+        shape === "circle" ? "rounded-full" : "rounded-[8px]",
         className,
       )}
       style={{ backgroundImage: buzzHiveBackground, ...style }}

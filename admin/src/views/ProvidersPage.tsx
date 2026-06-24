@@ -400,7 +400,7 @@ export function ProvidersPage(props: {
                 <Button type="button" variant="ghost" size="icon" onClick={() => setSelectedProviderID(null)} aria-label={t("providers.back_to_providers")}>
                   <ArrowLeft />
                 </Button>
-                 <ProviderPresetIcon presetID={selectedProvider.preset_id} className="h-11 w-11" />
+                 <ProviderPresetIcon presetID={selectedProvider.preset_id} className="h-10 w-10" />
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <CardTitle>{selectedProvider.name}</CardTitle>
@@ -805,10 +805,11 @@ function ProviderChip({ label, value, mono = false }: { label: string; value: st
 
 function ProviderPresetIcon({ presetID, className = "h-8 w-8" }: { presetID: string; className?: string }) {
   const brand = providerPresetBrand(presetID);
-  if (brand) return <BrandIcon className={className} name={brand} />;
+  const radiusClass = /\bh-1[01]\b/.test(className) ? "rounded-[10px]" : "rounded-[8px]";
+  if (brand) return <BrandIcon className={`${className} ${radiusClass}`} name={brand} />;
 
   return (
-    <span className={`${className} flex shrink-0 items-center justify-center rounded-lg border border-dashed text-muted-foreground`}>
+    <span className={`${className} flex shrink-0 items-center justify-center ${radiusClass} border border-dashed text-muted-foreground`}>
       <Settings2 className="h-1/2 w-1/2" strokeWidth={2} />
     </span>
   );

@@ -232,7 +232,7 @@ export function ModelsPage(props: ModelsPageProps) {
                 <Button type="button" variant="ghost" size="icon" onClick={() => setSelectedModelID(null)} aria-label={t("models.back_to_models")}>
                   <ArrowLeft />
                 </Button>
-                <ModelIcon model={selectedModel} className="mt-0.5 h-11 w-11" />
+                <ModelIcon model={selectedModel} className="mt-0.5 h-10 w-10" />
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <CardTitle>{modelDisplayName(selectedModel)}</CardTitle>
@@ -551,10 +551,10 @@ function activateCard(event: KeyboardEvent<HTMLElement>, onActivate: () => void)
 function ModelIcon({ model, className = "h-10 w-10" }: { model: Model; className?: string }) {
   const family = modelFamily(model);
   const brand = modelBrandForFamily(family);
-  if (brand) return <BrandIcon className={className} name={brand} />;
+  if (brand) return <BrandIcon className={`${className} rounded-[10px]`} name={brand} />;
 
   return (
-    <div className={`${className} flex shrink-0 items-center justify-center rounded-xl border border-dashed text-muted-foreground`}>
+    <div className={`${className} flex shrink-0 items-center justify-center rounded-[10px] border border-dashed text-muted-foreground`}>
       <Settings2 className="h-1/2 w-1/2" strokeWidth={2} />
     </div>
   );
@@ -595,7 +595,7 @@ function ModelPresetIcon({ preset }: { preset: ModelPreset }) {
   if (brand) return <BrandIcon className="h-8 w-8" name={brand} />;
 
   return (
-    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-dashed text-muted-foreground">
+    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] border border-dashed text-muted-foreground">
       <Settings2 className="h-5 w-5" strokeWidth={2} />
     </span>
   );
