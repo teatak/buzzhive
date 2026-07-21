@@ -4,10 +4,11 @@ PLATFORMS ?= linux/amd64,linux/arm64
 
 .PHONY: dev admin-build admin-dev docker-build docker-push docker-publish version-patch version-minor version-major
 
-dev: admin-build
+dev:
 	@test -f config.yaml || cp config.example.yaml config.yaml
 	docker compose -f docker-compose.dev.yml up -d postgres redis
-	go run ./cmd/buzzhive -config config.yaml
+	go run ./cmd/buzzhive -config config.yaml & \
+	$(MAKE) admin-dev
 
 admin-build:
 	cd admin && pnpm install --frozen-lockfile --config.confirm-modules-purge=false && pnpm build

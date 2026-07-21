@@ -1,7 +1,7 @@
 import { Boxes, Gauge, KeyRound, Server, UserRound } from "lucide-react";
 import type { View } from "@/types/admin";
 import { AppSidebarRail } from "@/components/app-sidebar-rail";
-import { BrandIcon } from "@/components/brand-logo";
+import { BrandIcon } from "@/components/brand-icons";
 import { useLocale } from "@/i18n/locale";
 import {
   Sidebar,
@@ -36,13 +36,13 @@ export function AppSidebar({ role, view, onNavigate }: AppSidebarProps) {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <div className="flex h-12 min-w-0 items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm">
-              <BrandIcon className="size-8 transition-transform duration-300 ease-in-out" />
+            <SidebarMenuButton size="lg" className="hover:bg-transparent hover:text-foreground">
+              <BrandIcon name="buzzhive" className="size-8 transition-transform duration-300 ease-in-out" iconClassName="!size-full" />
               <div className="grid flex-1 text-left text-sm leading-tight transition-transform duration-300 ease-in-out">
                 <span className="truncate font-semibold">BuzzHive</span>
                 <span className="truncate text-xs text-muted-foreground">{t("app.subtitle")}</span>
               </div>
-            </div>
+            </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>

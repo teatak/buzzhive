@@ -4,19 +4,26 @@ import { useId } from "react";
 import { cn } from "../lib/utils";
 
 export function GeminiIcon({ className }: { className?: string }) {
+  // useId 防止同页面多次渲染时 gradient id 冲突(SSR / list 渲染都安全)
   const uid = useId().replace(/:/g, "");
   const idGreen = `gemini-green-${uid}`;
   const idRed = `gemini-red-${uid}`;
   const idYellow = `gemini-yellow-${uid}`;
+  // Gemini sparkle path:4 个尖端 + concave sides(凹弧),所有 4 层 path 共用此 d
   const sparkleD = "M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z";
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="-8 -8 40 40"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden
     >
       <defs>
+        {/* lobehub 风格的 4 层叠加多色实现 — 比 4-radial-gradient+mask 简洁:
+            · 蓝(#3186FF)作 base layer,fill sparkle 全形
+            · 3 个 linearGradient 各自从一段坐标线性渐变,stop-opacity 1→0 fade out
+            · 4 层 path 用相同 d,叠加后产生 4 角各自主色 + 中央混合的 Google 官方多色效果
+            渐变坐标用 userSpaceOnUse,跟着 path 自身坐标走。 */}
         <linearGradient id={idGreen} gradientUnits="userSpaceOnUse" x1="7" x2="11" y1="15.5" y2="12">
           <stop stopColor="#08B962" />
           <stop offset="1" stopColor="#08B962" stopOpacity="0" />
@@ -41,7 +48,7 @@ export function GeminiIcon({ className }: { className?: string }) {
 export function OpenAIIcon({ className }: { className?: string }) {
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="-8 -8 40 40"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden
@@ -57,7 +64,7 @@ export function OpenAIIcon({ className }: { className?: string }) {
 export function ClaudeIcon({ className }: { className?: string }) {
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="-8 -8 40 40"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden
@@ -71,9 +78,11 @@ export function ClaudeIcon({ className }: { className?: string }) {
 }
 
 export function MimoIcon({ className }: { className?: string }) {
+  // MiMo 使用 Xiaomi 官方 "mi" 几何字标;背景由 BrandIcon 统一绘制。
+  // Source: https://upload.wikimedia.org/wikipedia/commons/2/29/Xiaomi_logo.svg
   return (
     <svg
-      viewBox="8 14 37 25"
+      viewBox="-4.333 -4.333 61.667 61.667"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden
@@ -97,7 +106,7 @@ export function MimoIcon({ className }: { className?: string }) {
 export function DeepSeekIcon({ className }: { className?: string }) {
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="-8 -8 40 40"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden
@@ -113,7 +122,7 @@ export function DeepSeekIcon({ className }: { className?: string }) {
 export function QwenIcon({ className }: { className?: string }) {
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="-8 -8 40 40"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden
@@ -127,9 +136,11 @@ export function QwenIcon({ className }: { className?: string }) {
 }
 
 export function MoonshotIcon({ className }: { className?: string }) {
+  // Kimi 24px app-icon variant. The source mark is a wordmark glyph; this keeps
+  // the recognizable K form without the tiny corner accent that reads noisy here.
   return (
     <svg
-      viewBox="4 4 16 16"
+      viewBox="-1.333 -1.333 26.667 26.667"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden
@@ -145,7 +156,7 @@ export function MoonshotIcon({ className }: { className?: string }) {
 export function GrokIcon({ className }: { className?: string }) {
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="-8 -8 40 40"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden
@@ -159,9 +170,10 @@ export function GrokIcon({ className }: { className?: string }) {
 }
 
 export function ZhipuIcon({ className }: { className?: string }) {
+  // Z.ai / GLM 官方 Z 形字标。Source: https://z-cdn.chatglm.cn/z-ai/static/logo.svg
   return (
     <svg
-      viewBox="4.5 5.5 21 19"
+      viewBox="-2.5 -2.5 35 35"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden
@@ -182,13 +194,13 @@ export function ZhipuIcon({ className }: { className?: string }) {
 export function OpenRouterIcon({ className }: { className?: string }) {
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="-100 -75 601.4 443.7"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden
     >
       <path
-        d="M16.778 1.844v1.919q-.569-.026-1.138-.032-.708-.008-1.415.037c-1.93.126-4.023.728-6.149 2.237-2.911 2.066-2.731 1.95-4.14 2.75-.396.223-1.342.574-2.185.798-.841.225-1.753.333-1.751.333v4.229s.768.108 1.61.333c.842.224 1.789.575 2.185.799 1.41.798 1.228.683 4.14 2.75 2.126 1.509 4.22 2.11 6.148 2.236.88.058 1.716.041 2.555.005v1.918l7.222-4.168-7.222-4.17v2.176c-.86.038-1.611.065-2.278.021-1.364-.09-2.417-.357-3.979-1.465-2.244-1.593-2.866-2.027-3.68-2.508.889-.518 1.449-.906 3.822-2.59 1.56-1.109 2.614-1.377 3.978-1.466.667-.044 1.418-.017 2.278.02v2.176L24 6.014Z"
+        d="M303.9475,17.19926c42.79734,0,77.48933,34.69327,77.48933,77.48933s-34.69199,77.48933-77.48933,77.48933l76.86166,76.86244c9.76367,9.76313,2.84903,26.45667-10.95697,26.45667h-220.88335c-71.32686,0-129.14889-57.82202-129.14889-129.14889S77.64197,17.19926,148.96884,17.19926h154.97866ZM148.96884,68.85881c-42.79607,0-77.48933,34.69327-77.48933,77.48933s34.69327,77.48933,77.48933,77.48933,77.48933-34.69327,77.48933-77.48933-34.69327-77.48933-77.48933-77.48933Z"
         fill="currentColor"
       />
     </svg>
@@ -198,7 +210,7 @@ export function OpenRouterIcon({ className }: { className?: string }) {
 export function BuzzHiveIcon({ className }: { className?: string }) {
   return (
     <svg
-      viewBox="6 6 52 52"
+      viewBox="-11.333 -11.333 86.667 86.667"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden
@@ -229,7 +241,7 @@ export function BuzzHiveIcon({ className }: { className?: string }) {
 export function OllamaIcon({ className }: { className?: string }) {
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="-4.667 -4.667 33.333 33.333"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden
@@ -328,11 +340,12 @@ export function BrandIcon({
     return null;
   }
 
+  const isOpenRouter = normalizedName === "openrouter";
   const lightBackground = normalizedName === "gemini" || normalizedName === "ollama";
   const style: CSSProperties | undefined =
     normalizedName === "buzzhive"
       ? { backgroundImage: buzzHiveBackground }
-      : lightBackground
+      : isOpenRouter || lightBackground
         ? undefined
         : { backgroundColor: brandBackgrounds[normalizedName] };
 
@@ -341,24 +354,19 @@ export function BrandIcon({
       className={cn(
         "inline-grid shrink-0 place-items-center overflow-hidden",
         shape === "circle" ? "rounded-full" : "rounded-[8px]",
-        lightBackground ? "border bg-white text-black" : "text-white",
+        isOpenRouter
+          ? "bg-white text-[#6834EE] border dark:bg-[#02090B] dark:text-[#C8FF00] dark:border-transparent"
+          : lightBackground 
+            ? "border bg-white text-black" 
+            : "text-white",
         className,
       )}
       style={style}
     >
       <BrandMark
-        className={cn("block", brandMarkSize(normalizedName), iconClassName)}
+        className={cn("block size-full", iconClassName)}
         name={normalizedName}
       />
     </span>
   );
-}
-
-function brandMarkSize(name: string) {
-  switch (name) {
-    case "ollama":
-      return "size-[72%]";
-    default:
-      return "size-[60%]";
-  }
 }

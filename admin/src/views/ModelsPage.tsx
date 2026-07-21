@@ -426,7 +426,7 @@ export function ModelsPage(props: ModelsPageProps) {
         <DialogContent className="sm:max-w-4xl">
           <DialogHeader><DialogTitle>{t("models.add_from_preset")}</DialogTitle></DialogHeader>
           <div className="grid gap-4 py-4">
-            <div className="grid max-h-[min(460px,45dvh)] gap-2 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid max-h-[min(600px,65dvh)] gap-2 overflow-y-auto pr-1 sm:grid-cols-3 lg:grid-cols-4">
               {props.modelPresets.map((preset, index) => {
                 const exists = existingModelNames.has(preset.name);
                 const selected = presetIDs.includes(preset.id);
@@ -436,14 +436,11 @@ export function ModelsPage(props: ModelsPageProps) {
                     type="button"
                     disabled={exists}
                     onClick={(event) => togglePreset(preset, index, event.shiftKey)}
-                    className={`flex min-w-0 items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors enabled:hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-50 ${selected ? "border-primary bg-primary/5" : "border-border bg-background"}`}
+                    className={`flex min-w-0 items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors enabled:hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-50 ${selected ? "border-primary bg-primary/5" : "border-border bg-background"}`}
                   >
-                    <ModelPresetIcon preset={preset} />
-                    <span className="grid min-w-0 flex-1 gap-0.5">
-                      <span className="truncate font-medium">{preset.display_name}</span>
-                      <span className="truncate mono text-muted-foreground">{preset.family} / {preset.name}</span>
-                    </span>
-                    {exists && <Badge variant="outline">{t("models.already_exists")}</Badge>}
+                    <ModelPresetIcon preset={preset} className="h-6 w-6 rounded-[6px]" />
+                    <span className="truncate text-sm font-medium flex-1">{preset.display_name}</span>
+                    {exists && <Badge variant="outline" className="px-1.5 py-0 text-[10px] h-5 leading-[18px] font-normal">{t("models.already_exists")}</Badge>}
                   </button>
                 );
               })}
@@ -568,7 +565,6 @@ function modelFamily(model: Model) {
   if (text.includes("qwen")) return "qwen";
   if (text.includes("kimi") || text.includes("moonshot")) return "moonshot";
   if (text.includes("glm") || text.includes("zhipu")) return "zhipu";
-  if (text.includes("openrouter")) return "openrouter";
   if (text.includes("gpt") || text.includes("openai")) return "openai";
   if (text.includes("mimo")) return "mimo";
   return "generic";
@@ -590,12 +586,12 @@ function modelBrandForFamily(family: string) {
   return "";
 }
 
-function ModelPresetIcon({ preset }: { preset: ModelPreset }) {
+function ModelPresetIcon({ preset, className = "h-8 w-8 rounded-[8px]" }: { preset: ModelPreset; className?: string }) {
   const brand = modelBrandForFamily(preset.family);
-  if (brand) return <BrandIcon className="h-8 w-8" name={brand} />;
+  if (brand) return <BrandIcon className={className} name={brand} />;
 
   return (
-    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] border border-dashed text-muted-foreground">
+    <span className={`flex shrink-0 items-center justify-center border border-dashed text-muted-foreground ${className}`}>
       <Settings2 className="h-5 w-5" strokeWidth={2} />
     </span>
   );
