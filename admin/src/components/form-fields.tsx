@@ -12,7 +12,7 @@ type SelectOption = {
   label: string;
 };
 
-function LabelWithTip(props: { htmlFor?: string; label: string; tip?: string }) {
+export function LabelWithTip(props: { htmlFor?: string; label: string; tip?: string }) {
   return (
     <FieldLabel htmlFor={props.htmlFor} className="inline-flex items-center gap-1.5">
       {props.label}

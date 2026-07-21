@@ -14,6 +14,7 @@ import {
   Settings2,
   Trash2,
   Wrench,
+  CloudDownload,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -27,8 +28,10 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
+import { Field } from "../components/ui/field";
 import { EnabledToggleButton } from "../components/enabled-toggle-button";
-import { FormNumberField, FormSelectField, FormStaticField, FormTextareaField, FormTextField } from "../components/form-fields";
+import { FormNumberField, FormSelectField, FormStaticField, FormTextareaField, FormTextField, LabelWithTip } from "../components/form-fields";
 import { useLocale } from "../i18n/locale";
 import { modelDisplayName } from "../lib/model";
 import type { Model, ModelPreset, ModelRoute, ProviderRecord } from "../types/admin";
@@ -497,15 +500,20 @@ export function ModelsPage(props: ModelsPageProps) {
                 setRouteForm({ ...routeForm, provider_id });
               }}
             />
-            <FormTextField
-              label={t("models.upstream_model")}
-              tip={t("models.tip_upstream_model")}
-              value={routeForm.upstream_model}
-              onChange={(upstream_model) => setRouteForm({
-                ...routeForm,
-                upstream_model,
-              })}
-            />
+            <Field>
+              <LabelWithTip label={t("models.upstream_model")} tip={t("models.tip_upstream_model")} />
+              <div className="flex items-center gap-2">
+                <Input
+                  value={routeForm.upstream_model}
+                  onChange={(e) => setRouteForm({ ...routeForm, upstream_model: e.target.value })}
+                />
+                <UpstreamModelFetcher 
+                  providerId={routeForm.provider_id} 
+                  token={props.token}
+                  onSelect={(id) => setRouteForm({ ...routeForm, upstream_model: id })} 
+                />
+              </div>
+            </Field>
             <FormNumberField label={t("models.priority")} tip={t("models.tip_priority")} value={routeForm.priority} onChange={(priority) => setRouteForm({ ...routeForm, priority })} />
             <FormNumberField label={t("models.weight")} tip={t("models.tip_weight")} value={routeForm.weight} onChange={(weight) => setRouteForm({ ...routeForm, weight })} />
             <EnabledSelect value={routeForm.enabled} onChange={(enabled) => setRouteForm({ ...routeForm, enabled })} />
@@ -858,4 +866,85 @@ function StatusBadge({ enabled }: { enabled: boolean }) {
   return enabled
     ? <Badge variant="outline" className="border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">{t("common.active")}</Badge>
     : <Badge variant="secondary">{t("common.disabled")}</Badge>;
+}
+
+function UpstreamModelFetcher({ providerId, token, onSelect }: { providerId: number; token: string; onSelect: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (open && models.length === 0) {
+      setLoading(true);
+      request(`/admin/api/providers/${providerId}/upstream-models`, token)
+        .then((res: any) => {
+          if (Array.isArray(res)) setModels(res);
+          else toast.error("Invalid response format");
+        })
+        .catch((err: any) => toast.error(err.message || "Failed to fetch models"))
+        .finally(() => setLoading(false));
+    }
+  }, [open, providerId, token, models.length]);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const filteredModels = useMemo(() => {
+    if (!searchQuery) return models;
+    const lowerQuery = searchQuery.toLowerCase();
+    return models.filter(m => m.toLowerCase().includes(lowerQuery));
+  }, [models, searchQuery]);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button 
+          type="button"
+          variant="outline" 
+          size="icon" 
+          disabled={!providerId}
+          title="获取上游模型"
+        >
+          <CloudDownload className="size-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-0 gap-0 overflow-hidden" align="end">
+        <div className="p-2 border-b">
+          <Input 
+            placeholder="搜索模型..." 
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="h-8"
+          />
+        </div>
+        <div 
+          className="max-h-[250px] overflow-y-auto"
+          onWheel={(e) => e.stopPropagation()}
+        >
+          {loading ? (
+            <div className="p-4 text-center text-sm text-muted-foreground">Loading...</div>
+          ) : models.length === 0 ? (
+            <div className="p-4 text-center text-sm text-muted-foreground">No models found</div>
+          ) : filteredModels.length === 0 ? (
+            <div className="p-4 text-center text-sm text-muted-foreground">No matches</div>
+          ) : (
+            <div className="flex flex-col">
+              {filteredModels.map(modelId => (
+                <button
+                  key={modelId}
+                  type="button"
+                  className="px-3 py-2 text-sm text-left hover:bg-muted transition-colors truncate shrink-0"
+                  onClick={() => {
+                    onSelect(modelId);
+                    setOpen(false);
+                  }}
+                  title={modelId}
+                >
+                  {modelId}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 }

@@ -45,6 +45,8 @@ func (s *Server) newAdminAPI() http.Handler {
 		POST(s.handleProvidersAdmin).
 		PUT(s.handleProvidersAdmin).
 		DELETE(s.handleProvidersAdmin)
+	s.adminOnlyRoute(api, "/providers/:id/upstream-models").
+		GET(s.handleProviderUpstreamModelsAdmin)
 	s.adminOnlyRoute(api, "/provider-presets").
 		GET(s.handleProviderPresetsAdmin).
 		POST(s.handleProviderPresetsAdmin)
