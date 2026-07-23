@@ -85,7 +85,8 @@ function TokenUsageTooltip(props: {
     <div className="grid min-w-56 items-start gap-1.5 rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-xs shadow-xl">
       <div className="font-medium">{point.tooltip ?? point.label ?? ""}</div>
       <div className="my-0.5 h-px bg-border/60" />
-      {props.payload.map((item) => {
+      <TooltipRow label={tNow("usage.total_tokens")} value={point.total_tokens} color="oklch(0.65 0 0)" />
+      {[...props.payload].reverse().map((item) => {
         const key = String(item.dataKey ?? "");
         return (
           <TooltipRow
@@ -96,7 +97,6 @@ function TokenUsageTooltip(props: {
           />
         );
       })}
-      <TooltipRow label={tNow("usage.total_tokens")} value={point.total_tokens} color="oklch(0.65 0 0)" />
     </div>
   );
 }

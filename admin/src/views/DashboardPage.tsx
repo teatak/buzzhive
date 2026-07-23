@@ -241,7 +241,7 @@ function TokenUsageMetrics(props: { usage: UsageSummary }) {
         <Card key={item.label}>
           <CardContent className="metric-content">
             <div className="metric-label"><BarChart3 size={17} /> {item.label}</div>
-            <div className="metric-value" title={item.value.toLocaleString()}>{formatCompactNumber(item.value)}</div>
+            <div className="metric-value" title={String(item.value)}>{formatCompactNumber(item.value)}</div>
           </CardContent>
         </Card>
       ))}
