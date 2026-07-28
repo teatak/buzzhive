@@ -8,28 +8,28 @@ import (
 func TestCanonicalToOpenAIChatRequest(t *testing.T) {
 	maxTokens := 128
 	temperature := 0.2
-	req, err := CanonicalToOpenAIChatRequest(ChatRequest{
+	req, err := CanonicalToOpenAIChatRequest(CanonicalRequest{
 		Model:           "public-model",
 		Stream:          true,
 		Temperature:     &temperature,
 		MaxOutputTokens: &maxTokens,
 		StopSequences:   []string{"END"},
-		Tools: []ChatTool{{
+		Tools: []CanonicalTool{{
 			Name:        "lookup",
 			Description: "Lookup data",
 			Parameters:  json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`),
 		}},
-		ToolChoice: &ChatToolChoice{Mode: "ANY", AllowedFunctionNames: []string{"lookup"}},
-		Messages: []ChatMessage{
-			{Role: "system", Parts: []ChatPart{{Type: "text", Text: "be brief"}}},
-			{Role: "user", Parts: []ChatPart{{Type: "text", Text: "hello"}}},
-			{Role: "assistant", Parts: []ChatPart{{
+		ToolChoice: &CanonicalToolChoice{Mode: "ANY", AllowedFunctionNames: []string{"lookup"}},
+		Messages: []CanonicalMessage{
+			{Role: "system", Parts: []CanonicalPart{{Type: "text", Text: "be brief"}}},
+			{Role: "user", Parts: []CanonicalPart{{Type: "text", Text: "hello"}}},
+			{Role: "assistant", Parts: []CanonicalPart{{
 				Type:       "tool_call",
 				ToolCallID: "call_1",
 				Name:       "lookup",
 				Arguments:  json.RawMessage(`{"q":"hello"}`),
 			}}},
-			{Role: "tool", Parts: []ChatPart{{
+			{Role: "tool", Parts: []CanonicalPart{{
 				Type:       "tool_response",
 				ToolCallID: "call_1",
 				Response:   json.RawMessage(`{"result":"world"}`),
@@ -86,11 +86,11 @@ func TestCanonicalToOpenAIChatRequest(t *testing.T) {
 }
 
 func TestCanonicalToOpenAIChatRequestMultimodal(t *testing.T) {
-	req, err := CanonicalToOpenAIChatRequest(ChatRequest{
+	req, err := CanonicalToOpenAIChatRequest(CanonicalRequest{
 		Model: "vision",
-		Messages: []ChatMessage{{
+		Messages: []CanonicalMessage{{
 			Role: "user",
-			Parts: []ChatPart{
+			Parts: []CanonicalPart{
 				{Type: "text", Text: "describe"},
 				{Type: "image", MimeType: "image/png", Data: "aW1hZ2U="},
 				{Type: "audio", MimeType: "audio/wav", Data: "YXVkaW8="},
@@ -116,13 +116,16 @@ func TestCanonicalToOpenAIChatRequestMultimodal(t *testing.T) {
 }
 
 func TestCanonicalToOpenAIChatRequestResponseFormat(t *testing.T) {
-	req, err := CanonicalToOpenAIChatRequest(ChatRequest{
+	strict := true
+	req, err := CanonicalToOpenAIChatRequest(CanonicalRequest{
 		Model: "json-model",
-		ResponseFormat: &ChatResponseFormat{
+		ResponseFormat: &CanonicalResponseFormat{
 			MimeType: "application/json",
+			Name:     "answer",
 			Schema:   json.RawMessage(`{"type":"object"}`),
+			Strict:   &strict,
 		},
-		Messages: []ChatMessage{{Role: "user", Parts: []ChatPart{{Type: "text", Text: "json"}}}},
+		Messages: []CanonicalMessage{{Role: "user", Parts: []CanonicalPart{{Type: "text", Text: "json"}}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -132,25 +135,27 @@ func TestCanonicalToOpenAIChatRequestResponseFormat(t *testing.T) {
 		JSONSchema struct {
 			Name   string          `json:"name"`
 			Schema json.RawMessage `json:"schema"`
+			Strict bool            `json:"strict"`
 		} `json:"json_schema"`
 	}
 	if err := json.Unmarshal(req.ResponseFormat, &format); err != nil {
 		t.Fatal(err)
 	}
-	if format.Type != "json_schema" || format.JSONSchema.Name != "canonical_schema" || string(format.JSONSchema.Schema) != `{"type":"object"}` {
+	if format.Type != "json_schema" || format.JSONSchema.Name != "answer" ||
+		string(format.JSONSchema.Schema) != `{"type":"object"}` || !format.JSONSchema.Strict {
 		t.Fatalf("response_format = %+v", format)
 	}
 }
 
 func TestCanonicalToOpenAIChatRequestAllowedTools(t *testing.T) {
-	req, err := CanonicalToOpenAIChatRequest(ChatRequest{
+	req, err := CanonicalToOpenAIChatRequest(CanonicalRequest{
 		Model: "public-model",
-		Tools: []ChatTool{
+		Tools: []CanonicalTool{
 			{Name: "lookup", Parameters: json.RawMessage(`{"type":"object"}`)},
 			{Name: "search", Parameters: json.RawMessage(`{"type":"object"}`)},
 		},
-		ToolChoice: &ChatToolChoice{Mode: "ANY", AllowedFunctionNames: []string{"lookup", "search"}},
-		Messages:   []ChatMessage{{Role: "user", Parts: []ChatPart{{Type: "text", Text: "hello"}}}},
+		ToolChoice: &CanonicalToolChoice{Mode: "ANY", AllowedFunctionNames: []string{"lookup", "search"}},
+		Messages:   []CanonicalMessage{{Role: "user", Parts: []CanonicalPart{{Type: "text", Text: "hello"}}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -205,5 +210,48 @@ func TestOpenAIChatToCanonicalAllowedTools(t *testing.T) {
 	}
 	if req.ToolChoice.AllowedFunctionNames[0] != "lookup" || req.ToolChoice.AllowedFunctionNames[1] != "search" {
 		t.Fatalf("allowed names = %+v", req.ToolChoice.AllowedFunctionNames)
+	}
+}
+
+func TestOpenAIChatAllowedToolsAutoRoundTrip(t *testing.T) {
+	req, err := OpenAIChatToCanonical(OpenAIChatRequest{
+		Model:    "public-model",
+		Messages: []OpenAIMessage{{Role: "user", Content: json.RawMessage(`"hello"`)}},
+		Tools: json.RawMessage(`[
+			{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}},
+			{"type":"function","function":{"name":"search","parameters":{"type":"object"}}}
+		]`),
+		ToolChoice: json.RawMessage(`{
+			"type":"allowed_tools",
+			"allowed_tools":{
+				"mode":"auto",
+				"tools":[
+					{"type":"function","function":{"name":"lookup"}},
+					{"type":"function","function":{"name":"search"}}
+				]
+			}
+		}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.ToolChoice == nil || req.ToolChoice.Mode != "AUTO" {
+		t.Fatalf("tool choice = %+v", req.ToolChoice)
+	}
+
+	out, err := CanonicalToOpenAIChatRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var choice struct {
+		AllowedTools struct {
+			Mode string `json:"mode"`
+		} `json:"allowed_tools"`
+	}
+	if err := json.Unmarshal(out.ToolChoice, &choice); err != nil {
+		t.Fatal(err)
+	}
+	if choice.AllowedTools.Mode != "auto" {
+		t.Fatalf("tool choice = %s", out.ToolChoice)
 	}
 }

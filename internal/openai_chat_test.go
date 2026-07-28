@@ -162,18 +162,16 @@ func TestValidateOpenAIChatParameterSupport(t *testing.T) {
 		{name: "default", req: protocol.OpenAIChatRequest{}},
 		{name: "n one", req: protocol.OpenAIChatRequest{N: &one}},
 		{name: "logprobs false", req: protocol.OpenAIChatRequest{Logprobs: &falseValue}},
-		{name: "ignored compatible params", req: protocol.OpenAIChatRequest{
-			Seed:             int64PtrForTest(123),
-			PresencePenalty:  float64PtrForTest(0.2),
-			FrequencyPenalty: float64PtrForTest(0.3),
-			LogitBias:        json.RawMessage(`{"42":1}`),
-			User:             "alice",
-			Metadata:         json.RawMessage(`{"trace":"ok"}`),
-		}},
 		{name: "n zero", req: protocol.OpenAIChatRequest{N: &zero}, wantErr: "n must be at least 1"},
 		{name: "n greater than one", req: protocol.OpenAIChatRequest{N: &two}, wantErr: "n greater than 1 is not supported"},
 		{name: "logprobs true", req: protocol.OpenAIChatRequest{Logprobs: &trueValue}, wantErr: "logprobs is not supported"},
 		{name: "top logprobs", req: protocol.OpenAIChatRequest{TopLogprobs: &topLogprobs}, wantErr: "top_logprobs is not supported"},
+		{name: "presence penalty", req: protocol.OpenAIChatRequest{PresencePenalty: float64PtrForTest(0.2)}, wantErr: "presence_penalty is not supported"},
+		{name: "frequency penalty", req: protocol.OpenAIChatRequest{FrequencyPenalty: float64PtrForTest(0.3)}, wantErr: "frequency_penalty is not supported"},
+		{name: "logit bias", req: protocol.OpenAIChatRequest{LogitBias: json.RawMessage(`{"42":1}`)}, wantErr: "logit_bias is not supported"},
+		{name: "seed", req: protocol.OpenAIChatRequest{Seed: int64PtrForTest(123)}, wantErr: "seed is not supported"},
+		{name: "user", req: protocol.OpenAIChatRequest{User: "alice"}, wantErr: "user is not supported"},
+		{name: "metadata", req: protocol.OpenAIChatRequest{Metadata: json.RawMessage(`{"trace":"ok"}`)}, wantErr: "metadata is not supported"},
 	}
 
 	for _, tt := range tests {
@@ -1113,16 +1111,16 @@ func TestOpenAIChatReplaysGeminiThoughtSignature(t *testing.T) {
 
 func TestOpenAIChatReplaysGeminiThoughtSignatureByFunctionArguments(t *testing.T) {
 	srv := &Server{}
-	srv.rememberToolSignatures([]protocol.ChatToolCall{{
+	srv.rememberToolSignatures([]protocol.CanonicalToolCall{{
 		ID:        "call_old",
 		Name:      "search",
 		Arguments: `{"b":2,"a":1}`,
 		Signature: "sig-abc",
 	}})
-	req := &protocol.ChatRequest{
-		Messages: []protocol.ChatMessage{{
+	req := &protocol.CanonicalRequest{
+		Messages: []protocol.CanonicalMessage{{
 			Role: "assistant",
-			Parts: []protocol.ChatPart{{
+			Parts: []protocol.CanonicalPart{{
 				Type:       "tool_call",
 				ToolCallID: "call_new",
 				Name:       "search",
@@ -2114,6 +2112,8 @@ func TestOpenAIChatPassesThroughOpenAICompatibleProvider(t *testing.T) {
 
 	body := `{
 		"model":"public-gpt",
+		"n":2,
+		"future_option":{"enabled":true},
 		"messages":[{"role":"user","content":"hi"}],
 		"tools":[{"type":"function","function":{"name":"search","parameters":{"type":"object"}}}]
 	}`
@@ -2147,6 +2147,9 @@ func TestOpenAIChatPassesThroughOpenAICompatibleProvider(t *testing.T) {
 	}
 	if tools, ok := upstreamBody["tools"].([]any); !ok || len(tools) != 1 {
 		t.Fatalf("upstream tools = %#v", upstreamBody["tools"])
+	}
+	if upstreamBody["n"] != float64(2) || upstreamBody["future_option"] == nil {
+		t.Fatalf("passthrough fields = %#v", upstreamBody)
 	}
 	if !strings.Contains(rr.Body.String(), "chatcmpl-upstream") {
 		t.Fatalf("response = %s", rr.Body.String())

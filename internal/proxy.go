@@ -1,7 +1,6 @@
 package buzzhive
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,7 +12,7 @@ import (
 
 func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken, originalModel string) {
 	if isAutoModel(originalModel) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "auto model routing has been removed"})
+		writeGeminiError(w, http.StatusBadRequest, "auto model routing has been removed")
 		return
 	}
 
@@ -21,13 +20,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, user
 	targets, err := s.resolveRouteTargets(model)
 	if err != nil {
 		if errors.Is(err, errModelRouteNotFound) {
-			writeJSON(w, http.StatusNotFound, map[string]string{
-				"error": "model route not found",
-				"model": model,
-			})
+			writeGeminiError(w, http.StatusNotFound, "model route not found: "+model)
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeGeminiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	actionModel, action, ok := parseGeminiModelAction(r.URL.Path)
@@ -36,7 +32,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, user
 	}
 	targets = geminiTargets(targets)
 	if len(targets) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "selected upstream does not support Gemini"})
+		writeGeminiError(w, http.StatusBadRequest, "selected upstream does not support Gemini")
 		return
 	}
 	target := targets[0]
@@ -45,17 +41,17 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, user
 		return
 	}
 	if action != "generateContent" && action != "streamGenerateContent" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported Gemini action"})
+		writeGeminiError(w, http.StatusBadRequest, "unsupported Gemini action")
 		return
 	}
 	var req protocol.GeminiGenerateRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if err := decodeCrossProtocolJSON(body, &req); err != nil {
+		writeGeminiError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	canonicalReq, err := protocol.GeminiGenerateToCanonicalRequest(req, model, action == "streamGenerateContent")
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeGeminiError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	switch target.ProviderType {
@@ -66,7 +62,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, user
 	case providerAnthropic:
 		s.proxyGeminiViaAnthropic(w, r, canonicalReq, user, model, targets)
 	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "selected upstream does not support Gemini"})
+		writeGeminiError(w, http.StatusBadRequest, "selected upstream does not support Gemini")
 	}
 }
 
@@ -121,13 +117,8 @@ func (s *Server) proxyGeminiRaw(w http.ResponseWriter, r *http.Request, body []b
 		result.Chain = append(result.Chain, fmt.Sprintf("max-attempts:%d", maxAttempts))
 	}
 	w.Header().Set("X-Proxy-Debug", strings.Join(result.Chain, " -> "))
-	writeJSON(w, lastStatus, map[string]any{
-		"error":        reason,
-		"attempts":     result.Attempts,
-		"max_attempts": maxAttempts,
-		"chain":        result.Chain,
-		"body":         string(lastErrBody),
-	})
+	message := openAIUpstreamErrorMessage(lastStatus, lastErrBody)
+	writeGeminiError(w, lastStatus, fmt.Sprintf("%s after %d/%d attempts: %s", reason, result.Attempts, maxAttempts, message))
 }
 
 func isAutoModel(model string) bool {

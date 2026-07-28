@@ -41,10 +41,12 @@ type OpenAIStreamOptions struct {
 }
 
 type OpenAIMessage struct {
-	Role       string           `json:"role"`
-	Content    json.RawMessage  `json:"content"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	ToolCalls  []OpenAIToolCall `json:"tool_calls,omitempty"`
+	Role             string           `json:"role"`
+	Name             string           `json:"name,omitempty"`
+	Content          json.RawMessage  `json:"content"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
+	ToolCalls        []OpenAIToolCall `json:"tool_calls,omitempty"`
 }
 
 type OpenAIToolCall struct {
@@ -68,9 +70,16 @@ type OpenAIFunctionTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
 }
 
-func CanonicalToOpenAIChatRequest(req ChatRequest) (OpenAIChatRequest, error) {
+func CanonicalToOpenAIChatRequest(req CanonicalRequest) (OpenAIChatRequest, error) {
+	if err := validateCanonicalToolChoice(req.ToolChoice, req.Tools); err != nil {
+		return OpenAIChatRequest{}, err
+	}
+	if err := validateCanonicalReasoningForOpenAIChat(req.Reasoning); err != nil {
+		return OpenAIChatRequest{}, err
+	}
 	out := OpenAIChatRequest{
 		Model:           req.Model,
 		Stream:          req.Stream,
@@ -78,7 +87,12 @@ func CanonicalToOpenAIChatRequest(req ChatRequest) (OpenAIChatRequest, error) {
 		TopP:            req.TopP,
 		MaxOutputTokens: req.MaxOutputTokens,
 		Stop:            canonicalStopSequencesToOpenAI(req.StopSequences),
-		ReasoningEffort: req.ThinkingLevel,
+	}
+	if req.Reasoning != nil && strings.TrimSpace(req.Reasoning.Effort) != "" {
+		out.ReasoningEffort = &req.Reasoning.Effort
+	}
+	if req.Stream {
+		out.StreamOptions = &OpenAIStreamOptions{IncludeUsage: true}
 	}
 	tools, err := canonicalToolsToOpenAI(req.Tools)
 	if err != nil {
@@ -105,12 +119,32 @@ func CanonicalToOpenAIChatRequest(req ChatRequest) (OpenAIChatRequest, error) {
 	return out, nil
 }
 
-func OpenAIChatToCanonical(req OpenAIChatRequest) (ChatRequest, error) {
+func validateCanonicalReasoningForOpenAIChat(reasoning *CanonicalReasoning) error {
+	if reasoning == nil {
+		return nil
+	}
+	if reasoning.BudgetTokens != nil {
+		return errors.New("reasoning budget_tokens cannot be represented by OpenAI Chat Completions")
+	}
+	if reasoning.IncludeThoughts != nil {
+		return errors.New("reasoning include_thoughts cannot be represented by OpenAI Chat Completions")
+	}
+	if strings.TrimSpace(reasoning.Summary) != "" {
+		return errors.New("reasoning summary cannot be represented by OpenAI Chat Completions")
+	}
+	mode := strings.ToLower(strings.TrimSpace(reasoning.Mode))
+	if mode != "" && mode != "adaptive" {
+		return fmt.Errorf("reasoning mode %q cannot be represented by OpenAI Chat Completions", reasoning.Mode)
+	}
+	return nil
+}
+
+func OpenAIChatToCanonical(req OpenAIChatRequest) (CanonicalRequest, error) {
 	maxTokens := req.MaxTokens
 	if maxTokens == nil {
 		maxTokens = req.MaxOutputTokens
 	}
-	out := ChatRequest{
+	out := CanonicalRequest{
 		Model:           req.Model,
 		Stream:          req.Stream,
 		Temperature:     req.Temperature,
@@ -118,19 +152,22 @@ func OpenAIChatToCanonical(req OpenAIChatRequest) (ChatRequest, error) {
 		MaxOutputTokens: maxTokens,
 		StopSequences:   openAIStopSequences(req.Stop),
 	}
+	if req.ReasoningEffort != nil && strings.TrimSpace(*req.ReasoningEffort) != "" {
+		out.Reasoning = &CanonicalReasoning{Effort: *req.ReasoningEffort}
+	}
 	tools, err := openAIToolsToCanonical(req.Tools)
 	if err != nil {
-		return ChatRequest{}, err
+		return CanonicalRequest{}, err
 	}
 	out.Tools = tools
 	toolChoice, err := openAIToolChoiceToCanonical(req.ToolChoice, tools)
 	if err != nil {
-		return ChatRequest{}, err
+		return CanonicalRequest{}, err
 	}
 	out.ToolChoice = toolChoice
 	responseFormat, err := openAIResponseFormatToCanonical(req.ResponseFormat)
 	if err != nil {
-		return ChatRequest{}, err
+		return CanonicalRequest{}, err
 	}
 	out.ResponseFormat = responseFormat
 	hasConversationMessage := false
@@ -140,13 +177,14 @@ func OpenAIChatToCanonical(req OpenAIChatRequest) (ChatRequest, error) {
 		case "system", "developer", "assistant", "user":
 			parts, err := openAIMessageToCanonicalParts(message, toolCallNames)
 			if err != nil {
-				return ChatRequest{}, err
+				return CanonicalRequest{}, err
 			}
 			if canonicalPartsEmpty(parts) {
 				continue
 			}
-			out.Messages = append(out.Messages, ChatMessage{
+			out.Messages = append(out.Messages, CanonicalMessage{
 				Role:  message.Role,
+				Name:  message.Name,
 				Parts: parts,
 			})
 			if message.Role == "assistant" || message.Role == "user" {
@@ -155,33 +193,38 @@ func OpenAIChatToCanonical(req OpenAIChatRequest) (ChatRequest, error) {
 		case "tool":
 			parts, err := openAIToolMessageToCanonicalParts(message, toolCallNames)
 			if err != nil {
-				return ChatRequest{}, err
+				return CanonicalRequest{}, err
 			}
 			if canonicalPartsEmpty(parts) {
 				continue
 			}
-			out.Messages = append(out.Messages, ChatMessage{
+			out.Messages = append(out.Messages, CanonicalMessage{
 				Role:  message.Role,
+				Name:  message.Name,
 				Parts: parts,
 			})
 		default:
-			return ChatRequest{}, fmt.Errorf("unsupported message role %q", message.Role)
+			return CanonicalRequest{}, fmt.Errorf("unsupported message role %q", message.Role)
 		}
 	}
 	if !hasConversationMessage {
-		return ChatRequest{}, errors.New("messages must contain at least one user or assistant message")
+		return CanonicalRequest{}, errors.New("messages must contain at least one user or assistant message")
 	}
 	return out, nil
 }
 
-func canonicalMessageToOpenAI(message ChatMessage) ([]OpenAIMessage, error) {
-	var contentParts []ChatPart
+func canonicalMessageToOpenAI(message CanonicalMessage) ([]OpenAIMessage, error) {
+	var contentParts []CanonicalPart
 	var toolCalls []OpenAIToolCall
 	var toolMessages []OpenAIMessage
 	for _, part := range message.Parts {
 		switch part.Type {
 		case "text", "image", "audio":
 			contentParts = append(contentParts, part)
+		case "reasoning":
+			if message.Role != "assistant" {
+				return nil, errors.New("reasoning parts are only valid on assistant messages")
+			}
 		case "tool_call":
 			args := strings.TrimSpace(string(part.Arguments))
 			if args == "" {
@@ -220,9 +263,11 @@ func canonicalMessageToOpenAI(message ChatMessage) ([]OpenAIMessage, error) {
 		return nil, err
 	}
 	out := OpenAIMessage{
-		Role:      canonicalRoleToOpenAI(message.Role),
-		Content:   content,
-		ToolCalls: toolCalls,
+		Role:             canonicalRoleToOpenAI(message.Role),
+		Name:             message.Name,
+		Content:          content,
+		ReasoningContent: canonicalReasoningText(message.Parts),
+		ToolCalls:        toolCalls,
 	}
 	if out.Role == "assistant" && len(toolCalls) > 0 && len(contentParts) == 0 {
 		out.Content = json.RawMessage("null")
@@ -237,7 +282,7 @@ func canonicalRoleToOpenAI(role string) string {
 	return role
 }
 
-func canonicalContentPartsToOpenAI(parts []ChatPart) (json.RawMessage, error) {
+func canonicalContentPartsToOpenAI(parts []CanonicalPart) (json.RawMessage, error) {
 	if len(parts) == 0 {
 		return json.RawMessage("null"), nil
 	}
@@ -283,7 +328,7 @@ func canonicalToolResponseToOpenAIContent(raw json.RawMessage) (json.RawMessage,
 	return nil, errors.New("tool_response content must be valid JSON")
 }
 
-func canonicalToolsToOpenAI(tools []ChatTool) (json.RawMessage, error) {
+func canonicalToolsToOpenAI(tools []CanonicalTool) (json.RawMessage, error) {
 	if len(tools) == 0 {
 		return nil, nil
 	}
@@ -302,24 +347,28 @@ func canonicalToolsToOpenAI(tools []ChatTool) (json.RawMessage, error) {
 				Name:        tool.Name,
 				Description: tool.Description,
 				Parameters:  parameters,
+				Strict:      tool.Strict,
 			},
 		})
 	}
 	return marshalJSONRaw(out)
 }
 
-func canonicalToolChoiceToOpenAI(choice *ChatToolChoice) (json.RawMessage, error) {
+func canonicalToolChoiceToOpenAI(choice *CanonicalToolChoice) (json.RawMessage, error) {
 	if choice == nil || strings.TrimSpace(choice.Mode) == "" {
 		return nil, nil
 	}
 	switch choice.Mode {
 	case "NONE":
 		return marshalJSONRaw("none")
-	case "ANY":
+	case "AUTO", "ANY":
 		if len(choice.AllowedFunctionNames) == 0 {
+			if choice.Mode == "AUTO" {
+				return marshalJSONRaw("auto")
+			}
 			return marshalJSONRaw("required")
 		}
-		if len(choice.AllowedFunctionNames) == 1 {
+		if len(choice.AllowedFunctionNames) == 1 && choice.Mode == "ANY" {
 			return marshalJSONRaw(map[string]any{
 				"type": "function",
 				"function": map[string]any{
@@ -336,10 +385,14 @@ func canonicalToolChoiceToOpenAI(choice *ChatToolChoice) (json.RawMessage, error
 				},
 			})
 		}
+		mode := "required"
+		if choice.Mode == "AUTO" {
+			mode = "auto"
+		}
 		return marshalJSONRaw(map[string]any{
 			"type": "allowed_tools",
 			"allowed_tools": map[string]any{
-				"mode":  "required",
+				"mode":  mode,
 				"tools": tools,
 			},
 		})
@@ -348,7 +401,7 @@ func canonicalToolChoiceToOpenAI(choice *ChatToolChoice) (json.RawMessage, error
 	}
 }
 
-func canonicalResponseFormatToOpenAI(format *ChatResponseFormat) (json.RawMessage, error) {
+func canonicalResponseFormatToOpenAI(format *CanonicalResponseFormat) (json.RawMessage, error) {
 	if format == nil {
 		return nil, nil
 	}
@@ -358,12 +411,16 @@ func canonicalResponseFormatToOpenAI(format *ChatResponseFormat) (json.RawMessag
 	if len(bytes.TrimSpace(format.Schema)) == 0 {
 		return marshalJSONRaw(map[string]string{"type": "json_object"})
 	}
+	jsonSchema := map[string]any{
+		"name":   firstNonEmpty(format.Name, "canonical_schema"),
+		"schema": json.RawMessage(format.Schema),
+	}
+	if format.Strict != nil {
+		jsonSchema["strict"] = *format.Strict
+	}
 	return marshalJSONRaw(map[string]any{
-		"type": "json_schema",
-		"json_schema": map[string]any{
-			"name":   "canonical_schema",
-			"schema": json.RawMessage(format.Schema),
-		},
+		"type":        "json_schema",
+		"json_schema": jsonSchema,
 	})
 }
 
@@ -386,11 +443,11 @@ func dataURL(mimeType, data string) string {
 	return "data:" + mimeType + ";base64," + data
 }
 
-func canonicalPartsEmpty(parts []ChatPart) bool {
+func canonicalPartsEmpty(parts []CanonicalPart) bool {
 	for _, part := range parts {
 		switch part.Type {
-		case "text":
-			if strings.TrimSpace(part.Text) != "" {
+		case "text", "reasoning":
+			if strings.TrimSpace(part.Text) != "" || part.Signature != "" {
 				return false
 			}
 		case "image":
@@ -408,10 +465,13 @@ func canonicalPartsEmpty(parts []ChatPart) bool {
 	return true
 }
 
-func openAIMessageToCanonicalParts(message OpenAIMessage, toolCallNames map[string]string) ([]ChatPart, error) {
+func openAIMessageToCanonicalParts(message OpenAIMessage, toolCallNames map[string]string) ([]CanonicalPart, error) {
 	parts, err := openAIMessageParts(message.Content)
 	if err != nil {
 		return nil, err
+	}
+	if message.ReasoningContent != "" {
+		parts = append([]CanonicalPart{{Type: "reasoning", Text: message.ReasoningContent}}, parts...)
 	}
 	if message.Role != "assistant" || len(message.ToolCalls) == 0 {
 		return parts, nil
@@ -431,7 +491,7 @@ func openAIMessageToCanonicalParts(message OpenAIMessage, toolCallNames map[stri
 			return nil, err
 		}
 		toolCallNames[toolCall.ID] = toolCall.Function.Name
-		parts = append(parts, ChatPart{
+		parts = append(parts, CanonicalPart{
 			Type:       "tool_call",
 			ToolCallID: toolCall.ID,
 			Name:       toolCall.Function.Name,
@@ -441,7 +501,17 @@ func openAIMessageToCanonicalParts(message OpenAIMessage, toolCallNames map[stri
 	return parts, nil
 }
 
-func openAIToolMessageToCanonicalParts(message OpenAIMessage, toolCallNames map[string]string) ([]ChatPart, error) {
+func canonicalReasoningText(parts []CanonicalPart) string {
+	var builder strings.Builder
+	for _, part := range parts {
+		if part.Type == "reasoning" {
+			builder.WriteString(part.Text)
+		}
+	}
+	return builder.String()
+}
+
+func openAIToolMessageToCanonicalParts(message OpenAIMessage, toolCallNames map[string]string) ([]CanonicalPart, error) {
 	if strings.TrimSpace(message.ToolCallID) == "" {
 		return nil, errors.New("tool message tool_call_id is required")
 	}
@@ -453,7 +523,7 @@ func openAIToolMessageToCanonicalParts(message OpenAIMessage, toolCallNames map[
 	if err != nil {
 		return nil, err
 	}
-	return []ChatPart{{
+	return []CanonicalPart{{
 		Type:       "tool_response",
 		ToolCallID: message.ToolCallID,
 		Name:       name,
@@ -514,15 +584,15 @@ func marshalJSONRaw(value any) (json.RawMessage, error) {
 	return json.RawMessage(raw), nil
 }
 
-func openAIToolsToCanonical(raw json.RawMessage) ([]ChatTool, error) {
+func openAIToolsToCanonical(raw json.RawMessage) ([]CanonicalTool, error) {
 	if !openAIToolsRequested(raw) {
 		return nil, nil
 	}
 	var tools []OpenAITool
-	if err := json.Unmarshal(raw, &tools); err != nil {
+	if err := decodeStrictJSON(raw, &tools); err != nil {
 		return nil, errors.New("tools must be an array")
 	}
-	out := make([]ChatTool, 0, len(tools))
+	out := make([]CanonicalTool, 0, len(tools))
 	for _, tool := range tools {
 		if tool.Type != "function" {
 			return nil, fmt.Errorf("unsupported tool type %q", tool.Type)
@@ -534,10 +604,11 @@ func openAIToolsToCanonical(raw json.RawMessage) ([]ChatTool, error) {
 		if len(parameters) == 0 || strings.TrimSpace(string(parameters)) == "null" {
 			parameters = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
-		out = append(out, ChatTool{
+		out = append(out, CanonicalTool{
 			Name:        tool.Function.Name,
 			Description: tool.Function.Description,
 			Parameters:  parameters,
+			Strict:      tool.Function.Strict,
 		})
 	}
 	return out, nil
@@ -554,7 +625,7 @@ func openAIToolsRequested(raw json.RawMessage) bool {
 	return true
 }
 
-func openAIToolChoiceToCanonical(raw json.RawMessage, tools []ChatTool) (*ChatToolChoice, error) {
+func openAIToolChoiceToCanonical(raw json.RawMessage, tools []CanonicalTool) (*CanonicalToolChoice, error) {
 	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
 		return nil, nil
 	}
@@ -564,12 +635,12 @@ func openAIToolChoiceToCanonical(raw json.RawMessage, tools []ChatTool) (*ChatTo
 		case "", "auto":
 			return nil, nil
 		case "none":
-			return &ChatToolChoice{Mode: "NONE"}, nil
+			return &CanonicalToolChoice{Mode: "NONE"}, nil
 		case "required":
 			if len(tools) == 0 {
 				return nil, errors.New("tool_choice required needs at least one tool")
 			}
-			return &ChatToolChoice{Mode: "ANY"}, nil
+			return &CanonicalToolChoice{Mode: "ANY"}, nil
 		default:
 			return nil, fmt.Errorf("unsupported tool_choice %q", text)
 		}
@@ -589,7 +660,7 @@ func openAIToolChoiceToCanonical(raw json.RawMessage, tools []ChatTool) (*ChatTo
 			} `json:"tools"`
 		} `json:"allowed_tools"`
 	}
-	if err := json.Unmarshal(raw, &choice); err != nil {
+	if err := decodeStrictJSON(raw, &choice); err != nil {
 		return nil, errors.New("tool_choice must be a string or function object")
 	}
 	if choice.Type == "allowed_tools" {
@@ -610,11 +681,14 @@ func openAIToolChoiceToCanonical(raw json.RawMessage, tools []ChatTool) (*ChatTo
 			}
 			names = append(names, name)
 		}
-		mode := strings.TrimSpace(choice.AllowedTools.Mode)
-		if mode == "" || mode == "auto" || mode == "required" {
-			return &ChatToolChoice{Mode: "ANY", AllowedFunctionNames: names}, nil
+		switch mode := strings.TrimSpace(choice.AllowedTools.Mode); mode {
+		case "auto":
+			return &CanonicalToolChoice{Mode: "AUTO", AllowedFunctionNames: names}, nil
+		case "required":
+			return &CanonicalToolChoice{Mode: "ANY", AllowedFunctionNames: names}, nil
+		default:
+			return nil, fmt.Errorf("unsupported allowed_tools mode %q", mode)
 		}
-		return nil, fmt.Errorf("unsupported allowed_tools mode %q", mode)
 	}
 	if choice.Type != "function" {
 		return nil, fmt.Errorf("unsupported tool_choice type %q", choice.Type)
@@ -626,41 +700,45 @@ func openAIToolChoiceToCanonical(raw json.RawMessage, tools []ChatTool) (*ChatTo
 	if !canonicalToolExists(tools, name) {
 		return nil, fmt.Errorf("tool_choice references unknown function %q", name)
 	}
-	return &ChatToolChoice{Mode: "ANY", AllowedFunctionNames: []string{name}}, nil
+	return &CanonicalToolChoice{Mode: "ANY", AllowedFunctionNames: []string{name}}, nil
 }
 
-func openAIResponseFormatToCanonical(raw json.RawMessage) (*ChatResponseFormat, error) {
+func openAIResponseFormatToCanonical(raw json.RawMessage) (*CanonicalResponseFormat, error) {
 	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
 		return nil, nil
 	}
 	var format struct {
 		Type       string `json:"type"`
 		JSONSchema struct {
+			Name   string          `json:"name"`
 			Schema json.RawMessage `json:"schema"`
+			Strict *bool           `json:"strict,omitempty"`
 		} `json:"json_schema"`
 	}
-	if err := json.Unmarshal(raw, &format); err != nil {
+	if err := decodeStrictJSON(raw, &format); err != nil {
 		return nil, errors.New("response_format must be an object")
 	}
 	switch format.Type {
 	case "", "text":
 		return nil, nil
 	case "json_object":
-		return &ChatResponseFormat{MimeType: "application/json"}, nil
+		return &CanonicalResponseFormat{MimeType: "application/json"}, nil
 	case "json_schema":
 		if len(format.JSONSchema.Schema) == 0 || strings.TrimSpace(string(format.JSONSchema.Schema)) == "null" {
 			return nil, errors.New("response_format json_schema.schema is required")
 		}
-		return &ChatResponseFormat{
+		return &CanonicalResponseFormat{
 			MimeType: "application/json",
+			Name:     format.JSONSchema.Name,
 			Schema:   format.JSONSchema.Schema,
+			Strict:   format.JSONSchema.Strict,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported response_format type %q", format.Type)
 	}
 }
 
-func canonicalToolExists(tools []ChatTool, name string) bool {
+func canonicalToolExists(tools []CanonicalTool, name string) bool {
 	for _, tool := range tools {
 		if tool.Name == name {
 			return true
@@ -686,35 +764,35 @@ func openAIStopSequences(value any) []string {
 	}
 }
 
-func openAIMessageParts(raw json.RawMessage) ([]ChatPart, error) {
+func openAIMessageParts(raw json.RawMessage) ([]CanonicalPart, error) {
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return nil, nil
 	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
-		return []ChatPart{{Type: "text", Text: text}}, nil
+		return []CanonicalPart{{Type: "text", Text: text}}, nil
 	}
 	var parts []openAIContentPart
-	if err := json.Unmarshal(raw, &parts); err != nil {
+	if err := decodeStrictJSON(raw, &parts); err != nil {
 		return nil, ErrUnsupportedOpenAIContent
 	}
-	out := make([]ChatPart, 0, len(parts))
+	out := make([]CanonicalPart, 0, len(parts))
 	for _, part := range parts {
 		switch part.Type {
 		case "text", "input_text":
-			out = append(out, ChatPart{Type: "text", Text: part.Text})
+			out = append(out, CanonicalPart{Type: "text", Text: part.Text})
 		case "image_url":
 			mimeType, data, err := parseOpenAIImageDataURL(part.ImageURL.URL)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, ChatPart{Type: "image", MimeType: mimeType, Data: data})
+			out = append(out, CanonicalPart{Type: "image", MimeType: mimeType, Data: data})
 		case "input_audio":
 			mimeType, data, err := parseOpenAIInputAudio(part.InputAudio.Data, part.InputAudio.Format)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, ChatPart{Type: "audio", MimeType: mimeType, Data: data})
+			out = append(out, CanonicalPart{Type: "audio", MimeType: mimeType, Data: data})
 		default:
 			return nil, ErrUnsupportedOpenAIContent
 		}

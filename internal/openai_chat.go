@@ -33,11 +33,6 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "auto model routing has been removed")
 		return
 	}
-	if err := validateOpenAIChatParameterSupport(req); err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
-		return
-	}
-
 	targets, err := s.resolveRouteTargets(req.Model)
 	if err != nil {
 		if errors.Is(err, errModelRouteNotFound) {
@@ -57,35 +52,57 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 		s.proxyRaw(w, r, body, user, req.Model, targets)
 		return
 	}
+	if err := decodeCrossProtocolJSON(body, &req); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	if err := validateOpenAIChatParameterSupport(req); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
 
 	canonicalReq, err := protocol.OpenAIChatToCanonical(req)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
-	thinkingLevel, err := geminiThinkingLevelForOpenAIReasoningEffort(req.ReasoningEffort, target.UpstreamModel)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
-		return
+	includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
+	switch target.ProviderType {
+	case providerOpenAIResponses:
+		s.proxyOpenAIChatViaResponses(w, r, canonicalReq, user, req.Model, targets, includeUsage)
+	case providerAnthropic:
+		s.proxyOpenAIChatViaAnthropic(w, r, canonicalReq, user, req.Model, targets, includeUsage)
+	case providerGemini:
+		thinkingLevel, err := geminiThinkingLevelForOpenAIReasoningEffort(req.ReasoningEffort, target.UpstreamModel)
+		if err != nil {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
+		}
+		if thinkingLevel != nil {
+			if canonicalReq.Reasoning == nil {
+				canonicalReq.Reasoning = &protocol.CanonicalReasoning{}
+			}
+			canonicalReq.Reasoning.Effort = *thinkingLevel
+		}
+		s.applyToolSignatures(&canonicalReq)
+		geminiReq, err := protocol.CanonicalToGeminiGenerateRequest(canonicalReq)
+		if err != nil {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
+		}
+		geminiBody, err := json.Marshal(geminiReq)
+		if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, "server_error", err.Error())
+			return
+		}
+		if req.Stream {
+			s.proxyOpenAIChatStream(w, r, geminiBody, user, req.Model, targets, includeUsage)
+			return
+		}
+		s.proxyOpenAIChat(w, r, geminiBody, user, req.Model, targets)
+	default:
+		writeOpenAIError(w, http.StatusBadRequest, "unsupported_endpoint", "selected upstream does not support OpenAI Chat Completions")
 	}
-	canonicalReq.ThinkingLevel = thinkingLevel
-	s.applyToolSignatures(&canonicalReq)
-	geminiReq, err := protocol.CanonicalToGeminiGenerateRequest(canonicalReq)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
-		return
-	}
-	geminiBody, err := json.Marshal(geminiReq)
-	if err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, "server_error", err.Error())
-		return
-	}
-
-	if req.Stream {
-		s.proxyOpenAIChatStream(w, r, geminiBody, user, req.Model, targets, req.StreamOptions != nil && req.StreamOptions.IncludeUsage)
-		return
-	}
-	s.proxyOpenAIChat(w, r, geminiBody, user, req.Model, targets)
 }
 
 func validateOpenAIChatParameterSupport(req protocol.OpenAIChatRequest) error {
@@ -103,11 +120,45 @@ func validateOpenAIChatParameterSupport(req protocol.OpenAIChatRequest) error {
 	if req.TopLogprobs != nil {
 		return errors.New("top_logprobs is not supported")
 	}
+	if req.PresencePenalty != nil && *req.PresencePenalty != 0 {
+		return errors.New("presence_penalty is not supported")
+	}
+	if req.FrequencyPenalty != nil && *req.FrequencyPenalty != 0 {
+		return errors.New("frequency_penalty is not supported")
+	}
+	if rawJSONHasValue(req.LogitBias) {
+		return errors.New("logit_bias is not supported")
+	}
+	if req.Seed != nil {
+		return errors.New("seed is not supported")
+	}
+	if strings.TrimSpace(req.User) != "" {
+		return errors.New("user is not supported")
+	}
+	if rawJSONHasValue(req.Metadata) {
+		return errors.New("metadata is not supported")
+	}
+	switch stop := req.Stop.(type) {
+	case nil, string:
+	case []any:
+		for _, item := range stop {
+			if _, ok := item.(string); !ok {
+				return errors.New("stop must be a string or an array of strings")
+			}
+		}
+	default:
+		return errors.New("stop must be a string or an array of strings")
+	}
 	return nil
 }
 
+func rawJSONHasValue(raw json.RawMessage) bool {
+	value := strings.TrimSpace(string(raw))
+	return value != "" && value != "null" && value != "{}"
+}
+
 func openAIChatTargets(targets []RouteTarget) []RouteTarget {
-	for _, protocol := range []string{providerOpenAI, providerGemini} {
+	for _, protocol := range []string{providerOpenAI, providerOpenAIResponses, providerAnthropic, providerGemini} {
 		out := routeTargetsByProtocol(targets, protocol)
 		if len(out) > 0 {
 			return out
@@ -184,7 +235,7 @@ func (s *Server) proxyOpenAIChat(w http.ResponseWriter, r *http.Request, body []
 	}
 	usage := tokenUsageFromGeminiResponseBody(raw, geminiResp)
 
-	canonicalResp := protocol.GeminiToCanonicalChatResponse(geminiResp, model, "chatcmpl-"+result.RequestID, startedAt.Unix(), result.RequestID)
+	canonicalResp := protocol.GeminiToCanonicalResponse(geminiResp, model, "chatcmpl-"+result.RequestID, startedAt.Unix(), result.RequestID)
 	if canonicalResp.FinishReason == "length" {
 		logOpenAIDiagnostic(result, model, openAIDiagnosticRequest{}, http.StatusOK, "length", &canonicalResp.Usage.CompletionTokens)
 	}
@@ -282,6 +333,7 @@ func (s *Server) proxyOpenAIChatStream(w http.ResponseWriter, r *http.Request, b
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	usage := TokenUsage{}
+	toolOffset := 0
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data:") {
@@ -298,13 +350,25 @@ func (s *Server) proxyOpenAIChatStream(w http.ResponseWriter, r *http.Request, b
 		if chunkUsage := tokenUsageFromGeminiResponseBody([]byte(payload), geminiResp); !chunkUsage.IsZero() {
 			usage = chunkUsage
 		}
-		event := protocol.GeminiToCanonicalStreamEvent(geminiResp, result.RequestID)
-		s.rememberToolSignatures(event.ToolCalls)
-		if event.FinishReason == "length" {
-			logOpenAIDiagnostic(result, model, openAIDiagnosticRequest{Stream: true}, http.StatusOK, "length", nil)
-		}
-		if event.Text != "" || len(event.ToolCalls) > 0 || event.FinishReason != "" {
-			writeOpenAIStreamChunk(w, flusher, protocol.CanonicalToOpenAIStreamChunk(event, "chatcmpl-"+result.RequestID, created, model, includeUsage))
+		for _, event := range protocol.GeminiToCanonicalStreamEvents(geminiResp, result.RequestID, toolOffset) {
+			if event.Type == protocol.CanonicalStreamToolCallDone {
+				toolOffset++
+				s.rememberToolSignatures([]protocol.CanonicalToolCall{{
+					ID:        event.CallID,
+					Name:      event.Name,
+					Arguments: event.Arguments,
+					Signature: event.Signature,
+				}})
+			}
+			if event.Type == protocol.CanonicalStreamResponseDone && toolOffset > 0 && event.FinishReason == "stop" {
+				event.FinishReason = "tool_calls"
+			}
+			if event.Type == protocol.CanonicalStreamResponseDone && event.FinishReason == "length" {
+				logOpenAIDiagnostic(result, model, openAIDiagnosticRequest{Stream: true}, http.StatusOK, "length", nil)
+			}
+			if chunk, ok := protocol.CanonicalToOpenAIStreamChunk(event, "chatcmpl-"+result.RequestID, created, model, includeUsage); ok {
+				writeOpenAIStreamChunk(w, flusher, chunk)
+			}
 		}
 	}
 	io.WriteString(w, "data: [DONE]\n\n")

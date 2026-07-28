@@ -8,18 +8,18 @@ import (
 	"github.com/teatak/buzzhive/internal/protocol"
 )
 
-func (s *Server) proxyGeminiViaOpenAIChat(w http.ResponseWriter, r *http.Request, canonicalReq protocol.ChatRequest, user AuthToken, model string, targets []RouteTarget) {
+func (s *Server) proxyGeminiViaOpenAIChat(w http.ResponseWriter, r *http.Request, canonicalReq protocol.CanonicalRequest, user AuthToken, model string, targets []RouteTarget) {
+	chatReq, err := protocol.CanonicalToOpenAIChatRequest(canonicalReq)
+	if err != nil {
+		writeGeminiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	chatBody, err := json.Marshal(chatReq)
+	if err != nil {
+		writeGeminiError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	result := s.doProviderTargetLoop(r.Context(), user, model, targets, func(target RouteTarget) ProviderRequest {
-		nextReq := canonicalReq
-		nextReq.Model = target.UpstreamModel
-		chatReq, err := protocol.CanonicalToOpenAIChatRequest(nextReq)
-		if err != nil {
-			return ProviderRequest{ProviderName: target.ProviderName}
-		}
-		chatBody, err := json.Marshal(chatReq)
-		if err != nil {
-			return ProviderRequest{ProviderName: target.ProviderName}
-		}
 		headers := cleanHeaders(r.Header)
 		headers.Set("Content-Type", "application/json")
 		return ProviderRequest{
@@ -28,7 +28,7 @@ func (s *Server) proxyGeminiViaOpenAIChat(w http.ResponseWriter, r *http.Request
 			Method:          http.MethodPost,
 			Path:            "/v1/chat/completions",
 			Headers:         headers,
-			Body:            chatBody,
+			Body:            rewriteOpenAIModel(chatBody, model, target.UpstreamModel),
 			RequestedModel:  model,
 			Model:           target.UpstreamModel,
 		}
@@ -47,18 +47,18 @@ func (s *Server) proxyGeminiViaOpenAIChat(w http.ResponseWriter, r *http.Request
 	})
 }
 
-func (s *Server) proxyGeminiViaOpenAIResponses(w http.ResponseWriter, r *http.Request, canonicalReq protocol.ChatRequest, user AuthToken, model string, targets []RouteTarget) {
+func (s *Server) proxyGeminiViaOpenAIResponses(w http.ResponseWriter, r *http.Request, canonicalReq protocol.CanonicalRequest, user AuthToken, model string, targets []RouteTarget) {
+	responsesReq, err := protocol.CanonicalToOpenAIResponsesRequest(canonicalReq)
+	if err != nil {
+		writeGeminiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	responsesBody, err := json.Marshal(responsesReq)
+	if err != nil {
+		writeGeminiError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	result := s.doProviderTargetLoop(r.Context(), user, model, targets, func(target RouteTarget) ProviderRequest {
-		nextReq := canonicalReq
-		nextReq.Model = target.UpstreamModel
-		respReq, err := protocol.CanonicalToOpenAIResponsesRequest(nextReq)
-		if err != nil {
-			return ProviderRequest{ProviderName: target.ProviderName}
-		}
-		respBody, err := json.Marshal(respReq)
-		if err != nil {
-			return ProviderRequest{ProviderName: target.ProviderName}
-		}
 		headers := cleanHeaders(r.Header)
 		headers.Set("Content-Type", "application/json")
 		return ProviderRequest{
@@ -67,7 +67,7 @@ func (s *Server) proxyGeminiViaOpenAIResponses(w http.ResponseWriter, r *http.Re
 			Method:          http.MethodPost,
 			Path:            "/v1/responses",
 			Headers:         headers,
-			Body:            respBody,
+			Body:            rewriteOpenAIModel(responsesBody, model, target.UpstreamModel),
 			RequestedModel:  model,
 			Model:           target.UpstreamModel,
 		}
@@ -78,7 +78,10 @@ func (s *Server) proxyGeminiViaOpenAIResponses(w http.ResponseWriter, r *http.Re
 		if err := json.Unmarshal(raw, &responsesResp); err != nil {
 			return protocol.GeminiGenerateResponse{}, TokenUsage{}, err
 		}
-		canonicalResp := protocol.OpenAIResponsesResponseToCanonical(responsesResp)
+		canonicalResp, err := protocol.OpenAIResponsesResponseToCanonical(responsesResp)
+		if err != nil {
+			return protocol.GeminiGenerateResponse{}, TokenUsage{}, err
+		}
 		canonicalResp.Model = model
 		return protocol.CanonicalToGeminiGenerateResponse(canonicalResp), tokenUsageFromOpenAIResponseBody(raw), nil
 	}, func(resp *http.Response, requestID string) TokenUsage {
@@ -86,18 +89,18 @@ func (s *Server) proxyGeminiViaOpenAIResponses(w http.ResponseWriter, r *http.Re
 	})
 }
 
-func (s *Server) proxyGeminiViaAnthropic(w http.ResponseWriter, r *http.Request, canonicalReq protocol.ChatRequest, user AuthToken, model string, targets []RouteTarget) {
+func (s *Server) proxyGeminiViaAnthropic(w http.ResponseWriter, r *http.Request, canonicalReq protocol.CanonicalRequest, user AuthToken, model string, targets []RouteTarget) {
+	anthropicReq, err := protocol.CanonicalToAnthropicMessagesRequest(canonicalReq)
+	if err != nil {
+		writeGeminiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	anthropicBody, err := json.Marshal(anthropicReq)
+	if err != nil {
+		writeGeminiError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	result := s.doProviderTargetLoop(r.Context(), user, model, targets, func(target RouteTarget) ProviderRequest {
-		nextReq := canonicalReq
-		nextReq.Model = target.UpstreamModel
-		anthropicReq, err := protocol.CanonicalToAnthropicMessagesRequest(nextReq)
-		if err != nil {
-			return ProviderRequest{ProviderName: target.ProviderName}
-		}
-		anthropicBody, err := json.Marshal(anthropicReq)
-		if err != nil {
-			return ProviderRequest{ProviderName: target.ProviderName}
-		}
 		headers := cleanHeaders(r.Header)
 		headers.Set("Content-Type", "application/json")
 		return ProviderRequest{
@@ -106,7 +109,7 @@ func (s *Server) proxyGeminiViaAnthropic(w http.ResponseWriter, r *http.Request,
 			Method:          http.MethodPost,
 			Path:            "/v1/messages",
 			Headers:         headers,
-			Body:            anthropicBody,
+			Body:            rewriteOpenAIModel(anthropicBody, model, target.UpstreamModel),
 			RequestedModel:  model,
 			Model:           target.UpstreamModel,
 		}
@@ -117,7 +120,10 @@ func (s *Server) proxyGeminiViaAnthropic(w http.ResponseWriter, r *http.Request,
 		if err := json.Unmarshal(raw, &anthropicResp); err != nil {
 			return protocol.GeminiGenerateResponse{}, TokenUsage{}, err
 		}
-		canonicalResp := protocol.AnthropicMessagesResponseToCanonical(anthropicResp)
+		canonicalResp, err := protocol.AnthropicMessagesResponseToCanonical(anthropicResp)
+		if err != nil {
+			return protocol.GeminiGenerateResponse{}, TokenUsage{}, err
+		}
 		canonicalResp.Model = model
 		return protocol.CanonicalToGeminiGenerateResponse(canonicalResp), tokenUsageFromCanonical(canonicalResp.Usage), nil
 	}, func(resp *http.Response, requestID string) TokenUsage {
@@ -133,19 +139,11 @@ func (s *Server) writeGeminiConvertedResult(
 	nonStream func(*http.Response, string, int64) (protocol.GeminiGenerateResponse, TokenUsage, error),
 	stream func(*http.Response, string) TokenUsage,
 ) {
-	if !result.OK {
-		s.recordProviderResultUsage(user, model, result, providerResultStatus(result.Response))
-		writeJSON(w, providerResultStatus(result.Response), map[string]string{"error": "upstream failed"})
+	if !s.convertedResultReady(w, providerGemini, user, model, result) {
 		return
 	}
 	resp := result.Response
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		raw := drain(resp.Body, 64*1024)
-		s.recordProviderResultUsage(user, model, result, resp.StatusCode)
-		writeJSON(w, resp.StatusCode, map[string]any{"error": string(raw)})
-		return
-	}
 	w.Header().Set("X-Proxy-Debug", strings.Join(result.Chain, " -> "))
 	w.Header().Set("X-Proxy-Key", result.Key.Name)
 	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
@@ -155,7 +153,7 @@ func (s *Server) writeGeminiConvertedResult(
 	}
 	out, usage, err := nonStream(resp, result.RequestID, result.StartedAt.Unix())
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeGeminiError(w, http.StatusBadGateway, err.Error())
 		s.recordProviderResultUsage(user, model, result, http.StatusBadGateway)
 		return
 	}
@@ -168,11 +166,12 @@ func (s *Server) streamOpenAIChatAsGemini(w http.ResponseWriter, resp *http.Resp
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	usage := readOpenAIChatStreamAsCanonical(resp.Body, func(event protocol.ChatStreamEvent) {
-		if event.Text != "" || len(event.ToolCalls) > 0 || event.FinishReason != "" {
-			writeGeminiStreamEvent(w, flusher, event)
-		}
+	usage, err := readOpenAIChatStreamAsCanonical(resp.Body, func(event protocol.CanonicalStreamEvent) {
+		writeGeminiStreamEvent(w, flusher, event)
 	})
+	if err != nil {
+		writeGeminiStreamEvent(w, flusher, canonicalStreamReadError(err))
+	}
 	return tokenUsageFromCanonical(usage)
 }
 
@@ -181,11 +180,12 @@ func (s *Server) streamResponsesAsGemini(w http.ResponseWriter, resp *http.Respo
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	usage := readResponsesStreamAsCanonical(resp.Body, func(event protocol.ChatStreamEvent) {
-		if event.Text != "" || event.FinishReason != "" {
-			writeGeminiStreamEvent(w, flusher, event)
-		}
+	usage, err := readResponsesStreamAsCanonical(resp.Body, func(event protocol.CanonicalStreamEvent) {
+		writeGeminiStreamEvent(w, flusher, event)
 	})
+	if err != nil {
+		writeGeminiStreamEvent(w, flusher, canonicalStreamReadError(err))
+	}
 	return tokenUsageFromCanonical(usage)
 }
 
@@ -194,15 +194,16 @@ func (s *Server) streamAnthropicAsGemini(w http.ResponseWriter, resp *http.Respo
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	usage := readAnthropicStreamAsCanonical(resp.Body, func(event protocol.ChatStreamEvent) {
-		if event.Text != "" || event.FinishReason != "" {
-			writeGeminiStreamEvent(w, flusher, event)
-		}
+	usage, err := readAnthropicStreamAsCanonical(resp.Body, func(event protocol.CanonicalStreamEvent) {
+		writeGeminiStreamEvent(w, flusher, event)
 	})
+	if err != nil {
+		writeGeminiStreamEvent(w, flusher, canonicalStreamReadError(err))
+	}
 	return tokenUsageFromCanonical(usage)
 }
 
-func tokenUsageFromCanonical(usage protocol.ChatUsage) TokenUsage {
+func tokenUsageFromCanonical(usage protocol.CanonicalUsage) TokenUsage {
 	return TokenUsage{
 		PromptTokens:     int64(usage.PromptTokens),
 		CompletionTokens: int64(usage.CompletionTokens),

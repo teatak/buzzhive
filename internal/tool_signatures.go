@@ -7,7 +7,7 @@ import (
 	"github.com/teatak/buzzhive/internal/protocol"
 )
 
-func (s *Server) rememberToolSignatures(toolCalls []protocol.ChatToolCall) {
+func (s *Server) rememberToolSignatures(toolCalls []protocol.CanonicalToolCall) {
 	if len(toolCalls) == 0 {
 		return
 	}
@@ -29,7 +29,7 @@ func (s *Server) rememberToolSignatures(toolCalls []protocol.ChatToolCall) {
 	}
 }
 
-func (s *Server) applyToolSignatures(req *protocol.ChatRequest) {
+func (s *Server) applyToolSignatures(req *protocol.CanonicalRequest) {
 	s.toolSigMu.Lock()
 	defer s.toolSigMu.Unlock()
 	if len(s.toolSigs) == 0 {

@@ -11,35 +11,35 @@ import (
 
 func (s *Server) handleAnthropicPassthrough(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken) {
 	if r.Method != http.MethodPost {
-		writeOpenAIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		writeAnthropicError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
 		return
 	}
 	var req protocol.AnthropicMessagesRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
 	if req.Model == "" {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "model is required")
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return
 	}
 	if isAutoModel(req.Model) {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "auto model routing has been removed")
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "auto model routing has been removed")
 		return
 	}
 
 	targets, err := s.resolveRouteTargets(req.Model)
 	if err != nil {
 		if errors.Is(err, errModelRouteNotFound) {
-			writeOpenAIError(w, http.StatusNotFound, "model_not_found", err.Error())
+			writeAnthropicError(w, http.StatusNotFound, "not_found_error", err.Error())
 			return
 		}
-		writeOpenAIError(w, http.StatusInternalServerError, "server_error", err.Error())
+		writeAnthropicError(w, http.StatusInternalServerError, "api_error", err.Error())
 		return
 	}
 	targets = anthropicTargets(targets)
 	if len(targets) == 0 {
-		writeOpenAIError(w, http.StatusBadRequest, "unsupported_endpoint", "selected upstream does not support Anthropic Messages")
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "selected upstream does not support Anthropic Messages")
 		return
 	}
 	target := targets[0]
@@ -47,34 +47,98 @@ func (s *Server) handleAnthropicPassthrough(w http.ResponseWriter, r *http.Reque
 		s.proxyRaw(w, r, body, user, req.Model, targets)
 		return
 	}
+	if err := decodeCrossProtocolJSON(body, &req); err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	if err := validateAnthropicCrossProtocolContent(body); err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
 	canonicalReq, err := protocol.AnthropicMessagesToCanonicalRequest(req)
 	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
 	switch target.ProviderType {
 	case providerOpenAI:
 		s.proxyAnthropicViaOpenAIChat(w, r, canonicalReq, user, req.Model, targets)
+	case providerOpenAIResponses:
+		s.proxyAnthropicViaOpenAIResponses(w, r, canonicalReq, user, req.Model, targets)
 	case providerGemini:
 		s.applyToolSignatures(&canonicalReq)
 		geminiReq, err := protocol.CanonicalToGeminiGenerateRequest(canonicalReq)
 		if err != nil {
-			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return
 		}
 		geminiBody, err := json.Marshal(geminiReq)
 		if err != nil {
-			writeOpenAIError(w, http.StatusInternalServerError, "server_error", err.Error())
+			writeAnthropicError(w, http.StatusInternalServerError, "api_error", err.Error())
 			return
 		}
 		s.proxyAnthropicViaGemini(w, r, geminiBody, user, req.Model, targets, req.Stream)
 	default:
-		writeOpenAIError(w, http.StatusBadRequest, "unsupported_endpoint", "selected upstream does not support Anthropic Messages")
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "selected upstream does not support Anthropic Messages")
 	}
 }
 
+type anthropicStrictMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+func validateAnthropicCrossProtocolContent(body []byte) error {
+	var request struct {
+		Model         string                          `json:"model"`
+		System        json.RawMessage                 `json:"system,omitempty"`
+		Messages      []anthropicStrictMessage        `json:"messages"`
+		MaxTokens     *int                            `json:"max_tokens,omitempty"`
+		Temperature   *float64                        `json:"temperature,omitempty"`
+		TopP          *float64                        `json:"top_p,omitempty"`
+		StopSequences []string                        `json:"stop_sequences,omitempty"`
+		Tools         []protocol.AnthropicTool        `json:"tools,omitempty"`
+		ToolChoice    *protocol.AnthropicToolChoice   `json:"tool_choice,omitempty"`
+		Thinking      *protocol.AnthropicThinking     `json:"thinking,omitempty"`
+		OutputConfig  *protocol.AnthropicOutputConfig `json:"output_config,omitempty"`
+		Stream        bool                            `json:"stream,omitempty"`
+	}
+	if err := decodeCrossProtocolJSON(body, &request); err != nil {
+		return err
+	}
+	if len(request.System) > 0 {
+		if err := validateAnthropicContentValue(request.System); err != nil {
+			return err
+		}
+	}
+	for _, message := range request.Messages {
+		if err := validateAnthropicContentValue(message.Content); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateAnthropicContentValue(raw json.RawMessage) error {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return nil
+	}
+	var blocks []json.RawMessage
+	if err := decodeCrossProtocolJSON(raw, &blocks); err != nil {
+		return err
+	}
+	for _, block := range blocks {
+		var content protocol.AnthropicContent
+		if err := decodeCrossProtocolJSON(block, &content); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func anthropicTargets(targets []RouteTarget) []RouteTarget {
-	for _, protocol := range []string{providerAnthropic, providerOpenAI, providerGemini} {
+	for _, protocol := range []string{providerAnthropic, providerOpenAI, providerOpenAIResponses, providerGemini} {
 		out := routeTargetsByProtocol(targets, protocol)
 		if len(out) > 0 {
 			return out
@@ -83,15 +147,15 @@ func anthropicTargets(targets []RouteTarget) []RouteTarget {
 	return nil
 }
 
-func (s *Server) proxyAnthropicViaOpenAIChat(w http.ResponseWriter, r *http.Request, canonicalReq protocol.ChatRequest, user AuthToken, model string, targets []RouteTarget) {
+func (s *Server) proxyAnthropicViaOpenAIChat(w http.ResponseWriter, r *http.Request, canonicalReq protocol.CanonicalRequest, user AuthToken, model string, targets []RouteTarget) {
 	chatReq, err := protocol.CanonicalToOpenAIChatRequest(canonicalReq)
 	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
 	chatBody, err := json.Marshal(chatReq)
 	if err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, "server_error", err.Error())
+		writeAnthropicError(w, http.StatusInternalServerError, "api_error", err.Error())
 		return
 	}
 	result := s.doProviderTargetLoop(r.Context(), user, model, targets, func(target RouteTarget) ProviderRequest {
@@ -110,14 +174,14 @@ func (s *Server) proxyAnthropicViaOpenAIChat(w http.ResponseWriter, r *http.Requ
 	})
 	if !result.OK {
 		s.recordProviderResultUsage(user, model, result, providerResultStatus(result.Response))
-		writeOpenAIRetryError(w, result.Response, result.Attempts, s.cfg.Retry.MaxAttempts, result.Chain)
+		writeInboundRetryError(w, providerAnthropic, result.Response, result.Attempts, s.cfg.Retry.MaxAttempts, result.Chain)
 		return
 	}
 	resp := result.Response
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		raw := drain(resp.Body, 64*1024)
-		writeOpenAIUpstreamError(w, resp.StatusCode, raw)
+		writeInboundUpstreamError(w, providerAnthropic, resp.StatusCode, raw)
 		s.recordProviderResultUsage(user, model, result, resp.StatusCode)
 		return
 	}
@@ -129,7 +193,7 @@ func (s *Server) proxyAnthropicViaOpenAIChat(w http.ResponseWriter, r *http.Requ
 	raw := drain(resp.Body, 8*1024*1024)
 	var chatResp protocol.OpenAIChatResponse
 	if err := json.Unmarshal(raw, &chatResp); err != nil {
-		writeOpenAIError(w, http.StatusBadGateway, "server_error", err.Error())
+		writeAnthropicError(w, http.StatusBadGateway, "api_error", err.Error())
 		s.recordProviderResultUsage(user, model, result, http.StatusBadGateway)
 		return
 	}
@@ -160,14 +224,14 @@ func (s *Server) proxyAnthropicViaGemini(w http.ResponseWriter, r *http.Request,
 	})
 	if !result.OK {
 		s.recordProviderResultUsage(user, model, result, providerResultStatus(result.Response))
-		writeOpenAIRetryError(w, result.Response, result.Attempts, s.cfg.Retry.MaxAttempts, result.Chain)
+		writeInboundRetryError(w, providerAnthropic, result.Response, result.Attempts, s.cfg.Retry.MaxAttempts, result.Chain)
 		return
 	}
 	resp := result.Response
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		raw := drain(resp.Body, 64*1024)
-		writeOpenAIUpstreamError(w, resp.StatusCode, raw)
+		writeInboundUpstreamError(w, providerAnthropic, resp.StatusCode, raw)
 		s.recordProviderResultUsage(user, model, result, resp.StatusCode)
 		return
 	}
@@ -179,12 +243,12 @@ func (s *Server) proxyAnthropicViaGemini(w http.ResponseWriter, r *http.Request,
 	raw := drain(resp.Body, 8*1024*1024)
 	var geminiResp protocol.GeminiGenerateResponse
 	if err := json.Unmarshal(raw, &geminiResp); err != nil {
-		writeOpenAIError(w, http.StatusBadGateway, "server_error", err.Error())
+		writeAnthropicError(w, http.StatusBadGateway, "api_error", err.Error())
 		s.recordProviderResultUsage(user, model, result, http.StatusBadGateway)
 		return
 	}
 	usage := tokenUsageFromGeminiResponseBody(raw, geminiResp)
-	canonicalResp := protocol.GeminiToCanonicalChatResponse(geminiResp, model, "msg_"+result.RequestID, result.StartedAt.Unix(), result.RequestID)
+	canonicalResp := protocol.GeminiToCanonicalResponse(geminiResp, model, "msg_"+result.RequestID, result.StartedAt.Unix(), result.RequestID)
 	s.rememberToolSignatures(canonicalResp.ToolCalls)
 	out := protocol.CanonicalToAnthropicMessagesResponse(canonicalResp)
 	w.Header().Set("X-Proxy-Debug", strings.Join(result.Chain, " -> "))
@@ -198,11 +262,15 @@ func (s *Server) streamOpenAIChatAsAnthropic(w http.ResponseWriter, resp *http.R
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	writeAnthropicStreamStart(w, flusher, id, model)
-	usage := readOpenAIChatStreamAsCanonical(resp.Body, func(event protocol.ChatStreamEvent) {
-		writeAnthropicTextDelta(w, flusher, event.Text)
+	encoder := newAnthropicStreamEncoder(w, flusher, id, model)
+	usage, err := readOpenAIChatStreamAsCanonical(resp.Body, func(event protocol.CanonicalStreamEvent) {
+		encoder.writeEvent(event)
 	})
-	writeAnthropicStreamDone(w, flusher, usage)
+	if err != nil {
+		encoder.writeEvent(canonicalStreamReadError(err))
+	} else {
+		encoder.finish("stop", usage)
+	}
 	return tokenUsageFromCanonical(usage)
 }
 
@@ -211,10 +279,14 @@ func (s *Server) streamGeminiAsAnthropic(w http.ResponseWriter, resp *http.Respo
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	writeAnthropicStreamStart(w, flusher, id, model)
-	usage := readGeminiStreamAsCanonical(resp.Body, requestID, func(event protocol.ChatStreamEvent) {
-		writeAnthropicTextDelta(w, flusher, event.Text)
+	encoder := newAnthropicStreamEncoder(w, flusher, id, model)
+	usage, err := readGeminiStreamAsCanonical(resp.Body, requestID, func(event protocol.CanonicalStreamEvent) {
+		encoder.writeEvent(event)
 	})
-	writeAnthropicStreamDone(w, flusher, usage)
+	if err != nil {
+		encoder.writeEvent(canonicalStreamReadError(err))
+	} else {
+		encoder.finish("stop", usage)
+	}
 	return tokenUsageFromCanonical(usage)
 }
