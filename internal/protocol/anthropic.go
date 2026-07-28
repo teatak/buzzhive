@@ -96,14 +96,21 @@ type AnthropicJSONOutputFormat struct {
 }
 
 type AnthropicMessagesResponse struct {
-	ID           string             `json:"id"`
-	Type         string             `json:"type"`
-	Role         string             `json:"role"`
-	Model        string             `json:"model"`
-	Content      []AnthropicContent `json:"content"`
-	StopReason   string             `json:"stop_reason,omitempty"`
-	StopSequence string             `json:"stop_sequence,omitempty"`
-	Usage        AnthropicUsage     `json:"usage,omitempty"`
+	ID           string                `json:"id"`
+	Type         string                `json:"type"`
+	Role         string                `json:"role"`
+	Model        string                `json:"model"`
+	Content      []AnthropicContent    `json:"content"`
+	StopReason   string                `json:"stop_reason,omitempty"`
+	StopSequence string                `json:"stop_sequence,omitempty"`
+	StopDetails  *AnthropicStopDetails `json:"stop_details,omitempty"`
+	Usage        AnthropicUsage        `json:"usage,omitempty"`
+}
+
+type AnthropicStopDetails struct {
+	Type        string `json:"type"`
+	Category    string `json:"category,omitempty"`
+	Explanation string `json:"explanation,omitempty"`
 }
 
 type AnthropicUsage struct {
@@ -119,6 +126,15 @@ type AnthropicOutputTokensDetails struct {
 }
 
 func AnthropicMessagesToCanonicalRequest(req AnthropicMessagesRequest) (CanonicalRequest, error) {
+	if req.MaxTokens == nil {
+		return CanonicalRequest{}, errors.New("Anthropic max_tokens is required")
+	}
+	if *req.MaxTokens < 0 {
+		return CanonicalRequest{}, errors.New("Anthropic max_tokens must not be negative")
+	}
+	if len(req.Messages) == 0 {
+		return CanonicalRequest{}, errors.New("Anthropic messages must contain at least one message")
+	}
 	out := CanonicalRequest{
 		Model:           req.Model,
 		Stream:          req.Stream,
@@ -174,6 +190,9 @@ func AnthropicMessagesToCanonicalRequest(req AnthropicMessagesRequest) (Canonica
 		out.Messages = append(out.Messages, CanonicalMessage{Role: "system", Parts: systemParts})
 	}
 	for _, message := range req.Messages {
+		if message.Role != "user" && message.Role != "assistant" {
+			return CanonicalRequest{}, fmt.Errorf("unsupported Anthropic message role %q", message.Role)
+		}
 		parts, err := anthropicContentToCanonical(message.Content)
 		if err != nil {
 			return CanonicalRequest{}, err
@@ -193,8 +212,8 @@ func AnthropicMessagesToCanonicalRequest(req AnthropicMessagesRequest) (Canonica
 }
 
 func CanonicalToAnthropicMessagesRequest(req CanonicalRequest) (AnthropicMessagesRequest, error) {
-	if req.MaxOutputTokens == nil || *req.MaxOutputTokens <= 0 {
-		return AnthropicMessagesRequest{}, errors.New("max_output_tokens must be greater than zero when converting to Anthropic Messages")
+	if req.MaxOutputTokens == nil || *req.MaxOutputTokens < 0 {
+		return AnthropicMessagesRequest{}, errors.New("max_output_tokens is required and must not be negative when converting to Anthropic Messages")
 	}
 	if err := validateCanonicalToolChoice(req.ToolChoice, req.Tools); err != nil {
 		return AnthropicMessagesRequest{}, err
@@ -251,9 +270,6 @@ func CanonicalToAnthropicMessagesRequest(req CanonicalRequest) (AnthropicMessage
 			}
 		}
 		if effort != "" {
-			if out.Thinking == nil {
-				out.Thinking = &AnthropicThinking{Type: "adaptive"}
-			}
 			out.OutputConfig = &AnthropicOutputConfig{Effort: effort}
 		}
 	}
@@ -331,6 +347,12 @@ func AnthropicMessagesResponseToCanonical(resp AnthropicMessagesResponse) (Canon
 			CachedTokens:     resp.Usage.CacheReadInputTokens,
 		},
 	}
+	if resp.StopReason == "refusal" {
+		out.Refusal = "Anthropic refused the request"
+		if resp.StopDetails != nil {
+			out.Refusal = firstNonEmpty(resp.StopDetails.Explanation, resp.StopDetails.Category, out.Refusal)
+		}
+	}
 	if resp.Usage.OutputTokensDetails != nil {
 		out.Usage.ReasoningTokens = resp.Usage.OutputTokensDetails.ThinkingTokens
 	}
@@ -361,12 +383,12 @@ func CanonicalToAnthropicMessagesResponse(resp CanonicalResponse) AnthropicMessa
 	if inputTokens < 0 {
 		inputTokens = 0
 	}
-	return AnthropicMessagesResponse{
+	out := AnthropicMessagesResponse{
 		ID:         resp.ID,
 		Type:       "message",
 		Role:       canonicalRoleToAnthropic(resp.Role),
 		Model:      resp.Model,
-		Content:    canonicalResponseToAnthropicContent(resp.Reasoning, resp.Signature, firstNonEmpty(resp.Refusal, resp.Text), resp.ToolCalls),
+		Content:    canonicalResponseToAnthropicContent(resp.Reasoning, resp.Signature, resp.Text, resp.ToolCalls),
 		StopReason: CanonicalFinishReasonToAnthropic(resp.FinishReason),
 		Usage: AnthropicUsage{
 			InputTokens:          inputTokens,
@@ -377,6 +399,15 @@ func CanonicalToAnthropicMessagesResponse(resp CanonicalResponse) AnthropicMessa
 			},
 		},
 	}
+	if resp.Refusal != "" {
+		out.Content = nil
+		out.StopReason = "refusal"
+		out.StopDetails = &AnthropicStopDetails{
+			Type:        "refusal",
+			Explanation: resp.Refusal,
+		}
+	}
+	return out
 }
 
 func anthropicSystemToCanonicalParts(value any) ([]CanonicalPart, error) {
@@ -622,12 +653,14 @@ func canonicalRoleToAnthropic(role string) string {
 
 func AnthropicStopReasonToCanonical(reason string) string {
 	switch reason {
-	case "end_turn", "stop_sequence":
+	case "end_turn", "stop_sequence", "pause_turn":
 		return "stop"
-	case "max_tokens":
+	case "max_tokens", "model_context_window_exceeded":
 		return "length"
 	case "tool_use":
 		return "tool_calls"
+	case "refusal":
+		return "content_filter"
 	default:
 		return reason
 	}
@@ -641,6 +674,8 @@ func CanonicalFinishReasonToAnthropic(reason string) string {
 		return "max_tokens"
 	case "tool_calls":
 		return "tool_use"
+	case "content_filter":
+		return "refusal"
 	default:
 		return reason
 	}

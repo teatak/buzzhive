@@ -119,3 +119,76 @@ func TestRotateRouteTargetsWeighted(t *testing.T) {
 		}
 	}
 }
+
+func TestSelectRouteTargetsChoosesOneEndpointPerRoute(t *testing.T) {
+	srv := &Server{routeNext: make(map[string]int)}
+	targets := []RouteTarget{
+		{ID: 1, ProviderName: "first", ProviderType: providerAnthropic, UpstreamModel: "a"},
+		{ID: 1, ProviderName: "first", ProviderType: providerOpenAI, UpstreamModel: "a"},
+		{ID: 2, ProviderName: "second", ProviderType: providerOpenAIResponses, UpstreamModel: "b"},
+		{ID: 2, ProviderName: "second", ProviderType: providerGemini, UpstreamModel: "b"},
+	}
+
+	selected := srv.selectRouteTargets("public", targets, openAIChatProtocolPreference())
+	if len(selected) != 2 {
+		t.Fatalf("selected targets = %+v", selected)
+	}
+	if selected[0].ID != 1 || selected[0].ProviderType != providerOpenAI {
+		t.Fatalf("first selected target = %+v", selected[0])
+	}
+	if selected[1].ID != 2 || selected[1].ProviderType != providerOpenAIResponses {
+		t.Fatalf("second selected target = %+v", selected[1])
+	}
+}
+
+func TestMixedProtocolTargetLoopFallsBackAcrossRoutes(t *testing.T) {
+	var attempts []string
+	srv := &Server{
+		providers: map[string]Provider{
+			providerRuntimeKey("first", providerOpenAI): testProviderFunc(func(_ context.Context, _ ProviderRequest, _ APIKey) (*http.Response, error) {
+				attempts = append(attempts, providerOpenAI)
+				return &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"rate limited"}}`)),
+				}, nil
+			}),
+			providerRuntimeKey("second", providerAnthropic): testProviderFunc(func(_ context.Context, _ ProviderRequest, _ APIKey) (*http.Response, error) {
+				attempts = append(attempts, providerAnthropic)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+				}, nil
+			}),
+		},
+		routeNext: make(map[string]int),
+		keyState: &KeyState{
+			keys: []APIKey{
+				{Name: "openai-key", Key: "one", ProviderName: "first"},
+				{Name: "anthropic-key", Key: "two", ProviderName: "second"},
+			},
+			cooldown:     time.Minute,
+			rpdCooldown:  time.Hour,
+			exhausted:    make(map[string]time.Time),
+			cooldownHits: make(map[string]int),
+			rpdLike:      make(map[string]bool),
+			errors:       make(map[string]KeyError),
+		},
+	}
+	srv.cfg.Retry.MaxAttempts = 2
+	targets := srv.selectRouteTargets("public", []RouteTarget{
+		{ID: 1, ProviderName: "first", ProviderType: providerOpenAI, UpstreamModel: "a"},
+		{ID: 2, ProviderName: "second", ProviderType: providerAnthropic, UpstreamModel: "b"},
+	}, openAIChatProtocolPreference())
+
+	result := srv.doProviderTargetLoop(context.Background(), AuthToken{}, "public", targets, func(target RouteTarget) ProviderRequest {
+		return ProviderRequest{ProviderName: target.ProviderName, Model: target.UpstreamModel}
+	})
+	if !result.OK || result.Target.ProviderType != providerAnthropic {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(attempts) != 2 || attempts[0] != providerOpenAI || attempts[1] != providerAnthropic {
+		t.Fatalf("attempts = %+v", attempts)
+	}
+}

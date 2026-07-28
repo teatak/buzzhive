@@ -119,10 +119,11 @@ func OpenAIChatStreamChunkToCanonical(chunk OpenAIChatResponse) []CanonicalStrea
 				}
 				if call.ID != "" || call.Function.Name != "" {
 					out = append(out, CanonicalStreamEvent{
-						Type:   CanonicalStreamToolCallStart,
-						Index:  index,
-						CallID: call.ID,
-						Name:   call.Function.Name,
+						Type:      CanonicalStreamToolCallStart,
+						Index:     index,
+						CallID:    call.ID,
+						Name:      call.Function.Name,
+						Signature: openAIToolCallThoughtSignature(call),
 					})
 				}
 				if call.Function.Arguments != "" {
@@ -206,6 +207,7 @@ func openAIToolCallsToCanonical(toolCalls []OpenAIToolCall) []CanonicalToolCall 
 			ID:        call.ID,
 			Name:      call.Function.Name,
 			Arguments: call.Function.Arguments,
+			Signature: openAIToolCallThoughtSignature(call),
 		})
 	}
 	return out
@@ -241,9 +243,10 @@ func CanonicalToOpenAIStreamChunk(event CanonicalStreamEvent, id string, created
 	case CanonicalStreamToolCallStart:
 		index := event.Index
 		choice.Delta.ToolCalls = []OpenAIToolCall{{
-			Index: &index,
-			ID:    event.CallID,
-			Type:  "function",
+			Index:        &index,
+			ID:           event.CallID,
+			Type:         "function",
+			ExtraContent: openAIToolCallExtraContent(event.Signature),
 			Function: OpenAIToolCallFunction{
 				Name: event.Name,
 			},
@@ -293,8 +296,9 @@ func canonicalToolCallsToOpenAIToolCalls(toolCalls []CanonicalToolCall) []OpenAI
 	out := make([]OpenAIToolCall, 0, len(toolCalls))
 	for _, call := range toolCalls {
 		out = append(out, OpenAIToolCall{
-			ID:   call.ID,
-			Type: "function",
+			ID:           call.ID,
+			Type:         "function",
+			ExtraContent: openAIToolCallExtraContent(call.Signature),
 			Function: OpenAIToolCallFunction{
 				Name:      call.Name,
 				Arguments: call.Arguments,

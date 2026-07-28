@@ -3,6 +3,7 @@ package buzzhive
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -107,7 +108,7 @@ func (e *responsesStreamEncoder) writeEvent(event protocol.CanonicalStreamEvent)
 	case protocol.CanonicalStreamUsage:
 		e.usage = event.Usage
 	case protocol.CanonicalStreamResponseDone:
-		e.finish(event.FinishReason, e.usage)
+		e.finish(event.Status, event.FinishReason, e.usage)
 	case protocol.CanonicalStreamError:
 		if event.Error != nil {
 			e.write("error", map[string]any{
@@ -375,30 +376,53 @@ func (e *responsesStreamEncoder) writeToolDone(event protocol.CanonicalStreamEve
 	})
 }
 
-func (e *responsesStreamEncoder) finish(reason string, usage protocol.CanonicalUsage) {
+func (e *responsesStreamEncoder) finish(status string, reason string, usage protocol.CanonicalUsage) {
 	if e.finished {
 		return
 	}
 	if !usage.IsZero() {
 		e.usage = usage
 	}
+	refusal := ""
+	if e.textRefusal {
+		refusal = e.text.String()
+	}
+	canonical := protocol.CanonicalResponse{
+		ID:           e.id,
+		Created:      e.created,
+		Model:        e.model,
+		Role:         "assistant",
+		Status:       status,
+		Refusal:      refusal,
+		FinishReason: reason,
+		Usage:        e.usage,
+	}
+	responseStatus := protocol.CanonicalToOpenAIResponsesResponse(canonical).Status
 	e.closeReasoning()
 	if e.textOpen {
 		text := e.text.String()
 		eventType := "response.output_text.done"
-		part := protocol.OpenAIResponseOutputPart{Type: "output_text", Text: text}
+		part := protocol.OpenAIResponseOutputPart{
+			Type:        "output_text",
+			Text:        text,
+			Annotations: json.RawMessage(`[]`),
+		}
 		if e.textRefusal {
 			eventType = "response.refusal.done"
 			part = protocol.OpenAIResponseOutputPart{Type: "refusal", Refusal: text}
 		}
-		e.write(eventType, map[string]any{
+		done := map[string]any{
 			"type":          eventType,
 			"item_id":       e.id + "_msg",
 			"output_index":  e.textIndex,
 			"content_index": 0,
-			"refusal":       part.Refusal,
-			"text":          part.Text,
-		})
+		}
+		if e.textRefusal {
+			done["refusal"] = part.Refusal
+		} else {
+			done["text"] = part.Text
+		}
+		e.write(eventType, done)
 		e.write("response.content_part.done", map[string]any{
 			"type":          "response.content_part.done",
 			"item_id":       e.id + "_msg",
@@ -409,7 +433,7 @@ func (e *responsesStreamEncoder) finish(reason string, usage protocol.CanonicalU
 		item := protocol.OpenAIResponseOutputItem{
 			Type:    "message",
 			ID:      e.id + "_msg",
-			Status:  "completed",
+			Status:  responseStatus,
 			Role:    "assistant",
 			Content: []protocol.OpenAIResponseOutputPart{part},
 		}
@@ -432,14 +456,7 @@ func (e *responsesStreamEncoder) finish(reason string, usage protocol.CanonicalU
 			})
 		}
 	}
-	resp := protocol.CanonicalToOpenAIResponsesResponse(protocol.CanonicalResponse{
-		ID:           e.id,
-		Created:      e.created,
-		Model:        e.model,
-		Role:         "assistant",
-		FinishReason: reason,
-		Usage:        e.usage,
-	})
+	resp := protocol.CanonicalToOpenAIResponsesResponse(canonical)
 	resp.Output = e.sortedOutput()
 	e.finished = true
 	eventType := "response.completed"
@@ -490,6 +507,7 @@ type anthropicStreamEncoder struct {
 	reasoningIndex     int
 	reasoningOpen      bool
 	reasoningSignature strings.Builder
+	refusal            strings.Builder
 	toolCalls          map[int]protocol.CanonicalToolCall
 	usage              protocol.CanonicalUsage
 	finished           bool
@@ -524,8 +542,10 @@ func (e *anthropicStreamEncoder) writeEvent(event protocol.CanonicalStreamEvent)
 		return
 	}
 	switch event.Type {
-	case protocol.CanonicalStreamTextDelta, protocol.CanonicalStreamRefusalDelta:
+	case protocol.CanonicalStreamTextDelta:
 		e.writeTextDelta(event.Delta)
+	case protocol.CanonicalStreamRefusalDelta:
+		e.refusal.WriteString(event.Delta)
 	case protocol.CanonicalStreamReasoningDelta:
 		e.writeReasoningDelta(event)
 	case protocol.CanonicalStreamToolCallStart:
@@ -717,12 +737,24 @@ func (e *anthropicStreamEncoder) finish(reason string, usage protocol.CanonicalU
 	if inputTokens < 0 {
 		inputTokens = 0
 	}
+	stopReason := protocol.CanonicalFinishReasonToAnthropic(reason)
+	delta := map[string]any{
+		"stop_reason":   stopReason,
+		"stop_sequence": nil,
+	}
+	if stopReason == "refusal" {
+		explanation := e.refusal.String()
+		if explanation == "" {
+			explanation = "The request was declined"
+		}
+		delta["stop_details"] = protocol.AnthropicStopDetails{
+			Type:        "refusal",
+			Explanation: explanation,
+		}
+	}
 	writeSSEJSON(e.w, e.flusher, "message_delta", map[string]any{
-		"type": "message_delta",
-		"delta": map[string]any{
-			"stop_reason":   protocol.CanonicalFinishReasonToAnthropic(reason),
-			"stop_sequence": nil,
-		},
+		"type":  "message_delta",
+		"delta": delta,
 		"usage": map[string]any{
 			"input_tokens":                inputTokens,
 			"output_tokens":               e.usage.CompletionTokens,
@@ -772,6 +804,7 @@ func readOpenAIChatStreamAsCanonical(r io.Reader, onEvent func(protocol.Canonica
 	var done *protocol.CanonicalStreamEvent
 	responseStarted := false
 	terminated := false
+	var streamErr error
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data:") {
@@ -798,6 +831,7 @@ func readOpenAIChatStreamAsCanonical(r io.Reader, onEvent func(protocol.Canonica
 					Message: errorEvent.Error.Message,
 				},
 			})
+			streamErr = fmt.Errorf("OpenAI Chat stream error %s: %s", code, errorEvent.Error.Message)
 			terminated = true
 			break
 		}
@@ -846,6 +880,9 @@ func readOpenAIChatStreamAsCanonical(r io.Reader, onEvent func(protocol.Canonica
 	if err := scanner.Err(); err != nil {
 		return usage, fmt.Errorf("read OpenAI Chat stream: %w", err)
 	}
+	if streamErr != nil {
+		return usage, streamErr
+	}
 	if !terminated {
 		return usage, io.ErrUnexpectedEOF
 	}
@@ -858,6 +895,7 @@ func readGeminiStreamAsCanonical(r io.Reader, requestID string, onEvent func(pro
 	var usage protocol.CanonicalUsage
 	toolOffset := 0
 	terminated := false
+	var streamErr error
 	onEvent(protocol.CanonicalStreamEvent{
 		Type: protocol.CanonicalStreamResponseStart,
 		ID:   requestID,
@@ -895,6 +933,7 @@ func readGeminiStreamAsCanonical(r io.Reader, requestID string, onEvent func(pro
 					Message: errorEvent.Error.Message,
 				},
 			})
+			streamErr = fmt.Errorf("Gemini stream error %s: %s", code, errorEvent.Error.Message)
 			terminated = true
 			break
 		}
@@ -920,6 +959,9 @@ func readGeminiStreamAsCanonical(r io.Reader, requestID string, onEvent func(pro
 	}
 	if err := scanner.Err(); err != nil {
 		return usage, fmt.Errorf("read Gemini stream: %w", err)
+	}
+	if streamErr != nil {
+		return usage, streamErr
 	}
 	if !terminated {
 		return usage, io.ErrUnexpectedEOF
@@ -956,6 +998,7 @@ func readResponsesStreamAsCanonical(r io.Reader, onEvent func(protocol.Canonical
 	textSeen := false
 	refusalSeen := false
 	terminated := false
+responsesStream:
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data:") {
@@ -1128,9 +1171,11 @@ func readResponsesStreamAsCanonical(r io.Reader, onEvent func(protocol.Canonical
 			}
 			onEvent(protocol.CanonicalStreamEvent{
 				Type:         protocol.CanonicalStreamResponseDone,
+				Status:       canonical.Status,
 				FinishReason: canonical.FinishReason,
 			})
 			terminated = true
+			break responsesStream
 		case "response.failed":
 			terminated = true
 			_, err := protocol.OpenAIResponsesResponseToCanonical(event.Response)
@@ -1146,7 +1191,7 @@ func readResponsesStreamAsCanonical(r io.Reader, onEvent func(protocol.Canonical
 					Message: event.Message,
 				},
 			})
-			terminated = true
+			return usage, fmt.Errorf("Responses stream error %s: %s", event.Code, event.Message)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -1164,6 +1209,9 @@ func readAnthropicStreamAsCanonical(r io.Reader, onEvent func(protocol.Canonical
 	var usage protocol.CanonicalUsage
 	tools := newCanonicalStreamToolTracker()
 	responseDone := false
+	messageDeltaSeen := false
+	finishReason := ""
+anthropicStream:
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data:") {
@@ -1181,12 +1229,13 @@ func readAnthropicStreamAsCanonical(r io.Reader, onEvent func(protocol.Canonical
 			} `json:"message"`
 			ContentBlock protocol.AnthropicContent `json:"content_block"`
 			Delta        struct {
-				Type        string `json:"type"`
-				Text        string `json:"text"`
-				Thinking    string `json:"thinking"`
-				Signature   string `json:"signature"`
-				PartialJSON string `json:"partial_json"`
-				StopReason  string `json:"stop_reason"`
+				Type        string                         `json:"type"`
+				Text        string                         `json:"text"`
+				Thinking    string                         `json:"thinking"`
+				Signature   string                         `json:"signature"`
+				PartialJSON string                         `json:"partial_json"`
+				StopReason  string                         `json:"stop_reason"`
+				StopDetails *protocol.AnthropicStopDetails `json:"stop_details"`
 			} `json:"delta"`
 			Usage protocol.AnthropicUsage `json:"usage"`
 			Error struct {
@@ -1255,6 +1304,8 @@ func readAnthropicStreamAsCanonical(r io.Reader, onEvent func(protocol.Canonical
 				onEvent(done)
 			}
 		case "message_delta":
+			messageDeltaSeen = true
+			finishReason = protocol.AnthropicStopReasonToCanonical(event.Delta.StopReason)
 			usage = mergeAnthropicStreamUsage(usage, event.Usage)
 			for _, toolEvent := range tools.doneAll() {
 				onEvent(toolEvent)
@@ -1262,11 +1313,30 @@ func readAnthropicStreamAsCanonical(r io.Reader, onEvent func(protocol.Canonical
 			if !usage.IsZero() {
 				onEvent(protocol.CanonicalStreamEvent{Type: protocol.CanonicalStreamUsage, Usage: usage})
 			}
+			if event.Delta.StopReason == "refusal" {
+				refusal := "Anthropic refused the request"
+				if event.Delta.StopDetails != nil {
+					refusal = firstNonEmptyStreamValue(
+						event.Delta.StopDetails.Explanation,
+						event.Delta.StopDetails.Category,
+						refusal,
+					)
+				}
+				onEvent(protocol.CanonicalStreamEvent{
+					Type:  protocol.CanonicalStreamRefusalDelta,
+					Delta: refusal,
+				})
+			}
+		case "message_stop":
+			if !messageDeltaSeen {
+				return usage, errors.New("Anthropic message_stop arrived before message_delta")
+			}
 			onEvent(protocol.CanonicalStreamEvent{
 				Type:         protocol.CanonicalStreamResponseDone,
-				FinishReason: protocol.AnthropicStopReasonToCanonical(event.Delta.StopReason),
+				FinishReason: finishReason,
 			})
 			responseDone = true
+			break anthropicStream
 		case "error":
 			onEvent(protocol.CanonicalStreamEvent{
 				Type: protocol.CanonicalStreamError,
@@ -1275,7 +1345,7 @@ func readAnthropicStreamAsCanonical(r io.Reader, onEvent func(protocol.Canonical
 					Message: event.Error.Message,
 				},
 			})
-			responseDone = true
+			return usage, fmt.Errorf("Anthropic stream error %s: %s", event.Error.Type, event.Error.Message)
 		}
 	}
 	for _, toolEvent := range tools.doneAll() {

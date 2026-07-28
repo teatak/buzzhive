@@ -224,6 +224,39 @@ func TestCrossProtocolTextStreamMatrix(t *testing.T) {
 	}
 }
 
+func TestCrossProtocolStreamRejectsNonStreamUpstream(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"msg_1","type":"message","role":"assistant","model":"claude-upstream","content":[{"type":"text","text":"not streamed"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer upstream.Close()
+
+	srv, store := createRouteTestServer(
+		t,
+		providerAnthropic,
+		upstream.URL,
+		"chat-stream-mismatch",
+		"claude-upstream",
+		"sk-ant",
+		upstream.Client(),
+	)
+	defer store.Close()
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"chat-stream-mismatch","stream":true,"max_completion_tokens":64,"messages":[{"role":"user","content":"hi"}]}`),
+	)
+	req.Header.Set("Authorization", "Bearer bh_valid")
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadGateway ||
+		!strings.Contains(rr.Body.String(), "upstream returned a non-stream response") {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+}
+
 func protocolStreamRequest(inbound string, model string) (string, string) {
 	switch inbound {
 	case providerOpenAI:
@@ -481,6 +514,109 @@ func TestOpenAIChatRoutesToAnthropic(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesRoutesToOpenAICompatible(t *testing.T) {
+	var upstreamPath string
+	var upstreamBody protocol.OpenAIChatRequest
+	upstreamCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		upstreamPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"chatcmpl_1","object":"chat.completion","created":123,"model":"deepseek-chat","choices":[{"index":0,"message":{"role":"assistant","content":"from deepseek"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`)
+	}))
+	defer upstream.Close()
+	srv, store := createRouteTestServer(t, providerOpenAI, upstream.URL+"/v1", "responses-public-chat", "deepseek-chat", "sk-secret", upstream.Client())
+	defer store.Close()
+
+	body := `{
+		"model":"responses-public-chat",
+		"input":[
+			{
+				"type":"reasoning",
+				"id":"rs_previous",
+				"status":"completed",
+				"summary":[{"type":"summary_text","text":"previous reasoning"}],
+				"encrypted_content":"encrypted"
+			},
+			{
+				"type":"message",
+				"id":"msg_previous",
+				"role":"assistant",
+				"status":"completed",
+				"phase":"final_answer",
+				"content":[{
+					"type":"output_text",
+					"text":"previous answer",
+					"annotations":[],
+					"logprobs":[]
+				}]
+			},
+			{
+				"type":"message",
+				"role":"user",
+				"status":"completed",
+				"content":[{"type":"input_text","text":"hi"}]
+			}
+		],
+		"background":false,
+		"store":false,
+		"include":["reasoning.encrypted_content"],
+		"metadata":{"trace_id":"test"},
+		"parallel_tool_calls":true,
+		"max_tool_calls":4,
+		"prompt_cache_key":"cache-key",
+		"prompt_cache_options":{"mode":"implicit","ttl":"30m"},
+		"prompt_cache_retention":"in_memory",
+		"reasoning":{"effort":"low","summary":"auto"},
+		"safety_identifier":"user-hash",
+		"service_tier":"auto",
+		"stream_options":{"include_obfuscation":false},
+		"text":{"verbosity":"medium"},
+		"truncation":"disabled",
+		"user":"legacy-user"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer bh_valid")
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if upstreamPath != "/v1/chat/completions" || upstreamBody.Model != "deepseek-chat" ||
+		len(upstreamBody.Messages) != 2 || upstreamBody.ReasoningEffort == nil ||
+		*upstreamBody.ReasoningEffort != "low" ||
+		upstreamBody.Messages[0].ReasoningContent != "previous reasoning" ||
+		string(upstreamBody.Messages[0].Content) != `"previous answer"` {
+		t.Fatalf("upstream path = %q, body = %+v", upstreamPath, upstreamBody)
+	}
+	var got protocol.OpenAIResponsesResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Output) != 1 || got.Output[0].Content[0].Text != "from deepseek" ||
+		got.Usage == nil || got.Usage.TotalTokens != 5 {
+		t.Fatalf("response = %+v", got)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(
+		`{"model":"responses-public-chat","input":"hi","store":true}`,
+	))
+	req.Header.Set("Authorization", "Bearer bh_valid")
+	rr = httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "store=true cannot be represented") {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if upstreamCalls != 1 {
+		t.Fatalf("upstream calls = %d, want 1", upstreamCalls)
+	}
+}
+
 func TestOpenAIResponsesRoutesToAnthropic(t *testing.T) {
 	var upstreamPath string
 	var upstreamBody protocol.AnthropicMessagesRequest
@@ -689,7 +825,7 @@ func TestAnthropicStreamRoutesToOpenAIChat(t *testing.T) {
 	srv, store := createRouteTestServer(t, providerOpenAI, upstream.URL+"/v1", "anthropic-stream-chat", "gpt-upstream", "sk-secret", upstream.Client())
 	defer store.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"anthropic-stream-chat","messages":[{"role":"user","content":"hi"}],"stream":true}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"anthropic-stream-chat","max_tokens":64,"messages":[{"role":"user","content":"hi"}],"stream":true}`))
 	req.Header.Set("Authorization", "Bearer bh_valid")
 	rr := httptest.NewRecorder()
 
@@ -708,7 +844,8 @@ func TestReadAnthropicStreamUsageMergesMessageStart(t *testing.T) {
 	stream := strings.NewReader(
 		`data: {"type":"message_start","message":{"usage":{"input_tokens":25,"output_tokens":1,"cache_read_input_tokens":7}}}` + "\n\n" +
 			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}` + "\n\n" +
-			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":15}}` + "\n\n",
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":15}}` + "\n\n" +
+			`data: {"type":"message_stop"}` + "\n\n",
 	)
 	var events []protocol.CanonicalStreamEvent
 	usage, err := readAnthropicStreamAsCanonical(stream, func(event protocol.CanonicalStreamEvent) {

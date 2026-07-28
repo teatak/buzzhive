@@ -14,6 +14,7 @@ func TestCanonicalToOpenAIChatRequest(t *testing.T) {
 		Temperature:     &temperature,
 		MaxOutputTokens: &maxTokens,
 		StopSequences:   []string{"END"},
+		Reasoning:       &CanonicalReasoning{Effort: "HIGH"},
 		Tools: []CanonicalTool{{
 			Name:        "lookup",
 			Description: "Lookup data",
@@ -28,6 +29,7 @@ func TestCanonicalToOpenAIChatRequest(t *testing.T) {
 				ToolCallID: "call_1",
 				Name:       "lookup",
 				Arguments:  json.RawMessage(`{"q":"hello"}`),
+				Signature:  "thought-sig",
 			}}},
 			{Role: "tool", Parts: []CanonicalPart{{
 				Type:       "tool_response",
@@ -42,6 +44,9 @@ func TestCanonicalToOpenAIChatRequest(t *testing.T) {
 	if req.Model != "public-model" || !req.Stream || req.MaxOutputTokens == nil || *req.MaxOutputTokens != 128 {
 		t.Fatalf("basic fields not mapped: %+v", req)
 	}
+	if req.ReasoningEffort == nil || *req.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort = %v, want high", req.ReasoningEffort)
+	}
 	if got, ok := req.Stop.(string); !ok || got != "END" {
 		t.Fatalf("stop = %#v, want END", req.Stop)
 	}
@@ -53,6 +58,9 @@ func TestCanonicalToOpenAIChatRequest(t *testing.T) {
 	}
 	if len(req.Messages[2].ToolCalls) != 1 || req.Messages[2].ToolCalls[0].Function.Name != "lookup" {
 		t.Fatalf("assistant tool calls = %+v", req.Messages[2].ToolCalls)
+	}
+	if got := openAIToolCallThoughtSignature(req.Messages[2].ToolCalls[0]); got != "thought-sig" {
+		t.Fatalf("thought signature = %q", got)
 	}
 	if string(req.Messages[2].Content) != "null" {
 		t.Fatalf("assistant tool content = %s, want null", req.Messages[2].Content)
@@ -82,6 +90,37 @@ func TestCanonicalToOpenAIChatRequest(t *testing.T) {
 	}
 	if choice.Type != "function" || choice.Function.Name != "lookup" {
 		t.Fatalf("tool_choice = %+v", choice)
+	}
+}
+
+func TestOpenAIChatToolSignatureToCanonical(t *testing.T) {
+	req, err := OpenAIChatToCanonical(OpenAIChatRequest{
+		Model: "public-model",
+		Messages: []OpenAIMessage{
+			{Role: "user", Content: json.RawMessage(`"hello"`)},
+			{
+				Role:    "assistant",
+				Content: json.RawMessage(`null`),
+				ToolCalls: []OpenAIToolCall{{
+					ID:   "call_1",
+					Type: "function",
+					Function: OpenAIToolCallFunction{
+						Name:      "lookup",
+						Arguments: `{"q":"hello"}`,
+					},
+					ExtraContent: openAIToolCallExtraContent("thought-sig"),
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(req.Messages) != 2 || len(req.Messages[1].Parts) != 1 {
+		t.Fatalf("messages = %+v", req.Messages)
+	}
+	if got := req.Messages[1].Parts[0].Signature; got != "thought-sig" {
+		t.Fatalf("thought signature = %q", got)
 	}
 }
 

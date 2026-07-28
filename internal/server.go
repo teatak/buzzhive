@@ -75,7 +75,7 @@ func newServer(cfg Config) (*Server, error) {
 		adminSessions: make(map[string]SessionUser),
 		routeNext:     make(map[string]int),
 		routeSessions: make(map[string]RouteSession),
-		toolSigs:      make(map[string]string),
+		toolSigs:      make(map[string]toolSignatureEntry),
 		usageCh:       make(chan UsageRecord, 1024),
 		keyState: &KeyState{
 			keys:         apiKeys,

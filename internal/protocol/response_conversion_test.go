@@ -24,6 +24,7 @@ func TestOpenAIChatResponseToCanonical(t *testing.T) {
 						Name:      "lookup",
 						Arguments: `{"q":"hello"}`,
 					},
+					ExtraContent: openAIToolCallExtraContent("thought-sig"),
 				}},
 			},
 			FinishReason: &finish,
@@ -49,6 +50,9 @@ func TestOpenAIChatResponseToCanonical(t *testing.T) {
 	}
 	if len(got.ToolCalls) != 1 || got.ToolCalls[0].Name != "lookup" || got.ToolCalls[0].Arguments != `{"q":"hello"}` {
 		t.Fatalf("tool calls = %+v", got.ToolCalls)
+	}
+	if got.ToolCalls[0].Signature != "thought-sig" {
+		t.Fatalf("tool signature = %q", got.ToolCalls[0].Signature)
 	}
 	if got.Usage.PromptTokens != 10 || got.Usage.CachedTokens != 3 || got.Usage.ReasoningTokens != 2 {
 		t.Fatalf("usage = %+v", got.Usage)
@@ -190,6 +194,7 @@ func TestOpenAIChatToolStreamChunkToCanonical(t *testing.T) {
 						Name:      "lookup",
 						Arguments: `{"q":`,
 					},
+					ExtraContent: openAIToolCallExtraContent("thought-sig"),
 				}},
 			},
 		}},
@@ -201,6 +206,7 @@ func TestOpenAIChatToolStreamChunkToCanonical(t *testing.T) {
 		got[0].Index != 2 ||
 		got[0].CallID != "call_1" ||
 		got[0].Name != "lookup" ||
+		got[0].Signature != "thought-sig" ||
 		got[1].Type != CanonicalStreamToolArgumentsDelta ||
 		got[1].Delta != `{"q":` {
 		t.Fatalf("stream events = %+v", got)
@@ -213,6 +219,7 @@ func TestGeminiToolStreamToCanonical(t *testing.T) {
 			Content: GeminiContent{
 				Parts: []GeminiPart{{
 					FunctionCall: &GeminiFunctionCall{
+						ID:   "call_upstream",
 						Name: "lookup",
 						Args: []byte(`{"q":"hello"}`),
 					},
@@ -226,7 +233,7 @@ func TestGeminiToolStreamToCanonical(t *testing.T) {
 	if len(events) != 4 ||
 		events[0].Type != CanonicalStreamToolCallStart ||
 		events[0].Index != 3 ||
-		events[0].CallID != "call_req_3" ||
+		events[0].CallID != "call_upstream" ||
 		events[1].Type != CanonicalStreamToolArgumentsDelta ||
 		events[2].Type != CanonicalStreamToolCallDone ||
 		events[2].Arguments != `{"q":"hello"}` ||

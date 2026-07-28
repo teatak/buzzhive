@@ -50,15 +50,24 @@ type OpenAIMessage struct {
 }
 
 type OpenAIToolCall struct {
-	Index    *int                   `json:"index,omitempty"`
-	ID       string                 `json:"id"`
-	Type     string                 `json:"type"`
-	Function OpenAIToolCallFunction `json:"function"`
+	Index        *int                        `json:"index,omitempty"`
+	ID           string                      `json:"id"`
+	Type         string                      `json:"type"`
+	Function     OpenAIToolCallFunction      `json:"function"`
+	ExtraContent *OpenAIToolCallExtraContent `json:"extra_content,omitempty"`
 }
 
 type OpenAIToolCallFunction struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+}
+
+type OpenAIToolCallExtraContent struct {
+	Google *OpenAIToolCallGoogleExtraContent `json:"google,omitempty"`
+}
+
+type OpenAIToolCallGoogleExtraContent struct {
+	ThoughtSignature string `json:"thought_signature,omitempty"`
 }
 
 type OpenAITool struct {
@@ -89,7 +98,8 @@ func CanonicalToOpenAIChatRequest(req CanonicalRequest) (OpenAIChatRequest, erro
 		Stop:            canonicalStopSequencesToOpenAI(req.StopSequences),
 	}
 	if req.Reasoning != nil && strings.TrimSpace(req.Reasoning.Effort) != "" {
-		out.ReasoningEffort = &req.Reasoning.Effort
+		effort := strings.ToLower(strings.TrimSpace(req.Reasoning.Effort))
+		out.ReasoningEffort = &effort
 	}
 	if req.Stream {
 		out.StreamOptions = &OpenAIStreamOptions{IncludeUsage: true}
@@ -125,12 +135,6 @@ func validateCanonicalReasoningForOpenAIChat(reasoning *CanonicalReasoning) erro
 	}
 	if reasoning.BudgetTokens != nil {
 		return errors.New("reasoning budget_tokens cannot be represented by OpenAI Chat Completions")
-	}
-	if reasoning.IncludeThoughts != nil {
-		return errors.New("reasoning include_thoughts cannot be represented by OpenAI Chat Completions")
-	}
-	if strings.TrimSpace(reasoning.Summary) != "" {
-		return errors.New("reasoning summary cannot be represented by OpenAI Chat Completions")
 	}
 	mode := strings.ToLower(strings.TrimSpace(reasoning.Mode))
 	if mode != "" && mode != "adaptive" {
@@ -230,14 +234,16 @@ func canonicalMessageToOpenAI(message CanonicalMessage) ([]OpenAIMessage, error)
 			if args == "" {
 				args = "{}"
 			}
-			toolCalls = append(toolCalls, OpenAIToolCall{
+			toolCall := OpenAIToolCall{
 				ID:   part.ToolCallID,
 				Type: "function",
 				Function: OpenAIToolCallFunction{
 					Name:      part.Name,
 					Arguments: args,
 				},
-			})
+			}
+			toolCall.ExtraContent = openAIToolCallExtraContent(part.Signature)
+			toolCalls = append(toolCalls, toolCall)
 		case "tool_response":
 			content, err := canonicalToolResponseToOpenAIContent(part.Response)
 			if err != nil {
@@ -257,6 +263,9 @@ func canonicalMessageToOpenAI(message CanonicalMessage) ([]OpenAIMessage, error)
 			return nil, errors.New("tool_response parts must be standalone tool messages")
 		}
 		return toolMessages, nil
+	}
+	if message.Role == "assistant" && len(contentParts) == 0 && len(toolCalls) == 0 {
+		return nil, nil
 	}
 	content, err := canonicalContentPartsToOpenAI(contentParts)
 	if err != nil {
@@ -496,9 +505,26 @@ func openAIMessageToCanonicalParts(message OpenAIMessage, toolCallNames map[stri
 			ToolCallID: toolCall.ID,
 			Name:       toolCall.Function.Name,
 			Arguments:  args,
+			Signature:  openAIToolCallThoughtSignature(toolCall),
 		})
 	}
 	return parts, nil
+}
+
+func openAIToolCallExtraContent(signature string) *OpenAIToolCallExtraContent {
+	if signature == "" {
+		return nil
+	}
+	return &OpenAIToolCallExtraContent{
+		Google: &OpenAIToolCallGoogleExtraContent{ThoughtSignature: signature},
+	}
+}
+
+func openAIToolCallThoughtSignature(call OpenAIToolCall) string {
+	if call.ExtraContent == nil || call.ExtraContent.Google == nil {
+		return ""
+	}
+	return call.ExtraContent.Google.ThoughtSignature
 }
 
 func canonicalReasoningText(parts []CanonicalPart) string {

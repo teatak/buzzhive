@@ -134,7 +134,40 @@ func (s *Server) resolveRouteTargets(publicModel string) ([]RouteTarget, error) 
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", errModelRouteNotFound, publicModel)
 	}
-	return s.rotateRouteTargets(publicModel, targets), nil
+	return targets, nil
+}
+
+func (s *Server) selectRouteTargets(publicModel string, targets []RouteTarget, protocolPreference []string) []RouteTarget {
+	if len(targets) == 0 {
+		return nil
+	}
+	rank := make(map[string]int, len(protocolPreference))
+	for index, protocol := range protocolPreference {
+		rank[protocol] = index
+	}
+	selected := make(map[int64]RouteTarget)
+	selectedRank := make(map[int64]int)
+	order := make([]int64, 0, len(targets))
+	for _, target := range targets {
+		targetRank, supported := rank[target.ProviderType]
+		if !supported {
+			continue
+		}
+		currentRank, exists := selectedRank[target.ID]
+		if exists && currentRank <= targetRank {
+			continue
+		}
+		if !exists {
+			order = append(order, target.ID)
+		}
+		selected[target.ID] = target
+		selectedRank[target.ID] = targetRank
+	}
+	out := make([]RouteTarget, 0, len(order))
+	for _, routeID := range order {
+		out = append(out, selected[routeID])
+	}
+	return s.rotateRouteTargets(publicModel, out)
 }
 
 func (s *Server) rotateRouteTargets(publicModel string, targets []RouteTarget) []RouteTarget {
@@ -191,16 +224,6 @@ func expandWeightedTargets(targets []RouteTarget) []RouteTarget {
 			weight = 100
 		}
 		for i := 0; i < weight; i++ {
-			out = append(out, target)
-		}
-	}
-	return out
-}
-
-func routeTargetsByProtocol(targets []RouteTarget, protocol string) []RouteTarget {
-	out := targets[:0]
-	for _, target := range targets {
-		if target.ProviderType == protocol {
 			out = append(out, target)
 		}
 	}

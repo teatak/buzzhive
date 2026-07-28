@@ -9,26 +9,50 @@ import (
 )
 
 type OpenAIResponsesRequest struct {
-	Model           string                    `json:"model"`
-	Input           json.RawMessage           `json:"input"`
-	Instructions    string                    `json:"instructions,omitempty"`
-	MaxOutputTokens *int                      `json:"max_output_tokens,omitempty"`
-	Temperature     *float64                  `json:"temperature,omitempty"`
-	TopP            *float64                  `json:"top_p,omitempty"`
-	Tools           json.RawMessage           `json:"tools,omitempty"`
-	ToolChoice      json.RawMessage           `json:"tool_choice,omitempty"`
-	Reasoning       *OpenAIReasoning          `json:"reasoning,omitempty"`
-	Text            *OpenAIResponseTextConfig `json:"text,omitempty"`
-	Stream          bool                      `json:"stream,omitempty"`
+	Background           *bool                     `json:"background,omitempty"`
+	Instructions         string                    `json:"instructions,omitempty"`
+	MaxOutputTokens      *int                      `json:"max_output_tokens,omitempty"`
+	MaxToolCalls         *int                      `json:"max_tool_calls,omitempty"`
+	ParallelToolCalls    *bool                     `json:"parallel_tool_calls,omitempty"`
+	PreviousResponseID   string                    `json:"previous_response_id,omitempty"`
+	PromptCacheKey       string                    `json:"prompt_cache_key,omitempty"`
+	SafetyIdentifier     string                    `json:"safety_identifier,omitempty"`
+	Store                *bool                     `json:"store,omitempty"`
+	Temperature          *float64                  `json:"temperature,omitempty"`
+	TopLogprobs          *int                      `json:"top_logprobs,omitempty"`
+	TopP                 *float64                  `json:"top_p,omitempty"`
+	User                 string                    `json:"user,omitempty"`
+	ContextManagement    []json.RawMessage         `json:"context_management,omitempty"`
+	Conversation         json.RawMessage           `json:"conversation,omitempty"`
+	Include              []string                  `json:"include,omitempty"`
+	Metadata             json.RawMessage           `json:"metadata,omitempty"`
+	Moderation           json.RawMessage           `json:"moderation,omitempty"`
+	Prompt               json.RawMessage           `json:"prompt,omitempty"`
+	PromptCacheRetention string                    `json:"prompt_cache_retention,omitempty"`
+	ServiceTier          string                    `json:"service_tier,omitempty"`
+	StreamOptions        json.RawMessage           `json:"stream_options,omitempty"`
+	Truncation           string                    `json:"truncation,omitempty"`
+	Input                json.RawMessage           `json:"input"`
+	Model                string                    `json:"model"`
+	PromptCacheOptions   json.RawMessage           `json:"prompt_cache_options,omitempty"`
+	Reasoning            *OpenAIReasoning          `json:"reasoning,omitempty"`
+	Text                 *OpenAIResponseTextConfig `json:"text,omitempty"`
+	ToolChoice           json.RawMessage           `json:"tool_choice,omitempty"`
+	Tools                json.RawMessage           `json:"tools,omitempty"`
+	Stream               bool                      `json:"stream,omitempty"`
 }
 
 type OpenAIReasoning struct {
-	Effort  string `json:"effort,omitempty"`
-	Summary string `json:"summary,omitempty"`
+	Context         string `json:"context,omitempty"`
+	Effort          string `json:"effort,omitempty"`
+	GenerateSummary string `json:"generate_summary,omitempty"`
+	Summary         string `json:"summary,omitempty"`
+	Mode            string `json:"mode,omitempty"`
 }
 
 type OpenAIResponseTextConfig struct {
-	Format *OpenAIResponseTextFormat `json:"format,omitempty"`
+	Verbosity string                    `json:"verbosity,omitempty"`
+	Format    *OpenAIResponseTextFormat `json:"format,omitempty"`
 }
 
 type OpenAIResponseTextFormat struct {
@@ -45,17 +69,24 @@ type OpenAIResponseInputItem struct {
 	Summary          []OpenAIResponseOutputPart `json:"summary,omitempty"`
 	EncryptedContent string                     `json:"encrypted_content,omitempty"`
 	ID               string                     `json:"id,omitempty"`
+	Status           string                     `json:"status,omitempty"`
+	Phase            string                     `json:"phase,omitempty"`
 	CallID           string                     `json:"call_id,omitempty"`
 	Name             string                     `json:"name,omitempty"`
+	Namespace        string                     `json:"namespace,omitempty"`
+	Caller           json.RawMessage            `json:"caller,omitempty"`
 	Arguments        string                     `json:"arguments,omitempty"`
 	Output           string                     `json:"output,omitempty"`
 }
 
 type OpenAIResponseContentPart struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	ImageURL string `json:"image_url,omitempty"`
-	Detail   string `json:"detail,omitempty"`
+	Type        string          `json:"type"`
+	Text        string          `json:"text,omitempty"`
+	Refusal     string          `json:"refusal,omitempty"`
+	ImageURL    string          `json:"image_url,omitempty"`
+	Detail      string          `json:"detail,omitempty"`
+	Annotations json.RawMessage `json:"annotations,omitempty"`
+	Logprobs    json.RawMessage `json:"logprobs,omitempty"`
 }
 
 type OpenAIResponsesResponse struct {
@@ -95,9 +126,10 @@ type OpenAIResponseOutputItem struct {
 }
 
 type OpenAIResponseOutputPart struct {
-	Type    string `json:"type"`
-	Text    string `json:"text,omitempty"`
-	Refusal string `json:"refusal,omitempty"`
+	Type        string          `json:"type"`
+	Text        string          `json:"text,omitempty"`
+	Refusal     string          `json:"refusal,omitempty"`
+	Annotations json.RawMessage `json:"annotations,omitempty"`
 }
 
 type OpenAIResponsesFunctionTool struct {
@@ -125,6 +157,9 @@ type OpenAIResponsesOutputTokensDetails struct {
 }
 
 func OpenAIResponsesToCanonicalRequest(req OpenAIResponsesRequest) (CanonicalRequest, error) {
+	if err := validateOpenAIResponsesCrossProtocolOptions(req); err != nil {
+		return CanonicalRequest{}, err
+	}
 	out := CanonicalRequest{
 		Model:           req.Model,
 		Stream:          req.Stream,
@@ -132,10 +167,16 @@ func OpenAIResponsesToCanonicalRequest(req OpenAIResponsesRequest) (CanonicalReq
 		TopP:            req.TopP,
 		MaxOutputTokens: req.MaxOutputTokens,
 	}
-	if req.Reasoning != nil && (strings.TrimSpace(req.Reasoning.Effort) != "" || strings.TrimSpace(req.Reasoning.Summary) != "") {
-		out.Reasoning = &CanonicalReasoning{
-			Effort:  req.Reasoning.Effort,
-			Summary: req.Reasoning.Summary,
+	if req.Reasoning != nil {
+		summary := strings.TrimSpace(req.Reasoning.Summary)
+		if summary == "" {
+			summary = strings.TrimSpace(req.Reasoning.GenerateSummary)
+		}
+		if strings.TrimSpace(req.Reasoning.Effort) != "" || summary != "" {
+			out.Reasoning = &CanonicalReasoning{
+				Effort:  req.Reasoning.Effort,
+				Summary: summary,
+			}
 		}
 	}
 	if req.Text != nil && req.Text.Format != nil {
@@ -167,6 +208,71 @@ func OpenAIResponsesToCanonicalRequest(req OpenAIResponsesRequest) (CanonicalReq
 	}
 	out.Messages = append(out.Messages, messages...)
 	return out, nil
+}
+
+func validateOpenAIResponsesCrossProtocolOptions(req OpenAIResponsesRequest) error {
+	if req.Background != nil && *req.Background {
+		return errors.New("background=true cannot be represented across protocols")
+	}
+	if req.Store != nil && *req.Store {
+		return errors.New("store=true cannot be represented across protocols")
+	}
+	if strings.TrimSpace(req.PreviousResponseID) != "" {
+		return errors.New("previous_response_id cannot be represented across protocols")
+	}
+	if rawJSONValuePresent(req.Conversation) {
+		return errors.New("conversation cannot be represented across protocols")
+	}
+	if rawJSONValuePresent(req.Prompt) {
+		return errors.New("prompt templates cannot be represented across protocols")
+	}
+	if len(req.ContextManagement) > 0 {
+		return errors.New("context_management cannot be represented across protocols")
+	}
+	if rawJSONValuePresent(req.Moderation) {
+		return errors.New("moderation cannot be represented across protocols")
+	}
+	if req.TopLogprobs != nil {
+		return errors.New("top_logprobs cannot be represented across protocols")
+	}
+	if req.ParallelToolCalls != nil && !*req.ParallelToolCalls {
+		return errors.New("parallel_tool_calls=false cannot be represented across protocols")
+	}
+	switch strings.ToLower(strings.TrimSpace(req.ServiceTier)) {
+	case "", "auto", "default":
+	default:
+		return fmt.Errorf("service_tier %q cannot be represented across protocols", req.ServiceTier)
+	}
+	switch strings.ToLower(strings.TrimSpace(req.Truncation)) {
+	case "", "disabled":
+	default:
+		return fmt.Errorf("truncation %q cannot be represented across protocols", req.Truncation)
+	}
+	if req.Text != nil {
+		switch strings.ToLower(strings.TrimSpace(req.Text.Verbosity)) {
+		case "", "medium":
+		default:
+			return fmt.Errorf("text verbosity %q cannot be represented across protocols", req.Text.Verbosity)
+		}
+	}
+	if req.Reasoning != nil {
+		switch strings.ToLower(strings.TrimSpace(req.Reasoning.Context)) {
+		case "", "auto", "current_turn":
+		default:
+			return fmt.Errorf("reasoning context %q cannot be represented across protocols", req.Reasoning.Context)
+		}
+		switch strings.ToLower(strings.TrimSpace(req.Reasoning.Mode)) {
+		case "", "standard":
+		default:
+			return fmt.Errorf("reasoning mode %q cannot be represented across protocols", req.Reasoning.Mode)
+		}
+	}
+	return nil
+}
+
+func rawJSONValuePresent(raw json.RawMessage) bool {
+	value := bytes.TrimSpace(raw)
+	return len(value) > 0 && !bytes.Equal(value, []byte("null"))
 }
 
 func CanonicalToOpenAIResponsesRequest(req CanonicalRequest) (OpenAIResponsesRequest, error) {
@@ -249,6 +355,7 @@ func OpenAIResponsesResponseToCanonical(resp OpenAIResponsesResponse) (Canonical
 		Created: resp.CreatedAt,
 		Model:   resp.Model,
 		Role:    "assistant",
+		Status:  resp.Status,
 		Usage:   openAIResponsesUsageToCanonical(resp.Usage),
 	}
 	for _, item := range resp.Output {
@@ -309,11 +416,17 @@ func OpenAIResponsesResponseToCanonical(resp OpenAIResponsesResponse) (Canonical
 }
 
 func CanonicalToOpenAIResponsesResponse(resp CanonicalResponse) OpenAIResponsesResponse {
+	status := canonicalFinishReasonToResponsesStatus(resp.FinishReason)
+	if resp.Status == "incomplete" {
+		status = "incomplete"
+	} else if resp.Status == "completed" || (resp.Status == "" && resp.Refusal != "") {
+		status = "completed"
+	}
 	out := OpenAIResponsesResponse{
 		ID:        resp.ID,
 		Object:    "response",
 		CreatedAt: resp.Created,
-		Status:    canonicalFinishReasonToResponsesStatus(resp.FinishReason),
+		Status:    status,
 		Model:     resp.Model,
 		Usage:     canonicalUsageToResponses(resp.Usage),
 	}
@@ -325,34 +438,50 @@ func CanonicalToOpenAIResponsesResponse(resp CanonicalResponse) OpenAIResponsesR
 	if resp.Reasoning != "" || resp.Signature != "" {
 		out.Output = append(out.Output, OpenAIResponseOutputItem{
 			Type:             "reasoning",
+			ID:               responsesOutputItemID(resp.ID, "rs", len(out.Output)),
 			Status:           "completed",
 			Summary:          []OpenAIResponseOutputPart{{Type: "summary_text", Text: resp.Reasoning}},
 			EncryptedContent: resp.Signature,
 		})
 	}
 	if resp.Text != "" || resp.Refusal != "" {
-		part := OpenAIResponseOutputPart{Type: "output_text", Text: resp.Text}
+		part := OpenAIResponseOutputPart{
+			Type:        "output_text",
+			Text:        resp.Text,
+			Annotations: json.RawMessage(`[]`),
+		}
 		if resp.Refusal != "" {
 			part = OpenAIResponseOutputPart{Type: "refusal", Refusal: resp.Refusal}
 		}
 		out.Output = append(out.Output, OpenAIResponseOutputItem{
 			Type:    "message",
-			Status:  canonicalFinishReasonToResponsesItemStatus(resp.FinishReason),
-			Role:    resp.Role,
+			ID:      responsesOutputItemID(resp.ID, "msg", len(out.Output)),
+			Status:  responsesItemStatus(status),
+			Role:    firstNonEmpty(resp.Role, "assistant"),
 			Content: []OpenAIResponseOutputPart{part},
 		})
 	}
 	for _, call := range resp.ToolCalls {
+		itemID := responsesOutputItemID(resp.ID, "fc", len(out.Output))
+		callID := firstNonEmpty(call.ID, itemID)
 		out.Output = append(out.Output, OpenAIResponseOutputItem{
 			Type:      "function_call",
-			ID:        call.ID,
-			CallID:    call.ID,
+			ID:        itemID,
+			CallID:    callID,
 			Status:    "completed",
 			Name:      call.Name,
 			Arguments: call.Arguments,
 		})
 	}
 	return out
+}
+
+func responsesOutputItemID(responseID string, kind string, index int) string {
+	responseID = strings.TrimSpace(responseID)
+	if responseID == "" {
+		responseID = "resp"
+	}
+	return fmt.Sprintf("%s_%s_%d", responseID, kind, index)
 }
 
 func openAIResponsesInputToCanonical(raw json.RawMessage) ([]CanonicalMessage, error) {
@@ -368,12 +497,22 @@ func openAIResponsesInputToCanonical(raw json.RawMessage) ([]CanonicalMessage, e
 		return nil, err
 	}
 	var out []CanonicalMessage
+	var pendingReasoning []CanonicalPart
+	functionCallMessageIndex := -1
 	for _, item := range items {
 		switch item.Type {
 		case "", "message":
+			functionCallMessageIndex = -1
 			parts, err := openAIResponsesContentToCanonical(item.Content)
 			if err != nil {
 				return nil, err
+			}
+			if len(pendingReasoning) > 0 {
+				if item.Role != "assistant" {
+					return nil, errors.New("Responses reasoning item must be followed by an assistant message or function call")
+				}
+				parts = append(pendingReasoning, parts...)
+				pendingReasoning = nil
 			}
 			out = append(out, CanonicalMessage{Role: item.Role, Parts: parts})
 		case "function_call":
@@ -381,39 +520,62 @@ func openAIResponsesInputToCanonical(raw json.RawMessage) ([]CanonicalMessage, e
 			if len(bytes.TrimSpace(args)) == 0 {
 				args = json.RawMessage(`{}`)
 			}
-			out = append(out, CanonicalMessage{Role: "assistant", Parts: []CanonicalPart{{
+			call := CanonicalPart{
 				Type:       "tool_call",
 				ToolCallID: firstNonEmpty(item.CallID, item.ID),
 				Name:       item.Name,
 				Arguments:  args,
-			}}})
+			}
+			if functionCallMessageIndex >= 0 {
+				out[functionCallMessageIndex].Parts = append(out[functionCallMessageIndex].Parts, call)
+				continue
+			}
+			parts := append(pendingReasoning, call)
+			pendingReasoning = nil
+			out = append(out, CanonicalMessage{Role: "assistant", Parts: parts})
+			functionCallMessageIndex = len(out) - 1
 		case "function_call_output":
+			functionCallMessageIndex = -1
+			if len(pendingReasoning) > 0 {
+				return nil, errors.New("Responses reasoning item must be followed by an assistant message or function call")
+			}
 			out = append(out, CanonicalMessage{Role: "tool", Parts: []CanonicalPart{{
 				Type:       "tool_response",
 				ToolCallID: item.CallID,
 				Response:   json.RawMessage(quoteJSONString(item.Output)),
 			}}})
 		case "reasoning":
-			parts := make([]CanonicalPart, 0, 1)
+			functionCallMessageIndex = -1
 			reasoning := ""
 			for _, part := range item.Summary {
 				if part.Type == "summary_text" {
 					reasoning += part.Text
 				}
 			}
+			if rawJSONValuePresent(item.Content) {
+				var content []OpenAIResponseOutputPart
+				if err := decodeStrictJSON(item.Content, &content); err != nil {
+					return nil, fmt.Errorf("invalid Responses reasoning content: %w", err)
+				}
+				for _, part := range content {
+					if part.Type == "reasoning_text" {
+						reasoning += part.Text
+					}
+				}
+			}
 			if reasoning != "" || item.EncryptedContent != "" {
-				parts = append(parts, CanonicalPart{
+				pendingReasoning = append(pendingReasoning, CanonicalPart{
 					Type:      "reasoning",
 					Text:      reasoning,
 					Signature: item.EncryptedContent,
 				})
 			}
-			if len(parts) > 0 {
-				out = append(out, CanonicalMessage{Role: "assistant", Parts: parts})
-			}
 		default:
 			return nil, fmt.Errorf("unsupported Responses input item type %q", item.Type)
 		}
+	}
+	if len(pendingReasoning) > 0 {
+		return nil, errors.New("Responses reasoning item must be followed by an assistant message or function call")
 	}
 	if err := populateCanonicalToolResponseNames(out); err != nil {
 		return nil, err
@@ -435,6 +597,8 @@ func openAIResponsesContentToCanonical(raw json.RawMessage) ([]CanonicalPart, er
 		switch part.Type {
 		case "input_text", "output_text":
 			out = append(out, CanonicalPart{Type: "text", Text: part.Text})
+		case "refusal":
+			out = append(out, CanonicalPart{Type: "text", Text: part.Refusal})
 		case "input_image":
 			mimeType, data, err := parseOpenAIImageDataURL(part.ImageURL)
 			if err != nil {
@@ -767,8 +931,8 @@ func canonicalFinishReasonToResponsesStatus(reason string) string {
 	}
 }
 
-func canonicalFinishReasonToResponsesItemStatus(reason string) string {
-	if canonicalFinishReasonToResponsesStatus(reason) == "incomplete" {
+func responsesItemStatus(responseStatus string) string {
+	if responseStatus == "incomplete" {
 		return "incomplete"
 	}
 	return "completed"

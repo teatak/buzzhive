@@ -21,14 +21,14 @@ func TestGeminiGenerateToCanonicalRequest(t *testing.T) {
 			{
 				Role: "model",
 				Parts: []GeminiPart{{
-					FunctionCall:     &GeminiFunctionCall{Name: "lookup", Args: json.RawMessage(`{"q":"hello"}`)},
+					FunctionCall:     &GeminiFunctionCall{ID: "call_explicit", Name: "lookup", Args: json.RawMessage(`{"q":"hello"}`)},
 					ThoughtSignature: "sig",
 				}},
 			},
 			{
 				Role: "user",
 				Parts: []GeminiPart{{
-					FunctionResponse: &GeminiFunctionResponse{Name: "lookup", Response: json.RawMessage(`{"result":"world"}`)},
+					FunctionResponse: &GeminiFunctionResponse{ID: "call_explicit", Name: "lookup", Response: json.RawMessage(`{"result":"world"}`)},
 				}},
 			},
 		},
@@ -86,6 +86,20 @@ func TestGeminiGenerateToCanonicalRequest(t *testing.T) {
 	if req.Messages[2].Parts[0].ToolCallID != req.Messages[3].Parts[0].ToolCallID {
 		t.Fatalf("tool call ID %q does not match response ID %q", req.Messages[2].Parts[0].ToolCallID, req.Messages[3].Parts[0].ToolCallID)
 	}
+	if req.Messages[2].Parts[0].ToolCallID != "call_explicit" {
+		t.Fatalf("tool call ID = %q", req.Messages[2].Parts[0].ToolCallID)
+	}
+	roundTrip, err := CanonicalToGeminiGenerateRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip.Contents[1].Parts[0].FunctionCall.ID != "call_explicit" ||
+		roundTrip.Contents[2].Parts[0].FunctionResponse.ID != "call_explicit" {
+		t.Fatalf("round trip tool IDs = call:%q response:%q",
+			roundTrip.Contents[1].Parts[0].FunctionCall.ID,
+			roundTrip.Contents[2].Parts[0].FunctionResponse.ID,
+		)
+	}
 }
 
 func TestGeminiGenerateRejectsUnmatchedFunctionResponse(t *testing.T) {
@@ -139,5 +153,126 @@ func TestGeminiTextThoughtSignatureRoundTrip(t *testing.T) {
 		parts[1].Text != "" ||
 		parts[1].ThoughtSignature != "sig-empty" {
 		t.Fatalf("round trip parts = %+v", parts)
+	}
+
+	body, err := json.Marshal(roundTrip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encoded map[string]any
+	if err := json.Unmarshal(body, &encoded); err != nil {
+		t.Fatal(err)
+	}
+	contents := encoded["contents"].([]any)
+	encodedParts := contents[0].(map[string]any)["parts"].([]any)
+	signatureOnlyPart := encodedParts[1].(map[string]any)
+	text, ok := signatureOnlyPart["text"]
+	if !ok || text != "" {
+		t.Fatalf("signature-only part must preserve explicit empty text: %s", body)
+	}
+}
+
+func TestGeminiStructuredPartDoesNotSerializeEmptyText(t *testing.T) {
+	body, err := json.Marshal(GeminiPart{
+		FunctionCall:     &GeminiFunctionCall{Name: "search", Args: json.RawMessage(`{}`)},
+		ThoughtSignature: "sig",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encoded map[string]any
+	if err := json.Unmarshal(body, &encoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := encoded["text"]; ok {
+		t.Fatalf("functionCall part must not also contain text: %s", body)
+	}
+}
+
+func TestCanonicalToGeminiUsesFullJSONSchemaFields(t *testing.T) {
+	toolSchema := json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"filters":{
+				"type":"object",
+				"additionalProperties":{"type":"string"}
+			}
+		},
+		"additionalProperties":false
+	}`)
+	responseSchema := json.RawMessage(`{
+		"type":"object",
+		"properties":{"answer":{"type":"string"}},
+		"additionalProperties":false
+	}`)
+
+	req, err := CanonicalToGeminiGenerateRequest(CanonicalRequest{
+		Messages: []CanonicalMessage{{
+			Role:  "user",
+			Parts: []CanonicalPart{{Type: "text", Text: "hello"}},
+		}},
+		Tools: []CanonicalTool{{
+			Name:       "search",
+			Parameters: toolSchema,
+		}},
+		ResponseFormat: &CanonicalResponseFormat{
+			MimeType: "application/json",
+			Schema:   responseSchema,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	declaration := req.Tools[0].FunctionDeclarations[0]
+	if len(declaration.Parameters) != 0 {
+		t.Fatalf("legacy parameters = %s", declaration.Parameters)
+	}
+	if string(declaration.ParametersJSONSchema) != string(toolSchema) {
+		t.Fatalf("parametersJsonSchema = %s", declaration.ParametersJSONSchema)
+	}
+	if req.GenerationConfig == nil {
+		t.Fatal("generationConfig is nil")
+	}
+	if len(req.GenerationConfig.ResponseSchema) != 0 {
+		t.Fatalf("legacy responseSchema = %s", req.GenerationConfig.ResponseSchema)
+	}
+	if string(req.GenerationConfig.ResponseJSONSchema) != string(responseSchema) {
+		t.Fatalf("responseJsonSchema = %s", req.GenerationConfig.ResponseJSONSchema)
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encoded map[string]any
+	if err := json.Unmarshal(body, &encoded); err != nil {
+		t.Fatal(err)
+	}
+	tools := encoded["tools"].([]any)
+	declarations := tools[0].(map[string]any)["functionDeclarations"].([]any)
+	encodedDeclaration := declarations[0].(map[string]any)
+	if _, ok := encodedDeclaration["parameters"]; ok {
+		t.Fatalf("legacy parameters was serialized: %s", body)
+	}
+	if _, ok := encodedDeclaration["parametersJsonSchema"]; !ok {
+		t.Fatalf("parametersJsonSchema was not serialized: %s", body)
+	}
+}
+
+func TestGeminiRejectsBothSchemaRepresentations(t *testing.T) {
+	_, err := GeminiGenerateToCanonicalRequest(GeminiGenerateRequest{
+		Contents: []GeminiContent{{
+			Role:  "user",
+			Parts: []GeminiPart{{Text: "hello"}},
+		}},
+		Tools: []GeminiTool{{FunctionDeclarations: []GeminiFunctionDeclaration{{
+			Name:                 "search",
+			Parameters:           json.RawMessage(`{"type":"object"}`),
+			ParametersJSONSchema: json.RawMessage(`{"type":"object"}`),
+		}}}},
+	}, "gemini-model", false)
+	if err == nil {
+		t.Fatal("expected mutually exclusive schema error")
 	}
 }

@@ -118,6 +118,7 @@ type CanonicalResponse struct {
 	Created      int64
 	Model        string
 	Role         string
+	Status       string
 	Text         string
 	Refusal      string
 	Reasoning    string
@@ -161,6 +162,7 @@ type CanonicalStreamEvent struct {
 	Delta        string
 	Arguments    string
 	Signature    string
+	Status       string
 	FinishReason string
 	Usage        CanonicalUsage
 	Error        *CanonicalStreamErrorData

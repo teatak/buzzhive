@@ -151,25 +151,3 @@ func writeInboundRetryError(w http.ResponseWriter, inbound string, resp *http.Re
 func writeInboundUpstreamError(w http.ResponseWriter, inbound string, status int, raw []byte) {
 	writeInboundError(w, inbound, status, "upstream_error", openAIUpstreamErrorMessage(status, raw))
 }
-
-func (s *Server) convertedResultReady(
-	w http.ResponseWriter,
-	inbound string,
-	user AuthToken,
-	model string,
-	result ProviderAttemptResult,
-) bool {
-	if !result.OK {
-		s.recordProviderResultUsage(user, model, result, providerResultStatus(result.Response))
-		writeInboundRetryError(w, inbound, result.Response, result.Attempts, s.cfg.Retry.MaxAttempts, result.Chain)
-		return false
-	}
-	if result.Response.StatusCode < 400 {
-		return true
-	}
-	raw := drain(result.Response.Body, 64*1024)
-	result.Response.Body.Close()
-	writeInboundUpstreamError(w, inbound, result.Response.StatusCode, raw)
-	s.recordProviderResultUsage(user, model, result, result.Response.StatusCode)
-	return false
-}

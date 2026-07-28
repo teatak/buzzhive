@@ -45,6 +45,50 @@ func TestResponsesStreamEncoderPreservesOutputIndexes(t *testing.T) {
 	}
 }
 
+func TestResponsesStreamDoneEventUsesProtocolSpecificField(t *testing.T) {
+	tests := []struct {
+		name       string
+		event      protocol.CanonicalStreamEvent
+		eventType  string
+		wantField  string
+		otherField string
+	}{
+		{
+			name:       "text",
+			event:      protocol.CanonicalStreamEvent{Type: protocol.CanonicalStreamTextDelta, Delta: "answer"},
+			eventType:  "response.output_text.done",
+			wantField:  "text",
+			otherField: "refusal",
+		},
+		{
+			name:       "refusal",
+			event:      protocol.CanonicalStreamEvent{Type: protocol.CanonicalStreamRefusalDelta, Delta: "declined"},
+			eventType:  "response.refusal.done",
+			wantField:  "refusal",
+			otherField: "text",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			encoder := newResponsesStreamEncoder(&buf, nil, "resp_1", 123, "model")
+			encoder.writeEvent(tt.event)
+			encoder.writeEvent(protocol.CanonicalStreamEvent{
+				Type:         protocol.CanonicalStreamResponseDone,
+				FinishReason: "stop",
+			})
+
+			event := findSSEEvent(t, decodeSSEEvents(t, buf.String()), tt.eventType)
+			if _, ok := event[tt.wantField]; !ok {
+				t.Fatalf("%s missing field %q: %s", tt.eventType, tt.wantField, event)
+			}
+			if _, ok := event[tt.otherField]; ok {
+				t.Fatalf("%s unexpectedly contains %q: %s", tt.eventType, tt.otherField, event)
+			}
+		})
+	}
+}
+
 func TestAnthropicStreamEncoderWritesToolBlock(t *testing.T) {
 	var buf bytes.Buffer
 	encoder := newAnthropicStreamEncoder(&buf, nil, "msg_1", "model")
@@ -183,6 +227,94 @@ func TestAnthropicStreamEncoderWritesReasoning(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamEncoderWritesRefusalStopDetails(t *testing.T) {
+	var buf bytes.Buffer
+	encoder := newAnthropicStreamEncoder(&buf, nil, "msg_1", "model")
+	encoder.writeEvent(protocol.CanonicalStreamEvent{
+		Type:  protocol.CanonicalStreamRefusalDelta,
+		Delta: "request declined",
+	})
+	encoder.writeEvent(protocol.CanonicalStreamEvent{
+		Type:         protocol.CanonicalStreamResponseDone,
+		FinishReason: "content_filter",
+	})
+
+	events := decodeSSEEvents(t, buf.String())
+	messageDelta := findSSEEvent(t, events, "message_delta")
+	var got struct {
+		Delta struct {
+			StopReason  string                         `json:"stop_reason"`
+			StopDetails *protocol.AnthropicStopDetails `json:"stop_details"`
+		} `json:"delta"`
+	}
+	raw, err := json.Marshal(messageDelta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Delta.StopReason != "refusal" ||
+		got.Delta.StopDetails == nil ||
+		got.Delta.StopDetails.Explanation != "request declined" {
+		t.Fatalf("message delta = %+v", got)
+	}
+}
+
+func TestResponsesStreamEncoderCompletesRefusal(t *testing.T) {
+	var buf bytes.Buffer
+	encoder := newResponsesStreamEncoder(&buf, nil, "resp_1", 123, "model")
+	encoder.writeEvent(protocol.CanonicalStreamEvent{
+		Type:  protocol.CanonicalStreamRefusalDelta,
+		Delta: "request declined",
+	})
+	encoder.writeEvent(protocol.CanonicalStreamEvent{
+		Type:         protocol.CanonicalStreamResponseDone,
+		FinishReason: "content_filter",
+	})
+
+	events := decodeSSEEvents(t, buf.String())
+	completed := findSSEEvent(t, events, "response.completed")
+	var response protocol.OpenAIResponsesResponse
+	if err := json.Unmarshal(completed["response"], &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "completed" ||
+		response.IncompleteDetails != nil ||
+		len(response.Output) != 1 ||
+		response.Output[0].Content[0].Refusal != "request declined" {
+		t.Fatalf("completed refusal = %+v", response)
+	}
+}
+
+func TestResponsesStreamEncoderPreservesIncompleteRefusal(t *testing.T) {
+	var buf bytes.Buffer
+	encoder := newResponsesStreamEncoder(&buf, nil, "resp_1", 123, "model")
+	encoder.writeEvent(protocol.CanonicalStreamEvent{
+		Type:  protocol.CanonicalStreamRefusalDelta,
+		Delta: "partial refusal",
+	})
+	encoder.writeEvent(protocol.CanonicalStreamEvent{
+		Type:         protocol.CanonicalStreamResponseDone,
+		Status:       "incomplete",
+		FinishReason: "content_filter",
+	})
+
+	events := decodeSSEEvents(t, buf.String())
+	incomplete := findSSEEvent(t, events, "response.incomplete")
+	var response protocol.OpenAIResponsesResponse
+	if err := json.Unmarshal(incomplete["response"], &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "incomplete" ||
+		response.IncompleteDetails == nil ||
+		response.IncompleteDetails.Reason != "content_filter" ||
+		len(response.Output) != 1 ||
+		response.Output[0].Status != "incomplete" {
+		t.Fatalf("incomplete refusal = %+v", response)
+	}
+}
+
 func TestReadOpenAIChatToolStreamAsCanonical(t *testing.T) {
 	stream := strings.NewReader(
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":"}}]}}]}` + "\n\n" +
@@ -286,7 +418,8 @@ func TestReadReasoningStreamsAsCanonical(t *testing.T) {
 						`data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"thinking"}}`+"\n\n"+
 						`data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}}`+"\n\n"+
 						`data: {"type":"content_block_stop","index":0}`+"\n\n"+
-						`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{}}`+"\n\n",
+						`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{}}`+"\n\n"+
+						`data: {"type":"message_stop"}`+"\n\n",
 				), onEvent)
 				return err
 			},
@@ -350,12 +483,13 @@ func TestReadStreamErrorsAsCanonical(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var got *protocol.CanonicalStreamErrorData
-			if err := tt.read(func(event protocol.CanonicalStreamEvent) {
+			err := tt.read(func(event protocol.CanonicalStreamEvent) {
 				if event.Type == protocol.CanonicalStreamError {
 					got = event.Error
 				}
-			}); err != nil {
-				t.Fatal(err)
+			})
+			if err == nil {
+				t.Fatal("expected stream error")
 			}
 			if got == nil || got.Message != "slow down" {
 				t.Fatalf("error = %+v", got)
@@ -466,6 +600,7 @@ func TestReadResponsesIncompleteAndRefusalStream(t *testing.T) {
 		events[0].Type != protocol.CanonicalStreamRefusalDelta ||
 		events[0].Delta != "cannot comply" ||
 		events[1].Type != protocol.CanonicalStreamResponseDone ||
+		events[1].Status != "incomplete" ||
 		events[1].FinishReason != "content_filter" {
 		t.Fatalf("events = %+v", events)
 	}

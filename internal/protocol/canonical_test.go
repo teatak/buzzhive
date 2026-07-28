@@ -36,6 +36,23 @@ func TestCanonicalReasoningRequestPolicies(t *testing.T) {
 		}
 	})
 
+	t.Run("OpenAI Chat accepts response-only reasoning hints", func(t *testing.T) {
+		include := true
+		got, err := CanonicalToOpenAIChatRequest(CanonicalRequest{
+			Reasoning: &CanonicalReasoning{
+				Effort:          "HIGH",
+				IncludeThoughts: &include,
+				Summary:         "auto",
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ReasoningEffort == nil || *got.ReasoningEffort != "high" {
+			t.Fatalf("reasoning_effort = %v", got.ReasoningEffort)
+		}
+	})
+
 	t.Run("Responses maps include thoughts to summary", func(t *testing.T) {
 		include := true
 		got, err := CanonicalToOpenAIResponsesRequest(CanonicalRequest{
@@ -97,6 +114,41 @@ func TestCanonicalReasoningRequestPolicies(t *testing.T) {
 		thinking := got.GenerationConfig.ThinkingConfig
 		if thinking == nil || thinking.ThinkingLevel != "HIGH" ||
 			thinking.IncludeThoughts == nil || !*thinking.IncludeThoughts {
+			t.Fatalf("thinking = %+v", thinking)
+		}
+	})
+
+	t.Run("Gemini includes thought summaries by default", func(t *testing.T) {
+		got, err := CanonicalToGeminiGenerateRequest(CanonicalRequest{
+			Messages: []CanonicalMessage{{
+				Role:  "user",
+				Parts: []CanonicalPart{{Type: "text", Text: "hi"}},
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		thinking := got.GenerationConfig.ThinkingConfig
+		if thinking == nil || thinking.ThinkingLevel != "" ||
+			thinking.IncludeThoughts == nil || !*thinking.IncludeThoughts {
+			t.Fatalf("thinking = %+v", thinking)
+		}
+	})
+
+	t.Run("Gemini preserves explicit thought summary opt out", func(t *testing.T) {
+		include := false
+		got, err := CanonicalToGeminiGenerateRequest(CanonicalRequest{
+			Reasoning: &CanonicalReasoning{IncludeThoughts: &include},
+			Messages: []CanonicalMessage{{
+				Role:  "user",
+				Parts: []CanonicalPart{{Type: "text", Text: "hi"}},
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		thinking := got.GenerationConfig.ThinkingConfig
+		if thinking == nil || thinking.IncludeThoughts == nil || *thinking.IncludeThoughts {
 			t.Fatalf("thinking = %+v", thinking)
 		}
 	})

@@ -189,6 +189,31 @@ func routeSessionKey(key string) string {
 	return "bh:route-session:" + sessionHash(key)
 }
 
+func (c *RuntimeCache) ToolSignature(ctx context.Context, key string) (string, error) {
+	if !c.Enabled() {
+		return "", errRuntimeCacheMiss
+	}
+	signature, err := c.client.Get(ctx, toolSignatureCacheKey(key)).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", errRuntimeCacheMiss
+	}
+	if err != nil {
+		return "", err
+	}
+	return signature, nil
+}
+
+func (c *RuntimeCache) SetToolSignature(ctx context.Context, key, signature string, ttl time.Duration) error {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.client.Set(ctx, toolSignatureCacheKey(key), signature, ttl).Err()
+}
+
+func toolSignatureCacheKey(key string) string {
+	return "bh:tool-signature:" + sessionHash(key)
+}
+
 func (c *RuntimeCache) KeyCooldown(ctx context.Context, key string) (time.Time, bool, error) {
 	if !c.Enabled() {
 		return time.Time{}, false, errRuntimeCacheMiss

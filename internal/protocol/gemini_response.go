@@ -51,7 +51,10 @@ func GeminiToCanonicalStreamEvents(resp GeminiGenerateResponse, requestID string
 				continue
 			}
 			index := toolOffset + toolIndex
-			callID := fmt.Sprintf("call_%s_%d", requestID, index)
+			callID := strings.TrimSpace(part.FunctionCall.ID)
+			if callID == "" {
+				callID = fmt.Sprintf("call_%s_%d", requestID, index)
+			}
 			arguments := string(part.FunctionCall.Args)
 			if strings.TrimSpace(arguments) == "" || arguments == "null" {
 				arguments = "{}"
@@ -161,6 +164,7 @@ func CanonicalStreamEventToGeminiGenerateResponse(event CanonicalStreamEvent) (G
 				Role: "model",
 				Parts: []GeminiPart{{
 					FunctionCall: &GeminiFunctionCall{
+						ID:   event.CallID,
 						Name: event.Name,
 						Args: jsonRawObject(event.Arguments),
 					},
@@ -192,6 +196,7 @@ func canonicalResponsePartsToGemini(reasoning string, signature string, text str
 	for _, call := range toolCalls {
 		out = append(out, GeminiPart{
 			FunctionCall: &GeminiFunctionCall{
+				ID:   call.ID,
 				Name: call.Name,
 				Args: jsonRawObject(call.Arguments),
 			},
@@ -255,8 +260,12 @@ func geminiResponseToolCalls(resp GeminiGenerateResponse, requestID string) []Ca
 		if len(part.FunctionCall.Args) > 0 && string(part.FunctionCall.Args) != "null" {
 			args = string(part.FunctionCall.Args)
 		}
+		callID := strings.TrimSpace(part.FunctionCall.ID)
+		if callID == "" {
+			callID = fmt.Sprintf("call_%s_%d", requestID, len(out))
+		}
 		out = append(out, CanonicalToolCall{
-			ID:        fmt.Sprintf("call_%s_%d", requestID, len(out)),
+			ID:        callID,
 			Name:      part.FunctionCall.Name,
 			Arguments: args,
 			Signature: part.ThoughtSignature,

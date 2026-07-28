@@ -114,7 +114,13 @@ type Server struct {
 	routeMu       sync.Mutex
 	runtimeMu     sync.Mutex
 	toolSigMu     sync.Mutex
-	toolSigs      map[string]string
+	toolSigs      map[string]toolSignatureEntry
+}
+
+type toolSignatureEntry struct {
+	signature string
+	expiresAt time.Time
+	updatedAt time.Time
 }
 
 type AdminConfig struct {

@@ -42,67 +42,40 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 		writeOpenAIError(w, http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
-	targets = openAIChatTargets(targets)
+	targets = s.selectRouteTargets(req.Model, targets, openAIChatProtocolPreference())
 	if len(targets) == 0 {
 		writeOpenAIError(w, http.StatusBadRequest, "unsupported_endpoint", "selected upstream does not support OpenAI Chat Completions")
 		return
 	}
 	target := targets[0]
-	if protocol.ShouldPassthrough(providerOpenAI, target.ProviderType) {
-		s.proxyRaw(w, r, body, user, req.Model, targets)
+	if protocol.ShouldPassthrough(providerOpenAI, target.ProviderType) && !routeTargetsUseMixedProtocols(targets) {
+		s.proxyRaw(w, r, body, user, req.Model, targets, providerOpenAI)
 		return
 	}
 	if err := decodeCrossProtocolJSON(body, &req); err != nil {
+		if s.proxyRawIfAvailable(w, r, body, user, req.Model, targets, providerOpenAI) {
+			return
+		}
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
 	if err := validateOpenAIChatParameterSupport(req); err != nil {
+		if s.proxyRawIfAvailable(w, r, body, user, req.Model, targets, providerOpenAI) {
+			return
+		}
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
-
 	canonicalReq, err := protocol.OpenAIChatToCanonical(req)
 	if err != nil {
+		if s.proxyRawIfAvailable(w, r, body, user, req.Model, targets, providerOpenAI) {
+			return
+		}
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
 	includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
-	switch target.ProviderType {
-	case providerOpenAIResponses:
-		s.proxyOpenAIChatViaResponses(w, r, canonicalReq, user, req.Model, targets, includeUsage)
-	case providerAnthropic:
-		s.proxyOpenAIChatViaAnthropic(w, r, canonicalReq, user, req.Model, targets, includeUsage)
-	case providerGemini:
-		thinkingLevel, err := geminiThinkingLevelForOpenAIReasoningEffort(req.ReasoningEffort, target.UpstreamModel)
-		if err != nil {
-			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
-			return
-		}
-		if thinkingLevel != nil {
-			if canonicalReq.Reasoning == nil {
-				canonicalReq.Reasoning = &protocol.CanonicalReasoning{}
-			}
-			canonicalReq.Reasoning.Effort = *thinkingLevel
-		}
-		s.applyToolSignatures(&canonicalReq)
-		geminiReq, err := protocol.CanonicalToGeminiGenerateRequest(canonicalReq)
-		if err != nil {
-			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
-			return
-		}
-		geminiBody, err := json.Marshal(geminiReq)
-		if err != nil {
-			writeOpenAIError(w, http.StatusInternalServerError, "server_error", err.Error())
-			return
-		}
-		if req.Stream {
-			s.proxyOpenAIChatStream(w, r, geminiBody, user, req.Model, targets, includeUsage)
-			return
-		}
-		s.proxyOpenAIChat(w, r, geminiBody, user, req.Model, targets)
-	default:
-		writeOpenAIError(w, http.StatusBadRequest, "unsupported_endpoint", "selected upstream does not support OpenAI Chat Completions")
-	}
+	s.proxyMixedCanonicalRoutes(w, r, body, canonicalReq, user, req.Model, targets, providerOpenAI, includeUsage)
 }
 
 func validateOpenAIChatParameterSupport(req protocol.OpenAIChatRequest) error {
@@ -157,14 +130,8 @@ func rawJSONHasValue(raw json.RawMessage) bool {
 	return value != "" && value != "null" && value != "{}"
 }
 
-func openAIChatTargets(targets []RouteTarget) []RouteTarget {
-	for _, protocol := range []string{providerOpenAI, providerOpenAIResponses, providerAnthropic, providerGemini} {
-		out := routeTargetsByProtocol(targets, protocol)
-		if len(out) > 0 {
-			return out
-		}
-	}
-	return nil
+func openAIChatProtocolPreference() []string {
+	return []string{providerOpenAI, providerOpenAIResponses, providerAnthropic, providerGemini}
 }
 
 func geminiThinkingLevelForOpenAIReasoningEffort(effort *string, model string) (*string, error) {
@@ -198,61 +165,15 @@ func geminiThinkingLevelForOpenAIReasoningEffort(effort *string, model string) (
 	}
 }
 
-func (s *Server) proxyOpenAIChat(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken, model string, targets []RouteTarget) {
+func (s *Server) proxyRaw(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken, model string, targets []RouteTarget, inbound string) {
+	reqDiag := openAIDiagnosticRequest{}
+	if isOpenAIProviderType(inbound) {
+		reqDiag = openAIDiagnosticRequestFromBody(body)
+	}
 	result := s.doProviderTargetLoop(r.Context(), user, model, targets, func(target RouteTarget) ProviderRequest {
 		return ProviderRequest{
 			ProviderName:    target.ProviderName,
-			InboundProtocol: "openai",
-			Method:          http.MethodPost,
-			Body:            body,
-			RequestedModel:  model,
-			Model:           target.UpstreamModel,
-			Action:          "generateContent",
-		}
-	})
-	if !result.OK {
-		s.recordProviderResultUsage(user, model, result, providerResultStatus(result.Response))
-		writeOpenAIRetryError(w, result.Response, result.Attempts, s.cfg.Retry.MaxAttempts, result.Chain)
-		return
-	}
-	resp := result.Response
-	key := result.Key
-	startedAt := result.StartedAt
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		raw := drain(resp.Body, 64*1024)
-		writeOpenAIUpstreamError(w, resp.StatusCode, raw)
-		s.recordProviderResultUsage(user, model, result, resp.StatusCode)
-		return
-	}
-
-	raw := drain(resp.Body, 8*1024*1024)
-	var geminiResp protocol.GeminiGenerateResponse
-	if err := json.Unmarshal(raw, &geminiResp); err != nil {
-		writeOpenAIError(w, http.StatusBadGateway, "server_error", err.Error())
-		s.recordProviderResultUsage(user, model, result, http.StatusBadGateway)
-		return
-	}
-	usage := tokenUsageFromGeminiResponseBody(raw, geminiResp)
-
-	canonicalResp := protocol.GeminiToCanonicalResponse(geminiResp, model, "chatcmpl-"+result.RequestID, startedAt.Unix(), result.RequestID)
-	if canonicalResp.FinishReason == "length" {
-		logOpenAIDiagnostic(result, model, openAIDiagnosticRequest{}, http.StatusOK, "length", &canonicalResp.Usage.CompletionTokens)
-	}
-	s.rememberToolSignatures(canonicalResp.ToolCalls)
-	out := protocol.CanonicalToOpenAIChatResponse(canonicalResp)
-	w.Header().Set("X-Proxy-Debug", strings.Join(result.Chain, " -> "))
-	w.Header().Set("X-Proxy-Key", key.Name)
-	writeJSON(w, http.StatusOK, out)
-	s.recordProviderResultUsage(user, model, result, http.StatusOK, usage)
-}
-
-func (s *Server) proxyRaw(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken, model string, targets []RouteTarget) {
-	reqDiag := openAIDiagnosticRequestFromBody(body)
-	result := s.doProviderTargetLoop(r.Context(), user, model, targets, func(target RouteTarget) ProviderRequest {
-		return ProviderRequest{
-			ProviderName:    target.ProviderName,
-			InboundProtocol: "openai",
+			InboundProtocol: inbound,
 			Method:          r.Method,
 			Path:            r.URL.Path,
 			RawQuery:        r.URL.RawQuery,
@@ -264,124 +185,43 @@ func (s *Server) proxyRaw(w http.ResponseWriter, r *http.Request, body []byte, u
 	})
 	if !result.OK {
 		s.recordProviderResultUsage(user, model, result, providerResultStatus(result.Response))
-		logOpenAIDiagnostic(result, model, reqDiag, providerResultStatus(result.Response), "", nil)
-		writeOpenAIRetryError(w, result.Response, result.Attempts, s.cfg.Retry.MaxAttempts, result.Chain)
+		if isOpenAIProviderType(inbound) {
+			logOpenAIDiagnostic(result, model, reqDiag, providerResultStatus(result.Response), "", nil)
+		}
+		writeInboundRetryError(w, inbound, result.Response, result.Attempts, s.cfg.Retry.MaxAttempts, result.Chain)
 		return
 	}
 	resp := result.Response
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= 400 && isOpenAIProviderType(inbound) {
 		logOpenAIDiagnostic(result, model, reqDiag, resp.StatusCode, "", nil)
 	}
 	usage := TokenUsage{}
 	if !reqDiag.Stream && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "application/json") {
 		raw := drain(resp.Body, 8*1024*1024)
-		usage = tokenUsageFromOpenAIResponseBody(raw)
-		logOpenAIDiagnosticResponse(result, model, reqDiag, resp.StatusCode, raw)
+		usage = tokenUsageFromProviderBody(raw, result.Target.ProviderType)
+		if isOpenAIProviderType(inbound) {
+			logOpenAIDiagnosticResponse(result, model, reqDiag, resp.StatusCode, raw)
+		}
 		resp.Body = io.NopCloser(bytes.NewReader(raw))
 	}
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.Header().Set("X-Proxy-Debug", strings.Join(result.Chain, " -> "))
 	w.Header().Set("X-Proxy-Key", result.Key.Name)
 	w.WriteHeader(resp.StatusCode)
-	if reqDiag.Stream && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
-		usage = copyOpenAIStreamResponseBody(w, resp.Body)
+	if isEventStream(resp) {
+		usage = copyProviderStreamResponseBody(w, resp.Body, result.Target.ProviderType)
 	} else {
 		_ = copyResponseBody(w, resp.Body)
 	}
 	s.recordProviderResultUsage(user, model, result, resp.StatusCode, usage)
 }
 
-func (s *Server) proxyOpenAIChatStream(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken, model string, targets []RouteTarget, includeUsage bool) {
-	result := s.doProviderTargetLoop(r.Context(), user, model, targets, func(target RouteTarget) ProviderRequest {
-		return ProviderRequest{
-			ProviderName:    target.ProviderName,
-			InboundProtocol: "openai",
-			Method:          http.MethodPost,
-			Body:            body,
-			RequestedModel:  model,
-			Model:           target.UpstreamModel,
-			Action:          "streamGenerateContent",
-		}
-	})
-	if !result.OK {
-		s.recordProviderResultUsage(user, model, result, providerResultStatus(result.Response))
-		writeOpenAIRetryError(w, result.Response, result.Attempts, s.cfg.Retry.MaxAttempts, result.Chain)
-		return
-	}
-	resp := result.Response
-	key := result.Key
-	startedAt := result.StartedAt
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		raw := drain(resp.Body, 64*1024)
-		writeOpenAIUpstreamError(w, resp.StatusCode, raw)
-		s.recordProviderResultUsage(user, model, result, resp.StatusCode)
-		return
-	}
-
-	flusher, _ := w.(http.Flusher)
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Proxy-Debug", strings.Join(result.Chain, " -> "))
-	w.Header().Set("X-Proxy-Key", key.Name)
-	w.WriteHeader(http.StatusOK)
-
-	created := startedAt.Unix()
-	writeOpenAIStreamChunk(w, flusher, protocol.OpenAIChatRoleStreamChunk("chatcmpl-"+result.RequestID, created, model))
-
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	usage := TokenUsage{}
-	toolOffset := 0
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "[DONE]" {
-			break
-		}
-		var geminiResp protocol.GeminiGenerateResponse
-		if err := json.Unmarshal([]byte(payload), &geminiResp); err != nil {
-			continue
-		}
-		if chunkUsage := tokenUsageFromGeminiResponseBody([]byte(payload), geminiResp); !chunkUsage.IsZero() {
-			usage = chunkUsage
-		}
-		for _, event := range protocol.GeminiToCanonicalStreamEvents(geminiResp, result.RequestID, toolOffset) {
-			if event.Type == protocol.CanonicalStreamToolCallDone {
-				toolOffset++
-				s.rememberToolSignatures([]protocol.CanonicalToolCall{{
-					ID:        event.CallID,
-					Name:      event.Name,
-					Arguments: event.Arguments,
-					Signature: event.Signature,
-				}})
-			}
-			if event.Type == protocol.CanonicalStreamResponseDone && toolOffset > 0 && event.FinishReason == "stop" {
-				event.FinishReason = "tool_calls"
-			}
-			if event.Type == protocol.CanonicalStreamResponseDone && event.FinishReason == "length" {
-				logOpenAIDiagnostic(result, model, openAIDiagnosticRequest{Stream: true}, http.StatusOK, "length", nil)
-			}
-			if chunk, ok := protocol.CanonicalToOpenAIStreamChunk(event, "chatcmpl-"+result.RequestID, created, model, includeUsage); ok {
-				writeOpenAIStreamChunk(w, flusher, chunk)
-			}
-		}
-	}
-	io.WriteString(w, "data: [DONE]\n\n")
-	if flusher != nil {
-		flusher.Flush()
-	}
-	s.recordProviderResultUsage(user, model, result, http.StatusOK, usage)
-}
-
-func copyOpenAIStreamResponseBody(w http.ResponseWriter, r io.Reader) TokenUsage {
+func copyProviderStreamResponseBody(w http.ResponseWriter, r io.Reader, providerType string) TokenUsage {
 	reader := bufio.NewReader(r)
 	flusher, _ := w.(http.Flusher)
 	usage := TokenUsage{}
+	var anthropicUsage protocol.AnthropicUsage
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 {
@@ -391,8 +231,20 @@ func copyOpenAIStreamResponseBody(w http.ResponseWriter, r io.Reader) TokenUsage
 			if flusher != nil {
 				flusher.Flush()
 			}
-			if chunkUsage := tokenUsageFromOpenAIStreamLine(line); !chunkUsage.IsZero() {
-				usage = chunkUsage
+			switch providerType {
+			case providerAnthropic:
+				if next, ok := anthropicUsageFromStreamLine(line); ok {
+					anthropicUsage = mergeRawAnthropicUsage(anthropicUsage, next)
+					usage = tokenUsageFromAnthropicUsage(anthropicUsage)
+				}
+			case providerGemini:
+				if chunkUsage := tokenUsageFromGeminiStreamLine(line); !chunkUsage.IsZero() {
+					usage = chunkUsage
+				}
+			default:
+				if chunkUsage := tokenUsageFromOpenAIStreamLine(line); !chunkUsage.IsZero() {
+					usage = chunkUsage
+				}
 			}
 		}
 		if err != nil {
@@ -401,16 +253,93 @@ func copyOpenAIStreamResponseBody(w http.ResponseWriter, r io.Reader) TokenUsage
 	}
 }
 
-func tokenUsageFromOpenAIStreamLine(line []byte) TokenUsage {
+func streamDataPayload(line []byte) []byte {
 	trimmed := bytes.TrimSpace(line)
 	if !bytes.HasPrefix(trimmed, []byte("data:")) {
-		return TokenUsage{}
+		return nil
 	}
 	payload := bytes.TrimSpace(bytes.TrimPrefix(trimmed, []byte("data:")))
 	if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+		return nil
+	}
+	return payload
+}
+
+func tokenUsageFromOpenAIStreamLine(line []byte) TokenUsage {
+	payload := streamDataPayload(line)
+	if len(payload) == 0 {
 		return TokenUsage{}
 	}
 	return tokenUsageFromOpenAIResponseBody(payload)
+}
+
+func tokenUsageFromGeminiStreamLine(line []byte) TokenUsage {
+	payload := streamDataPayload(line)
+	if len(payload) == 0 {
+		return TokenUsage{}
+	}
+	var response protocol.GeminiGenerateResponse
+	if json.Unmarshal(payload, &response) != nil {
+		return TokenUsage{}
+	}
+	return tokenUsageFromGeminiResponseBody(payload, response)
+}
+
+func anthropicUsageFromStreamLine(line []byte) (protocol.AnthropicUsage, bool) {
+	payload := streamDataPayload(line)
+	if len(payload) == 0 {
+		return protocol.AnthropicUsage{}, false
+	}
+	var event struct {
+		Message struct {
+			Usage protocol.AnthropicUsage `json:"usage"`
+		} `json:"message"`
+		Usage protocol.AnthropicUsage `json:"usage"`
+	}
+	if json.Unmarshal(payload, &event) != nil {
+		return protocol.AnthropicUsage{}, false
+	}
+	usage := event.Usage
+	if usage == (protocol.AnthropicUsage{}) {
+		usage = event.Message.Usage
+	}
+	return usage, usage != (protocol.AnthropicUsage{})
+}
+
+func mergeRawAnthropicUsage(current protocol.AnthropicUsage, next protocol.AnthropicUsage) protocol.AnthropicUsage {
+	if next.InputTokens != 0 {
+		current.InputTokens = next.InputTokens
+	}
+	if next.OutputTokens != 0 {
+		current.OutputTokens = next.OutputTokens
+	}
+	if next.CacheCreationInputTokens != 0 {
+		current.CacheCreationInputTokens = next.CacheCreationInputTokens
+	}
+	if next.CacheReadInputTokens != 0 {
+		current.CacheReadInputTokens = next.CacheReadInputTokens
+	}
+	if next.OutputTokensDetails != nil {
+		current.OutputTokensDetails = next.OutputTokensDetails
+	}
+	return current
+}
+
+func tokenUsageFromAnthropicUsage(usage protocol.AnthropicUsage) TokenUsage {
+	raw, _ := json.Marshal(usage)
+	promptTokens := usage.InputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
+	reasoningTokens := 0
+	if usage.OutputTokensDetails != nil {
+		reasoningTokens = usage.OutputTokensDetails.ThinkingTokens
+	}
+	return TokenUsage{
+		PromptTokens:     int64(promptTokens),
+		CompletionTokens: int64(usage.OutputTokens),
+		TotalTokens:      int64(promptTokens + usage.OutputTokens),
+		CachedTokens:     int64(usage.CacheReadInputTokens),
+		ReasoningTokens:  int64(reasoningTokens),
+		RawUsage:         compactRawJSON(raw),
+	}
 }
 
 func isOpenAIProviderType(providerType string) bool {

@@ -3,6 +3,7 @@ package buzzhive
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -591,13 +592,13 @@ func TestOpenAIChatResponseFormatRoutesToGemini(t *testing.T) {
 				t.Fatalf("responseMimeType = %q, want %q", got, tt.wantMimeType)
 			}
 			if tt.wantSchema == "" {
-				if len(upstreamBody.GenerationConfig.ResponseSchema) != 0 {
-					t.Fatalf("responseSchema = %s", upstreamBody.GenerationConfig.ResponseSchema)
+				if len(upstreamBody.GenerationConfig.ResponseJSONSchema) != 0 {
+					t.Fatalf("responseJsonSchema = %s", upstreamBody.GenerationConfig.ResponseJSONSchema)
 				}
 				return
 			}
-			if got := compactJSONRawForTest(t, upstreamBody.GenerationConfig.ResponseSchema); got != compactJSONStringForTest(t, tt.wantSchema) {
-				t.Fatalf("responseSchema = %s, want %s", got, tt.wantSchema)
+			if got := compactJSONRawForTest(t, upstreamBody.GenerationConfig.ResponseJSONSchema); got != compactJSONStringForTest(t, tt.wantSchema) {
+				t.Fatalf("responseJsonSchema = %s, want %s", got, tt.wantSchema)
 			}
 		})
 	}
@@ -749,7 +750,11 @@ func TestOpenAIChatToolsRouteToGemini(t *testing.T) {
 	body := `{
 		"model": "gemini-3.5-flash",
 		"messages": [{"role": "user", "content": "hi"}],
-		"tools": [{"type": "function", "function": {"name": "search", "parameters": {"type": "object"}}}]
+		"tools": [{"type": "function", "function": {"name": "search", "parameters": {
+			"type": "object",
+			"properties": {"filters": {"type": "object", "additionalProperties": {"type": "string"}}},
+			"additionalProperties": false
+		}}}]
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer bh_valid")
@@ -767,12 +772,20 @@ func TestOpenAIChatToolsRouteToGemini(t *testing.T) {
 	if gotTool.Name != "search" {
 		t.Fatalf("tool = %+v", gotTool)
 	}
+	if len(gotTool.Parameters) != 0 {
+		t.Fatalf("legacy parameters must be empty: %s", gotTool.Parameters)
+	}
 	var parameters map[string]any
-	if err := json.Unmarshal(gotTool.Parameters, &parameters); err != nil {
+	if err := json.Unmarshal(gotTool.ParametersJSONSchema, &parameters); err != nil {
 		t.Fatal(err)
 	}
-	if parameters["type"] != "object" {
+	if parameters["type"] != "object" || parameters["additionalProperties"] != false {
 		t.Fatalf("parameters = %+v", parameters)
+	}
+	properties := parameters["properties"].(map[string]any)
+	filters := properties["filters"].(map[string]any)
+	if _, ok := filters["additionalProperties"]; !ok {
+		t.Fatalf("nested additionalProperties was lost: %+v", filters)
 	}
 }
 
@@ -1111,7 +1124,8 @@ func TestOpenAIChatReplaysGeminiThoughtSignature(t *testing.T) {
 
 func TestOpenAIChatReplaysGeminiThoughtSignatureByFunctionArguments(t *testing.T) {
 	srv := &Server{}
-	srv.rememberToolSignatures([]protocol.CanonicalToolCall{{
+	user := AuthToken{ID: 7, UserID: 11}
+	srv.rememberToolSignatures(context.Background(), user, "public-model", []protocol.CanonicalToolCall{{
 		ID:        "call_old",
 		Name:      "search",
 		Arguments: `{"b":2,"a":1}`,
@@ -1129,10 +1143,16 @@ func TestOpenAIChatReplaysGeminiThoughtSignatureByFunctionArguments(t *testing.T
 		}},
 	}
 
-	srv.applyToolSignatures(req)
+	srv.applyToolSignatures(context.Background(), user, "public-model", req)
 
 	if got := req.Messages[0].Parts[0].Signature; got != "sig-abc" {
 		t.Fatalf("thought signature = %q", got)
+	}
+
+	req.Messages[0].Parts[0].Signature = ""
+	srv.applyToolSignatures(context.Background(), AuthToken{ID: 8, UserID: 11}, "public-model", req)
+	if got := req.Messages[0].Parts[0].Signature; got != "" {
+		t.Fatalf("signature leaked across API keys: %q", got)
 	}
 }
 

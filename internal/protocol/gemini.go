@@ -29,6 +29,34 @@ type GeminiPart struct {
 	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
 }
 
+func (p GeminiPart) MarshalJSON() ([]byte, error) {
+	type wirePart struct {
+		Text             *string                 `json:"text,omitempty"`
+		Thought          bool                    `json:"thought,omitempty"`
+		InlineData       *GeminiInlineData       `json:"inlineData,omitempty"`
+		FunctionCall     *GeminiFunctionCall     `json:"functionCall,omitempty"`
+		FunctionResponse *GeminiFunctionResponse `json:"functionResponse,omitempty"`
+		ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
+	}
+
+	var text *string
+	hasStructuredData := p.InlineData != nil || p.FunctionCall != nil || p.FunctionResponse != nil
+	if p.Text != "" || (!hasStructuredData && p.ThoughtSignature != "") {
+		text = &p.Text
+	}
+	if text == nil && !hasStructuredData {
+		return nil, errors.New("Gemini part must contain text, inlineData, functionCall, or functionResponse")
+	}
+	return json.Marshal(wirePart{
+		Text:             text,
+		Thought:          p.Thought,
+		InlineData:       p.InlineData,
+		FunctionCall:     p.FunctionCall,
+		FunctionResponse: p.FunctionResponse,
+		ThoughtSignature: p.ThoughtSignature,
+	})
+}
+
 type GeminiInlineData struct {
 	MimeType string `json:"mimeType"`
 	Data     string `json:"data"`
@@ -39,17 +67,20 @@ type GeminiTool struct {
 }
 
 type GeminiFunctionDeclaration struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Name                 string          `json:"name"`
+	Description          string          `json:"description,omitempty"`
+	Parameters           json.RawMessage `json:"parameters,omitempty"`
+	ParametersJSONSchema json.RawMessage `json:"parametersJsonSchema,omitempty"`
 }
 
 type GeminiFunctionCall struct {
+	ID   string          `json:"id,omitempty"`
 	Name string          `json:"name"`
 	Args json.RawMessage `json:"args,omitempty"`
 }
 
 type GeminiFunctionResponse struct {
+	ID       string          `json:"id,omitempty"`
 	Name     string          `json:"name"`
 	Response json.RawMessage `json:"response"`
 }
@@ -64,13 +95,14 @@ type GeminiFunctionCallingConfig struct {
 }
 
 type GeminiGenerationConfig struct {
-	Temperature      *float64              `json:"temperature,omitempty"`
-	TopP             *float64              `json:"topP,omitempty"`
-	MaxOutputTokens  *int                  `json:"maxOutputTokens,omitempty"`
-	StopSequences    []string              `json:"stopSequences,omitempty"`
-	ResponseMimeType string                `json:"responseMimeType,omitempty"`
-	ResponseSchema   json.RawMessage       `json:"responseSchema,omitempty"`
-	ThinkingConfig   *GeminiThinkingConfig `json:"thinkingConfig,omitempty"`
+	Temperature        *float64              `json:"temperature,omitempty"`
+	TopP               *float64              `json:"topP,omitempty"`
+	MaxOutputTokens    *int                  `json:"maxOutputTokens,omitempty"`
+	StopSequences      []string              `json:"stopSequences,omitempty"`
+	ResponseMimeType   string                `json:"responseMimeType,omitempty"`
+	ResponseSchema     json.RawMessage       `json:"responseSchema,omitempty"`
+	ResponseJSONSchema json.RawMessage       `json:"responseJsonSchema,omitempty"`
+	ThinkingConfig     *GeminiThinkingConfig `json:"thinkingConfig,omitempty"`
 }
 
 type GeminiThinkingConfig struct {
@@ -121,9 +153,18 @@ func GeminiGenerateToCanonicalRequest(req GeminiGenerateRequest, model string, s
 		out.MaxOutputTokens = req.GenerationConfig.MaxOutputTokens
 		out.StopSequences = req.GenerationConfig.StopSequences
 		if req.GenerationConfig.ResponseMimeType != "" {
+			responseSchema, err := selectGeminiSchema(
+				req.GenerationConfig.ResponseSchema,
+				req.GenerationConfig.ResponseJSONSchema,
+				"responseSchema",
+				"responseJsonSchema",
+			)
+			if err != nil {
+				return CanonicalRequest{}, err
+			}
 			out.ResponseFormat = &CanonicalResponseFormat{
 				MimeType: req.GenerationConfig.ResponseMimeType,
-				Schema:   req.GenerationConfig.ResponseSchema,
+				Schema:   responseSchema,
 			}
 		}
 		if req.GenerationConfig.ThinkingConfig != nil {
@@ -200,6 +241,9 @@ func CanonicalToGeminiGenerateRequest(req CanonicalRequest) (GeminiGenerateReque
 		if err != nil {
 			return GeminiGenerateRequest{}, err
 		}
+		if len(parts) == 0 {
+			continue
+		}
 		switch message.Role {
 		case "system", "developer":
 			systemParts = append(systemParts, parts...)
@@ -229,7 +273,15 @@ func geminiToolsToCanonical(tools []GeminiTool) ([]CanonicalTool, error) {
 			if strings.TrimSpace(declaration.Name) == "" {
 				return nil, errors.New("function declaration name is required")
 			}
-			parameters := declaration.Parameters
+			parameters, err := selectGeminiSchema(
+				declaration.Parameters,
+				declaration.ParametersJSONSchema,
+				"parameters",
+				"parametersJsonSchema",
+			)
+			if err != nil {
+				return nil, fmt.Errorf("function declaration %q: %w", declaration.Name, err)
+			}
 			if len(strings.TrimSpace(string(parameters))) == 0 || strings.TrimSpace(string(parameters)) == "null" {
 				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
 			}
@@ -241,6 +293,16 @@ func geminiToolsToCanonical(tools []GeminiTool) ([]CanonicalTool, error) {
 		}
 	}
 	return out, nil
+}
+
+func selectGeminiSchema(legacy, jsonSchema json.RawMessage, legacyName, jsonSchemaName string) (json.RawMessage, error) {
+	if len(strings.TrimSpace(string(legacy))) > 0 && len(strings.TrimSpace(string(jsonSchema))) > 0 {
+		return nil, fmt.Errorf("%s and %s are mutually exclusive", legacyName, jsonSchemaName)
+	}
+	if len(strings.TrimSpace(string(jsonSchema))) > 0 {
+		return jsonSchema, nil
+	}
+	return legacy, nil
 }
 
 func geminiToolConfigToCanonical(config *GeminiToolConfig) *CanonicalToolChoice {
@@ -277,24 +339,42 @@ func newGeminiToolCallResolver() *geminiToolCallResolver {
 	return &geminiToolCallResolver{pending: make(map[string][]string)}
 }
 
-func (r *geminiToolCallResolver) add(name string, messageIndex int, partIndex int) string {
-	id := fmt.Sprintf("call_%d_%d", messageIndex, partIndex)
+func (r *geminiToolCallResolver) add(id string, name string, messageIndex int, partIndex int) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = fmt.Sprintf("call_%d_%d", messageIndex, partIndex)
+	}
 	r.pending[name] = append(r.pending[name], id)
 	return id
 }
 
-func (r *geminiToolCallResolver) take(name string) (string, bool) {
+func (r *geminiToolCallResolver) take(id string, name string) (string, bool) {
+	id = strings.TrimSpace(id)
 	ids := r.pending[name]
 	if len(ids) == 0 {
 		return "", false
 	}
-	id := ids[0]
-	if len(ids) == 1 {
+	index := 0
+	if id != "" {
+		index = -1
+		for i, pendingID := range ids {
+			if pendingID == id {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			return "", false
+		}
+	}
+	resolved := ids[index]
+	ids = append(ids[:index], ids[index+1:]...)
+	if len(ids) == 0 {
 		delete(r.pending, name)
 	} else {
-		r.pending[name] = ids[1:]
+		r.pending[name] = ids
 	}
-	return id, true
+	return resolved, true
 }
 
 func geminiPartsToCanonical(parts []GeminiPart, messageIndex int, toolCalls *geminiToolCallResolver) ([]CanonicalPart, error) {
@@ -306,7 +386,7 @@ func geminiPartsToCanonical(parts []GeminiPart, messageIndex int, toolCalls *gem
 			if name == "" {
 				return nil, errors.New("Gemini functionCall name is required")
 			}
-			id := toolCalls.add(name, messageIndex, partIndex)
+			id := toolCalls.add(part.FunctionCall.ID, name, messageIndex, partIndex)
 			out = append(out, CanonicalPart{
 				Type:       "tool_call",
 				ToolCallID: id,
@@ -319,9 +399,9 @@ func geminiPartsToCanonical(parts []GeminiPart, messageIndex int, toolCalls *gem
 			if name == "" {
 				return nil, errors.New("Gemini functionResponse name is required")
 			}
-			id, ok := toolCalls.take(name)
+			id, ok := toolCalls.take(part.FunctionResponse.ID, name)
 			if !ok {
-				return nil, fmt.Errorf("Gemini functionResponse %q has no matching functionCall", name)
+				return nil, fmt.Errorf("Gemini functionResponse %q id %q has no matching functionCall", name, part.FunctionResponse.ID)
 			}
 			out = append(out, CanonicalPart{
 				Type:       "tool_response",
@@ -396,9 +476,9 @@ func canonicalToolsToGeminiTools(tools []CanonicalTool) ([]GeminiTool, error) {
 			return nil, errors.New("function tool name is required")
 		}
 		declarations = append(declarations, GeminiFunctionDeclaration{
-			Name:        tool.Name,
-			Description: tool.Description,
-			Parameters:  tool.Parameters,
+			Name:                 tool.Name,
+			Description:          tool.Description,
+			ParametersJSONSchema: tool.Parameters,
 		})
 	}
 	return []GeminiTool{{FunctionDeclarations: declarations}}, nil
@@ -421,11 +501,17 @@ func canonicalPartsToGeminiParts(parts []CanonicalPart) ([]GeminiPart, error) {
 	for _, part := range parts {
 		switch part.Type {
 		case "text":
+			if part.Text == "" && part.Signature == "" {
+				continue
+			}
 			out = append(out, GeminiPart{
 				Text:             part.Text,
 				ThoughtSignature: part.Signature,
 			})
 		case "reasoning":
+			if part.Text == "" && part.Signature == "" {
+				continue
+			}
 			out = append(out, GeminiPart{
 				Text:             part.Text,
 				Thought:          true,
@@ -442,6 +528,7 @@ func canonicalPartsToGeminiParts(parts []CanonicalPart) ([]GeminiPart, error) {
 		case "tool_call":
 			out = append(out, GeminiPart{
 				FunctionCall: &GeminiFunctionCall{
+					ID:   part.ToolCallID,
 					Name: part.Name,
 					Args: part.Arguments,
 				},
@@ -457,6 +544,7 @@ func canonicalPartsToGeminiParts(parts []CanonicalPart) ([]GeminiPart, error) {
 			}
 			out = append(out, GeminiPart{
 				FunctionResponse: &GeminiFunctionResponse{
+					ID:       part.ToolCallID,
 					Name:     part.Name,
 					Response: response,
 				},
@@ -485,12 +573,16 @@ func canonicalToolResponseToGemini(raw json.RawMessage) (json.RawMessage, error)
 }
 
 func canonicalToGeminiGenerationConfig(req CanonicalRequest) (*GeminiGenerationConfig, error) {
+	includeThoughts := true
 	cfg := &GeminiGenerationConfig{
 		Temperature:      req.Temperature,
 		TopP:             req.TopP,
 		MaxOutputTokens:  req.MaxOutputTokens,
 		StopSequences:    req.StopSequences,
 		ResponseMimeType: "",
+		ThinkingConfig: &GeminiThinkingConfig{
+			IncludeThoughts: &includeThoughts,
+		},
 	}
 	if req.Reasoning != nil {
 		if req.Reasoning.BudgetTokens != nil {
@@ -510,23 +602,16 @@ func canonicalToGeminiGenerationConfig(req CanonicalRequest) (*GeminiGenerationC
 		default:
 			return nil, fmt.Errorf("reasoning effort %q cannot be represented by Gemini thinkingLevel", req.Reasoning.Effort)
 		}
-		includeThoughts := req.Reasoning.IncludeThoughts
-		if includeThoughts == nil && summary == "auto" {
-			value := true
-			includeThoughts = &value
-		}
-		if level != "" || includeThoughts != nil {
-			cfg.ThinkingConfig = &GeminiThinkingConfig{
-				ThinkingLevel:   level,
-				IncludeThoughts: includeThoughts,
-			}
+		cfg.ThinkingConfig.ThinkingLevel = level
+		if req.Reasoning.IncludeThoughts != nil {
+			cfg.ThinkingConfig.IncludeThoughts = req.Reasoning.IncludeThoughts
 		}
 	}
 	if req.ResponseFormat != nil {
 		cfg.ResponseMimeType = req.ResponseFormat.MimeType
-		cfg.ResponseSchema = req.ResponseFormat.Schema
+		cfg.ResponseJSONSchema = req.ResponseFormat.Schema
 	}
-	if cfg.Temperature == nil && cfg.TopP == nil && cfg.MaxOutputTokens == nil && len(cfg.StopSequences) == 0 && cfg.ResponseMimeType == "" && len(cfg.ResponseSchema) == 0 && cfg.ThinkingConfig == nil {
+	if cfg.Temperature == nil && cfg.TopP == nil && cfg.MaxOutputTokens == nil && len(cfg.StopSequences) == 0 && cfg.ResponseMimeType == "" && len(cfg.ResponseJSONSchema) == 0 && cfg.ThinkingConfig == nil {
 		return nil, nil
 	}
 	return cfg, nil

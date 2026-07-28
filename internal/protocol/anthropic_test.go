@@ -96,9 +96,9 @@ func TestCanonicalToAnthropicRequiresMaxOutputTokens(t *testing.T) {
 	}
 
 	zero := 0
-	_, err = CanonicalToAnthropicMessagesRequest(CanonicalRequest{MaxOutputTokens: &zero})
-	if err == nil || !strings.Contains(err.Error(), "greater than zero") {
-		t.Fatalf("zero max_output_tokens error = %v", err)
+	got, err := CanonicalToAnthropicMessagesRequest(CanonicalRequest{MaxOutputTokens: &zero})
+	if err != nil || got.MaxTokens == nil || *got.MaxTokens != 0 {
+		t.Fatalf("zero max_output_tokens request = %+v, error = %v", got, err)
 	}
 }
 
@@ -245,6 +245,52 @@ func TestAnthropicToolCallDoesNotOverrideLengthFinishReason(t *testing.T) {
 	}
 	if canonical.FinishReason != "length" {
 		t.Fatalf("finish reason = %q", canonical.FinishReason)
+	}
+}
+
+func TestAnthropicCurrentStopReasonsAndRefusal(t *testing.T) {
+	tests := map[string]string{
+		"pause_turn":                    "stop",
+		"model_context_window_exceeded": "length",
+		"refusal":                       "content_filter",
+	}
+	for reason, want := range tests {
+		if got := AnthropicStopReasonToCanonical(reason); got != want {
+			t.Fatalf("%s maps to %s, want %s", reason, got, want)
+		}
+	}
+
+	canonical, err := AnthropicMessagesResponseToCanonical(AnthropicMessagesResponse{
+		StopReason:  "refusal",
+		StopDetails: &AnthropicStopDetails{Type: "refusal", Explanation: "request declined"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical.FinishReason != "content_filter" || canonical.Refusal != "request declined" {
+		t.Fatalf("canonical refusal = %+v", canonical)
+	}
+	roundTrip := CanonicalToAnthropicMessagesResponse(canonical)
+	if roundTrip.StopReason != "refusal" ||
+		roundTrip.StopDetails == nil ||
+		roundTrip.StopDetails.Explanation != "request declined" {
+		t.Fatalf("round trip refusal = %+v", roundTrip)
+	}
+}
+
+func TestAnthropicRequestValidation(t *testing.T) {
+	zero := 0
+	negative := -1
+	tests := []AnthropicMessagesRequest{
+		{Messages: []AnthropicMessage{{Role: "user"}}, MaxTokens: nil},
+		{Messages: []AnthropicMessage{{Role: "user"}}, MaxTokens: &negative},
+		{Messages: nil, MaxTokens: &zero},
+		{Messages: []AnthropicMessage{{Role: "system"}}, MaxTokens: &zero},
+	}
+	for index, request := range tests {
+		if _, err := AnthropicMessagesToCanonicalRequest(request); err == nil {
+			t.Fatalf("request[%d] unexpectedly accepted: %+v", index, request)
+		}
 	}
 }
 
