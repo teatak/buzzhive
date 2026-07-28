@@ -114,7 +114,7 @@ func TestRepeated429AfterCooldownMarksRPDLike(t *testing.T) {
 	}
 }
 
-func TestAuthenticateAcceptsBearerAndQueryKey(t *testing.T) {
+func TestAuthenticateAcceptsBearerQueryAndGeminiHeaderKeys(t *testing.T) {
 	srv := &Server{
 		authTokens: map[string]AuthToken{
 			"bh_valid": {Name: "default", UserName: "admin", Valid: true},
@@ -136,8 +136,24 @@ func TestAuthenticateAcceptsBearerAndQueryKey(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer stale")
 	req.Header.Set("x-goog-api-key", "bh_valid")
 
-	if _, ok := srv.authenticate(req); ok {
-		t.Fatal("expected x-goog-api-key to be ignored for authentication")
+	user, ok = srv.authenticate(req)
+	if !ok {
+		t.Fatal("expected x-goog-api-key to authenticate when bearer token is stale")
+	}
+	if user.Name != "default" {
+		t.Fatalf("user.Name = %q, want default", user.Name)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req.Header.Set("Authorization", "Bearer stale")
+	req.Header.Set("x-api-key", "bh_valid")
+
+	user, ok = srv.authenticate(req)
+	if !ok {
+		t.Fatal("expected x-api-key to authenticate when bearer token is stale")
+	}
+	if user.Name != "default" {
+		t.Fatalf("user.Name = %q, want default", user.Name)
 	}
 }
 

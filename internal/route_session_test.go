@@ -120,13 +120,12 @@ func TestRotateRouteTargetsWeighted(t *testing.T) {
 	}
 }
 
-func TestSelectRouteTargetsChoosesOneEndpointPerRoute(t *testing.T) {
+func TestSelectRouteTargetsKeepsExplicitSupportedEndpoints(t *testing.T) {
 	srv := &Server{routeNext: make(map[string]int)}
 	targets := []RouteTarget{
-		{ID: 1, ProviderName: "first", ProviderType: providerAnthropic, UpstreamModel: "a"},
-		{ID: 1, ProviderName: "first", ProviderType: providerOpenAI, UpstreamModel: "a"},
-		{ID: 2, ProviderName: "second", ProviderType: providerOpenAIResponses, UpstreamModel: "b"},
-		{ID: 2, ProviderName: "second", ProviderType: providerGemini, UpstreamModel: "b"},
+		{ID: 1, ProviderName: "first", ProviderType: providerOpenAI, RouteProtocol: providerOpenAI, UpstreamModel: "a"},
+		{ID: 2, ProviderName: "second", ProviderType: providerOpenAIResponses, RouteProtocol: providerOpenAIResponses, UpstreamModel: "b"},
+		{ID: 3, ProviderName: "unsupported", ProviderType: "future-protocol", UpstreamModel: "c"},
 	}
 
 	selected := srv.selectRouteTargets("public", targets, openAIChatProtocolPreference())
@@ -138,6 +137,26 @@ func TestSelectRouteTargetsChoosesOneEndpointPerRoute(t *testing.T) {
 	}
 	if selected[1].ID != 2 || selected[1].ProviderType != providerOpenAIResponses {
 		t.Fatalf("second selected target = %+v", selected[1])
+	}
+}
+
+func TestSelectRouteTargetsAutoPrefersPassthroughThenOpenAI(t *testing.T) {
+	srv := &Server{routeNext: make(map[string]int)}
+	targets := []RouteTarget{
+		{ID: 1, ProviderName: "auto", ProviderType: providerAnthropic, RouteProtocol: providerAuto, UpstreamModel: "a"},
+		{ID: 1, ProviderName: "auto", ProviderType: providerOpenAI, RouteProtocol: providerAuto, UpstreamModel: "a"},
+		{ID: 2, ProviderName: "explicit", ProviderType: providerAnthropic, RouteProtocol: providerAnthropic, UpstreamModel: "b"},
+	}
+
+	selected := srv.selectRouteTargets("public", targets, openAIChatProtocolPreference())
+	if len(selected) != 2 {
+		t.Fatalf("selected targets = %+v", selected)
+	}
+	if selected[0].ID != 1 || selected[0].ProviderType != providerOpenAI {
+		t.Fatalf("auto target = %+v", selected[0])
+	}
+	if selected[1].ID != 2 || selected[1].ProviderType != providerAnthropic {
+		t.Fatalf("explicit target = %+v", selected[1])
 	}
 }
 

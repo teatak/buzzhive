@@ -10,7 +10,7 @@ import (
 var corsHeaders = map[string]string{
 	"Access-Control-Allow-Origin":  "*",
 	"Access-Control-Allow-Methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-	"Access-Control-Allow-Headers": "Content-Type, Authorization",
+	"Access-Control-Allow-Headers": "Content-Type, Authorization, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
 	"X-Proxy-Version":              "local-go-v1",
 }
 

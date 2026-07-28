@@ -1,13 +1,17 @@
 package buzzhive
 
 func (s *Store) EnsureSchema() error {
-	stmts := s.schemaStatements()
-	for _, stmt := range stmts {
-		if _, err := s.db.Exec(stmt); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, stmt := range s.schemaStatements() {
+		if _, err := tx.Exec(stmt); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) schemaStatements() []string {
@@ -92,6 +96,7 @@ func (s *Store) schemaStatements() []string {
 			id BIGSERIAL PRIMARY KEY,
 			model_id BIGINT NOT NULL,
 			provider_id BIGINT NOT NULL,
+			upstream_protocol TEXT NOT NULL DEFAULT 'auto',
 			upstream_model TEXT NOT NULL,
 			enabled INTEGER NOT NULL DEFAULT 1,
 			priority INTEGER NOT NULL DEFAULT 0,
@@ -101,6 +106,8 @@ func (s *Store) schemaStatements() []string {
 			FOREIGN KEY (model_id) REFERENCES models(id),
 			FOREIGN KEY (provider_id) REFERENCES providers(id)
 		)`,
+		`ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS upstream_protocol TEXT NOT NULL DEFAULT 'auto'`,
+		`ALTER TABLE model_routes DROP COLUMN IF EXISTS provider_endpoint_id`,
 		`ALTER TABLE model_routes DROP COLUMN IF EXISTS quota_family`,
 		`CREATE TABLE IF NOT EXISTS usage_logs (
 			id BIGSERIAL PRIMARY KEY,
@@ -162,6 +169,7 @@ func (s *Store) schemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_provider_endpoints_provider_id ON provider_endpoints(provider_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_model_routes_model_id ON model_routes(model_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_model_routes_provider_id ON model_routes(provider_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_model_routes_provider_protocol ON model_routes(provider_id, upstream_protocol)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_user_created ON usage_logs(user_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_key_created ON usage_logs(user_api_key_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_stats_hourly_user_bucket ON usage_stats_hourly(user_id, bucket_start)`,

@@ -119,11 +119,18 @@ func TestProviderManagementCRUD(t *testing.T) {
 
 	provider, err := store.CreateProvider(ProviderRecord{
 		Name: "openrouter",
-		Endpoints: []ProviderEndpoint{{
-			Protocol: providerOpenAI,
-			BaseURL:  "https://openrouter.example.test/v1",
-			Enabled:  true,
-		}},
+		Endpoints: []ProviderEndpoint{
+			{
+				Protocol: providerOpenAI,
+				BaseURL:  "https://openrouter.example.test/v1",
+				Enabled:  true,
+			},
+			{
+				Protocol: providerAnthropic,
+				BaseURL:  "https://openrouter.example.test/anthropic",
+				Enabled:  true,
+			},
+		},
 		Enabled: true,
 	})
 	if err != nil {
@@ -149,16 +156,17 @@ func TestProviderManagementCRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 	route, err := store.CreateModelRoute(ModelRoute{
-		ModelID:       model.ID,
-		ProviderID:    provider.ID,
-		UpstreamModel: "mimo/v2.5",
-		Enabled:       true,
-		Weight:        2,
+		ModelID:          model.ID,
+		ProviderID:       provider.ID,
+		UpstreamProtocol: providerAuto,
+		UpstreamModel:    "mimo/v2.5",
+		Enabled:          true,
+		Weight:           2,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if route.ProviderName != "openrouter" {
+	if route.ProviderName != "openrouter" || route.UpstreamProtocol != providerAuto {
 		t.Fatalf("route provider metadata = %+v", route)
 	}
 
@@ -166,8 +174,34 @@ func TestProviderManagementCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || len(targets) != 1 || targets[0].ProviderName != "openrouter" || targets[0].UpstreamModel != "mimo/v2.5" {
+	if !ok || len(targets) != 2 || targets[0].RouteProtocol != providerAuto || targets[1].RouteProtocol != providerAuto || targets[0].UpstreamModel != "mimo/v2.5" {
 		t.Fatalf("resolved targets = %+v, ok=%v", targets, ok)
+	}
+
+	endpointID := provider.Endpoints[0].ID
+	provider.Endpoints[0].BaseURL = "https://openrouter.example.test/proxy/v1"
+	provider, err = store.UpdateProvider(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.Endpoints[0].ID != endpointID {
+		t.Fatalf("provider endpoint id = %d, want %d", provider.Endpoints[0].ID, endpointID)
+	}
+	route, err = store.ModelRoute(route.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.ProviderID != provider.ID || route.UpstreamProtocol != providerAuto {
+		t.Fatalf("route after provider update = %+v", route)
+	}
+	if _, err := store.CreateModelRoute(ModelRoute{
+		ModelID:          model.ID,
+		ProviderID:       provider.ID,
+		UpstreamProtocol: providerGemini,
+		UpstreamModel:    "unsupported",
+		Enabled:          true,
+	}); err == nil {
+		t.Fatal("expected unsupported provider protocol to be rejected")
 	}
 
 	if err := store.DeleteProvider(provider.ID); err != nil {
@@ -206,11 +240,12 @@ func TestProviderEndpointDisabledIsPreservedAndExcludedFromRoutes(t *testing.T) 
 		t.Fatal(err)
 	}
 	if _, err := store.CreateModelRoute(ModelRoute{
-		ModelID:       model.ID,
-		ProviderID:    provider.ID,
-		UpstreamModel: "upstream-model",
-		Enabled:       true,
-		Weight:        1,
+		ModelID:          model.ID,
+		ProviderID:       provider.ID,
+		UpstreamProtocol: providerOpenAI,
+		UpstreamModel:    "upstream-model",
+		Enabled:          true,
+		Weight:           1,
 	}); err != nil {
 		t.Fatal(err)
 	}

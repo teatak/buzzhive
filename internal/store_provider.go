@@ -154,19 +154,70 @@ func (s *Store) hydrateProviderEndpoints(providers []ProviderRecord) ([]Provider
 }
 
 func (s *Store) replaceProviderEndpoints(providerID int64, endpoints []ProviderEndpoint) error {
-	if _, err := s.exec(`DELETE FROM provider_endpoints WHERE provider_id = ?`, providerID); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(s.rebind(`SELECT id FROM provider_endpoints WHERE provider_id = ?`), providerID)
+	if err != nil {
+		return err
+	}
+	existing := make(map[int64]bool)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		existing[id] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	kept := make(map[int64]bool)
+	for _, endpoint := range endpoints {
+		if endpoint.ID == 0 {
+			continue
+		}
+		if !existing[endpoint.ID] {
+			return errors.New("provider endpoint not found")
+		}
+		kept[endpoint.ID] = true
+	}
+	for id := range existing {
+		if kept[id] {
+			continue
+		}
+		if _, err := tx.Exec(s.rebind(`DELETE FROM provider_endpoints WHERE id = ? AND provider_id = ?`), id, providerID); err != nil {
+			return err
+		}
+	}
+
 	now := storeNow()
 	for _, endpoint := range endpoints {
-		if _, err := s.exec(
-			`INSERT INTO provider_endpoints (provider_id, protocol, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			providerID, endpoint.Protocol, endpoint.BaseURL, boolInt(endpoint.Enabled), now, now,
+		if endpoint.ID == 0 {
+			if _, err := tx.Exec(
+				s.rebind(`INSERT INTO provider_endpoints (provider_id, protocol, base_url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`),
+				providerID, endpoint.Protocol, endpoint.BaseURL, boolInt(endpoint.Enabled), now, now,
+			); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.Exec(
+			s.rebind(`UPDATE provider_endpoints SET protocol = ?, base_url = ?, enabled = ?, updated_at = ? WHERE id = ? AND provider_id = ?`),
+			endpoint.Protocol, endpoint.BaseURL, boolInt(endpoint.Enabled), now, endpoint.ID, providerID,
 		); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) RuntimeProviderAPIKeys() ([]APIKey, error) {
@@ -242,13 +293,16 @@ func (s *Store) ResolveModelRoutes(publicModel string) ([]RouteTarget, bool, err
 			p.name,
 			pe.id,
 			pe.protocol,
+			mr.upstream_protocol,
 			mr.upstream_model,
 			mr.priority,
 			mr.weight
 		FROM models m
 		JOIN model_routes mr ON mr.model_id = m.id
 		JOIN providers p ON p.id = mr.provider_id
-		JOIN provider_endpoints pe ON pe.provider_id = p.id
+		JOIN provider_endpoints pe
+			ON pe.provider_id = p.id
+			AND (mr.upstream_protocol = 'auto' OR pe.protocol = mr.upstream_protocol)
 		WHERE m.name = ?
 			AND m.enabled = 1
 			AND mr.enabled = 1
@@ -274,6 +328,7 @@ func (s *Store) ResolveModelRoutes(publicModel string) ([]RouteTarget, bool, err
 			&target.ProviderName,
 			&target.ProviderEndpointID,
 			&target.ProviderType,
+			&target.RouteProtocol,
 			&target.UpstreamModel,
 			&target.Priority,
 			&target.Weight,

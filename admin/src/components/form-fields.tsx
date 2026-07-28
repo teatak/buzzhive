@@ -1,6 +1,6 @@
 import { useId, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
 import { CircleHelp } from "lucide-react";
-import { Field, FieldLabel } from "./ui/field";
+import { Field, FieldLabel, FieldTitle } from "./ui/field";
 import { Input } from "./ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Textarea } from "./ui/textarea";
@@ -14,12 +14,20 @@ type SelectOption = {
 
 export function LabelWithTip(props: { htmlFor?: string; label: string; tip?: string }) {
   return (
-    <FieldLabel htmlFor={props.htmlFor} className="inline-flex items-center gap-1.5">
-      {props.label}
+    <div className="flex w-fit items-center gap-1.5">
+      {props.htmlFor
+        ? <FieldLabel htmlFor={props.htmlFor}>{props.label}</FieldLabel>
+        : <FieldTitle>{props.label}</FieldTitle>}
       {props.tip && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <button type="button" tabIndex={-1} className="inline-flex text-muted-foreground hover:text-foreground" aria-label={props.tip}>
+            <button
+              type="button"
+              tabIndex={-1}
+              className="inline-flex text-muted-foreground hover:text-foreground"
+              aria-label={props.tip}
+              onPointerDown={(event) => event.preventDefault()}
+            >
               <CircleHelp className="size-3.5" />
             </button>
           </TooltipTrigger>
@@ -28,7 +36,7 @@ export function LabelWithTip(props: { htmlFor?: string; label: string; tip?: str
           </TooltipContent>
         </Tooltip>
       )}
-    </FieldLabel>
+    </div>
   );
 }
 
@@ -70,11 +78,13 @@ export function FormNumberField(props: { label: string; tip?: string; value: num
 }
 
 export function FormSelectField(props: { label: string; tip?: string; value: string; options: SelectOption[]; onChange: (value: string) => void }) {
+  const id = useId();
+
   return (
     <Field>
-      <LabelWithTip label={props.label} tip={props.tip} />
+      <LabelWithTip htmlFor={id} label={props.label} tip={props.tip} />
       <Select value={props.value} onValueChange={props.onChange}>
-        <SelectTrigger><SelectValue /></SelectTrigger>
+        <SelectTrigger id={id}><SelectValue /></SelectTrigger>
         <SelectContent>
           {props.options.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
         </SelectContent>

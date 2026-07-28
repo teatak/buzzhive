@@ -197,6 +197,7 @@ func (s *Server) prepareCanonicalProviderRequest(
 	var payload any
 	switch target.ProviderType {
 	case providerOpenAI:
+		mapReasoningBudgetToOpenAIEffort(targetReq.Reasoning)
 		converted, err := protocol.CanonicalToOpenAIChatRequest(targetReq)
 		if err != nil {
 			return ProviderRequest{}, err
@@ -204,6 +205,7 @@ func (s *Server) prepareCanonicalProviderRequest(
 		request.Path = "/v1/chat/completions"
 		payload = converted
 	case providerOpenAIResponses:
+		mapReasoningBudgetToOpenAIEffort(targetReq.Reasoning)
 		converted, err := protocol.CanonicalToOpenAIResponsesRequest(targetReq)
 		if err != nil {
 			return ProviderRequest{}, err
@@ -253,6 +255,27 @@ func (s *Server) prepareCanonicalProviderRequest(
 	}
 	request.Body = body
 	return request, nil
+}
+
+func mapReasoningBudgetToOpenAIEffort(reasoning *protocol.CanonicalReasoning) {
+	if reasoning == nil || reasoning.BudgetTokens == nil {
+		return
+	}
+	budget := *reasoning.BudgetTokens
+	reasoning.BudgetTokens = nil
+	if strings.TrimSpace(reasoning.Effort) != "" || budget <= 0 {
+		return
+	}
+	switch {
+	case budget <= 128:
+		reasoning.Effort = "minimal"
+	case budget <= 1024:
+		reasoning.Effort = "low"
+	case budget <= 8192:
+		reasoning.Effort = "medium"
+	default:
+		reasoning.Effort = "high"
+	}
 }
 
 func cloneCanonicalRequest(req protocol.CanonicalRequest) protocol.CanonicalRequest {
@@ -484,14 +507,15 @@ func (s *Server) streamCanonicalResult(
 		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(http.StatusOK)
 		failed := false
+		encoder := newGeminiStreamEncoder(w, flusher)
 		usage, err := read(func(event protocol.CanonicalStreamEvent) {
 			if event.Type == protocol.CanonicalStreamError {
 				failed = true
 			}
-			writeGeminiStreamEvent(w, flusher, event)
+			encoder.writeEvent(event)
 		})
 		if err != nil && !failed {
-			writeGeminiStreamEvent(w, flusher, canonicalStreamReadError(err))
+			encoder.writeEvent(canonicalStreamReadError(err))
 		}
 		return tokenUsageFromCanonical(usage), err
 	default:

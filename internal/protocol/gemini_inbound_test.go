@@ -102,6 +102,136 @@ func TestGeminiGenerateToCanonicalRequest(t *testing.T) {
 	}
 }
 
+func TestGeminiGenerateRequestAcceptsSystemInstructionJSONNames(t *testing.T) {
+	for _, name := range []string{"system_instruction", "systemInstruction"} {
+		t.Run(name, func(t *testing.T) {
+			var req GeminiGenerateRequest
+			body := `{"` + name + `":{"parts":[{"text":"be brief"}]},"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`
+			if err := json.Unmarshal([]byte(body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.SystemInstruction == nil ||
+				len(req.SystemInstruction.Parts) != 1 ||
+				req.SystemInstruction.Parts[0].Text != "be brief" {
+				t.Fatalf("system instruction = %+v", req.SystemInstruction)
+			}
+		})
+	}
+}
+
+func TestGeminiGenerateToCanonicalRequestCoalescesStreamedTextParts(t *testing.T) {
+	req, err := GeminiGenerateToCanonicalRequest(GeminiGenerateRequest{
+		Contents: []GeminiContent{{
+			Role: "model",
+			Parts: []GeminiPart{
+				{Text: "看起来"},
+				{Text: "当前"},
+				{Text: "模型"},
+				{Text: "think", Thought: true},
+				{Text: "ing", Thought: true},
+			},
+		}},
+	}, "gemini-model", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(req.Messages) != 1 || len(req.Messages[0].Parts) != 2 {
+		t.Fatalf("messages = %+v", req.Messages)
+	}
+	if req.Messages[0].Parts[0].Type != "text" || req.Messages[0].Parts[0].Text != "看起来当前模型" {
+		t.Fatalf("text part = %+v", req.Messages[0].Parts[0])
+	}
+	if req.Messages[0].Parts[1].Type != "reasoning" || req.Messages[0].Parts[1].Text != "thinking" {
+		t.Fatalf("reasoning part = %+v", req.Messages[0].Parts[1])
+	}
+
+	openAI, err := CanonicalToOpenAIChatRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(openAI.Messages) != 1 ||
+		string(openAI.Messages[0].Content) != `"看起来当前模型"` ||
+		openAI.Messages[0].ReasoningContent != "thinking" {
+		t.Fatalf("OpenAI message = %+v", openAI.Messages)
+	}
+}
+
+func TestGeminiGenerateToCanonicalRequestAcceptsThinkingBudget(t *testing.T) {
+	includeThoughts := true
+	dynamicBudget := -1
+	req, err := GeminiGenerateToCanonicalRequest(GeminiGenerateRequest{
+		Contents: []GeminiContent{{
+			Role:  "user",
+			Parts: []GeminiPart{{Text: "hi"}},
+		}},
+		GenerationConfig: &GeminiGenerationConfig{
+			ThinkingConfig: &GeminiThinkingConfig{
+				ThinkingBudget:  &dynamicBudget,
+				IncludeThoughts: &includeThoughts,
+			},
+		},
+	}, "public-model", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Reasoning == nil ||
+		req.Reasoning.BudgetTokens != nil ||
+		req.Reasoning.IncludeThoughts == nil ||
+		!*req.Reasoning.IncludeThoughts {
+		t.Fatalf("dynamic reasoning = %+v", req.Reasoning)
+	}
+
+	explicitBudget := 4096
+	req, err = GeminiGenerateToCanonicalRequest(GeminiGenerateRequest{
+		Contents: []GeminiContent{{
+			Role:  "user",
+			Parts: []GeminiPart{{Text: "hi"}},
+		}},
+		GenerationConfig: &GeminiGenerationConfig{
+			ThinkingConfig: &GeminiThinkingConfig{ThinkingBudget: &explicitBudget},
+		},
+	}, "public-model", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Reasoning == nil ||
+		req.Reasoning.BudgetTokens == nil ||
+		*req.Reasoning.BudgetTokens != explicitBudget {
+		t.Fatalf("explicit reasoning = %+v", req.Reasoning)
+	}
+}
+
+func TestGeminiGenerateToCanonicalRequestRejectsMixedThinkingControls(t *testing.T) {
+	budget := 1024
+	_, err := GeminiGenerateToCanonicalRequest(GeminiGenerateRequest{
+		Contents: []GeminiContent{{
+			Role:  "user",
+			Parts: []GeminiPart{{Text: "hi"}},
+		}},
+		GenerationConfig: &GeminiGenerationConfig{
+			ThinkingConfig: &GeminiThinkingConfig{
+				ThinkingLevel:  "LOW",
+				ThinkingBudget: &budget,
+			},
+		},
+	}, "public-model", false)
+	if err == nil {
+		t.Fatal("expected mixed thinking controls to fail")
+	}
+}
+
+func TestGeminiGenerateRequestRejectsDuplicateSystemInstructionNames(t *testing.T) {
+	var req GeminiGenerateRequest
+	err := json.Unmarshal([]byte(`{
+		"system_instruction":{"parts":[{"text":"one"}]},
+		"systemInstruction":{"parts":[{"text":"two"}]},
+		"contents":[{"role":"user","parts":[{"text":"hi"}]}]
+	}`), &req)
+	if err == nil {
+		t.Fatal("expected duplicate system instruction error")
+	}
+}
+
 func TestGeminiGenerateRejectsUnmatchedFunctionResponse(t *testing.T) {
 	_, err := GeminiGenerateToCanonicalRequest(GeminiGenerateRequest{
 		Contents: []GeminiContent{{

@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	providerAuto            = "auto"
 	providerGemini          = "gemini"
 	providerOpenAI          = "openai"
 	providerOpenAIResponses = "openai-responses"
@@ -151,6 +152,11 @@ func (s *Server) selectRouteTargets(publicModel string, targets []RouteTarget, p
 	for _, target := range targets {
 		targetRank, supported := rank[target.ProviderType]
 		if !supported {
+			continue
+		}
+		if target.RouteProtocol != providerAuto {
+			selected[target.ID] = target
+			order = append(order, target.ID)
 			continue
 		}
 		currentRank, exists := selectedRank[target.ID]
@@ -364,8 +370,8 @@ func providerRequestPath(basePath, requestPath string) string {
 	if requestPath == "" || requestPath == "/" {
 		return basePath
 	}
-	suffix := requestPath
-	if strings.HasPrefix(suffix, "/v1/") {
+	suffix := "/" + strings.TrimLeft(requestPath, "/")
+	if strings.HasSuffix(basePath, "/v1") && strings.HasPrefix(suffix, "/v1/") {
 		suffix = strings.TrimPrefix(suffix, "/v1")
 	}
 	return basePath + suffix

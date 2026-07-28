@@ -23,8 +23,7 @@ export type ProviderEndpoint = {
 export type ProviderPreset = {
   id: string;
   name: string;
-  protocols: string[];
-  base_url: string;
+  endpoints: Array<Pick<ProviderEndpoint, "protocol" | "base_url">>;
   description: string;
 };
 
@@ -77,6 +76,7 @@ export type ModelRoute = {
   model_id: number;
   provider_id: number;
   provider_name?: string;
+  upstream_protocol: string;
   upstream_model: string;
   body_override?: string;
   enabled: boolean;

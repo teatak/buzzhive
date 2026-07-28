@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,37 @@ type GeminiGenerateRequest struct {
 	Tools             []GeminiTool            `json:"tools,omitempty"`
 	ToolConfig        *GeminiToolConfig       `json:"toolConfig,omitempty"`
 	GenerationConfig  *GeminiGenerationConfig `json:"generationConfig,omitempty"`
+}
+
+func (r *GeminiGenerateRequest) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Contents               []GeminiContent         `json:"contents"`
+		SystemInstruction      *GeminiContent          `json:"systemInstruction,omitempty"`
+		SystemInstructionSnake *GeminiContent          `json:"system_instruction,omitempty"`
+		Tools                  []GeminiTool            `json:"tools,omitempty"`
+		ToolConfig             *GeminiToolConfig       `json:"toolConfig,omitempty"`
+		GenerationConfig       *GeminiGenerationConfig `json:"generationConfig,omitempty"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&wire); err != nil {
+		return err
+	}
+	if wire.SystemInstruction != nil && wire.SystemInstructionSnake != nil {
+		return errors.New("systemInstruction and system_instruction are mutually exclusive")
+	}
+	systemInstruction := wire.SystemInstruction
+	if systemInstruction == nil {
+		systemInstruction = wire.SystemInstructionSnake
+	}
+	*r = GeminiGenerateRequest{
+		Contents:          wire.Contents,
+		SystemInstruction: systemInstruction,
+		Tools:             wire.Tools,
+		ToolConfig:        wire.ToolConfig,
+		GenerationConfig:  wire.GenerationConfig,
+	}
+	return nil
 }
 
 type GeminiContent struct {
@@ -107,6 +139,7 @@ type GeminiGenerationConfig struct {
 
 type GeminiThinkingConfig struct {
 	ThinkingLevel   string `json:"thinkingLevel,omitempty"`
+	ThinkingBudget  *int   `json:"thinkingBudget,omitempty"`
 	IncludeThoughts *bool  `json:"includeThoughts,omitempty"`
 }
 
@@ -169,10 +202,21 @@ func GeminiGenerateToCanonicalRequest(req GeminiGenerateRequest, model string, s
 		}
 		if req.GenerationConfig.ThinkingConfig != nil {
 			thinking := req.GenerationConfig.ThinkingConfig
-			if strings.TrimSpace(thinking.ThinkingLevel) != "" || thinking.IncludeThoughts != nil {
+			level := strings.TrimSpace(thinking.ThinkingLevel)
+			if level != "" && thinking.ThinkingBudget != nil {
+				return CanonicalRequest{}, errors.New("Gemini thinkingConfig cannot contain both thinkingLevel and thinkingBudget")
+			}
+			if thinking.ThinkingBudget != nil && *thinking.ThinkingBudget < -1 {
+				return CanonicalRequest{}, errors.New("Gemini thinkingBudget must be -1 or greater")
+			}
+			if level != "" || thinking.ThinkingBudget != nil || thinking.IncludeThoughts != nil {
 				out.Reasoning = &CanonicalReasoning{
-					Effort:          thinking.ThinkingLevel,
+					Effort:          level,
 					IncludeThoughts: thinking.IncludeThoughts,
+				}
+				if thinking.ThinkingBudget != nil && *thinking.ThinkingBudget >= 0 {
+					budget := *thinking.ThinkingBudget
+					out.Reasoning.BudgetTokens = &budget
 				}
 			}
 		}
@@ -428,11 +472,20 @@ func geminiPartsToCanonical(parts []GeminiPart, messageIndex int, toolCalls *gem
 			if part.Thought {
 				partType = "reasoning"
 			}
-			out = append(out, CanonicalPart{
+			canonicalPart := CanonicalPart{
 				Type:      partType,
 				Text:      part.Text,
 				Signature: part.ThoughtSignature,
-			})
+			}
+			last := len(out) - 1
+			if last >= 0 &&
+				out[last].Type == canonicalPart.Type &&
+				out[last].Signature == "" &&
+				canonicalPart.Signature == "" {
+				out[last].Text += canonicalPart.Text
+				continue
+			}
+			out = append(out, canonicalPart)
 		default:
 			return nil, errors.New("unsupported empty Gemini part")
 		}

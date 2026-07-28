@@ -2,6 +2,7 @@ package buzzhive
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 )
 
@@ -66,6 +67,101 @@ func TestEnsureSchemaDropsUnusedProviderColumns(t *testing.T) {
 		if postgresColumnExists(t, store.db, "providers", column) {
 			t.Fatalf("providers.%s should not exist", column)
 		}
+	}
+}
+
+func TestModelRoutesStoreProviderProtocolPolicy(t *testing.T) {
+	store := openTestStore(t)
+
+	if !postgresColumnExists(t, store.db, "model_routes", "provider_id") {
+		t.Fatal("model_routes.provider_id should exist")
+	}
+	if !postgresColumnExists(t, store.db, "model_routes", "upstream_protocol") {
+		t.Fatal("model_routes.upstream_protocol should exist")
+	}
+	if postgresColumnExists(t, store.db, "model_routes", "provider_endpoint_id") {
+		t.Fatal("model_routes.provider_endpoint_id should not exist")
+	}
+	dataType, nullable, defaultExpr := postgresColumnInfo(t, store.db, "model_routes", "upstream_protocol")
+	if dataType != "text" || nullable != "NO" || !strings.Contains(defaultExpr, "auto") {
+		t.Fatalf("model_routes.upstream_protocol = type %q nullable %q default %q", dataType, nullable, defaultExpr)
+	}
+}
+
+func TestEnsureSchemaUpgradesPublishedRoutesWithoutLosingAccounts(t *testing.T) {
+	store := openTestStoreWithSetup(t, func(db *sql.DB) {
+		_, err := db.Exec(`
+			CREATE TABLE users (
+				id BIGSERIAL PRIMARY KEY,
+				username TEXT NOT NULL UNIQUE,
+				password_hash TEXT NOT NULL,
+				role TEXT NOT NULL DEFAULT 'user',
+				valid INTEGER NOT NULL DEFAULT 1,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+			);
+			CREATE TABLE providers (
+				id BIGSERIAL PRIMARY KEY,
+				name TEXT NOT NULL UNIQUE,
+				preset_id TEXT NOT NULL DEFAULT '',
+				enabled INTEGER NOT NULL DEFAULT 1,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+			);
+			CREATE TABLE models (
+				id BIGSERIAL PRIMARY KEY,
+				name TEXT NOT NULL UNIQUE,
+				display_name TEXT NOT NULL DEFAULT '',
+				description TEXT NOT NULL DEFAULT '',
+				context_window BIGINT NOT NULL DEFAULT 0,
+				max_input_tokens BIGINT NOT NULL DEFAULT 0,
+				max_output_tokens BIGINT NOT NULL DEFAULT 0,
+				capabilities TEXT NOT NULL DEFAULT '{}',
+				selection_policy TEXT NOT NULL DEFAULT 'round_robin',
+				enabled INTEGER NOT NULL DEFAULT 1,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+			);
+			CREATE TABLE model_routes (
+				id BIGSERIAL PRIMARY KEY,
+				model_id BIGINT NOT NULL REFERENCES models(id),
+				provider_id BIGINT NOT NULL REFERENCES providers(id),
+				upstream_model TEXT NOT NULL,
+				enabled INTEGER NOT NULL DEFAULT 1,
+				priority INTEGER NOT NULL DEFAULT 0,
+				weight INTEGER NOT NULL DEFAULT 1,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+			);
+			INSERT INTO users (username, password_hash, role) VALUES ('admin', 'hash-kept', 'admin');
+			INSERT INTO providers (name) VALUES ('published-provider');
+			INSERT INTO models (name) VALUES ('published-model');
+			INSERT INTO model_routes (model_id, provider_id, upstream_model)
+			SELECT m.id, p.id, 'published-upstream'
+			FROM models m, providers p
+			WHERE m.name = 'published-model' AND p.name = 'published-provider';
+		`)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	var passwordHash string
+	if err := store.db.QueryRow(`SELECT password_hash FROM users WHERE username = 'admin'`).Scan(&passwordHash); err != nil {
+		t.Fatal(err)
+	}
+	if passwordHash != "hash-kept" {
+		t.Fatalf("password hash = %q", passwordHash)
+	}
+	var protocol string
+	if err := store.db.QueryRow(`SELECT upstream_protocol FROM model_routes WHERE upstream_model = 'published-upstream'`).Scan(&protocol); err != nil {
+		t.Fatal(err)
+	}
+	if protocol != providerAuto {
+		t.Fatalf("upstream protocol = %q, want %q", protocol, providerAuto)
+	}
+	if err := store.EnsureSchema(); err != nil {
+		t.Fatalf("second EnsureSchema: %v", err)
 	}
 }
 

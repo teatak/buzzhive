@@ -39,7 +39,7 @@ func createRouteTestServer(t *testing.T, proto string, baseURL string, publicMod
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateModelRoute(ModelRoute{ModelID: model.ID, ProviderID: provider.ID, UpstreamModel: upstreamModel, Enabled: true, Weight: 1}); err != nil {
+	if _, err := store.CreateModelRoute(ModelRoute{ModelID: model.ID, ProviderID: provider.ID, UpstreamProtocol: proto, UpstreamModel: upstreamModel, Enabled: true, Weight: 1}); err != nil {
 		t.Fatal(err)
 	}
 	providerRecords, err := store.EnabledProviders()
@@ -337,8 +337,12 @@ func TestGeminiRoutesToOpenAIChat(t *testing.T) {
 	srv, store := createRouteTestServer(t, providerOpenAI, upstream.URL+"/v1", "gemini-public-chat", "gpt-upstream", "sk-secret", upstream.Client())
 	defer store.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-public-chat:generateContent", strings.NewReader(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`))
-	req.Header.Set("Authorization", "Bearer bh_valid")
+	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-public-chat:generateContent", strings.NewReader(`{
+		"system_instruction":{"parts":[{"text":"be brief"}]},
+		"contents":[{"role":"user","parts":[{"text":"hi"}]}],
+		"generationConfig":{"thinkingConfig":{"thinkingBudget":-1,"includeThoughts":true}}
+	}`))
+	req.Header.Set("x-goog-api-key", "bh_valid")
 	rr := httptest.NewRecorder()
 
 	srv.ServeHTTP(rr, req)
@@ -349,7 +353,11 @@ func TestGeminiRoutesToOpenAIChat(t *testing.T) {
 	if upstreamPath != "/v1/chat/completions" {
 		t.Fatalf("upstream path = %q", upstreamPath)
 	}
-	if upstreamBody.Model != "gpt-upstream" || len(upstreamBody.Messages) != 1 {
+	if upstreamBody.Model != "gpt-upstream" ||
+		len(upstreamBody.Messages) != 2 ||
+		upstreamBody.Messages[0].Role != "system" ||
+		string(upstreamBody.Messages[0].Content) != `"be brief"` ||
+		upstreamBody.ReasoningEffort != nil {
 		t.Fatalf("upstream body = %+v", upstreamBody)
 	}
 	var got protocol.GeminiGenerateResponse
@@ -358,6 +366,103 @@ func TestGeminiRoutesToOpenAIChat(t *testing.T) {
 	}
 	if got.Candidates[0].Content.Parts[0].Text != "hello chat" || got.UsageMetadata.TotalTokenCount != 5 {
 		t.Fatalf("response = %+v", got)
+	}
+}
+
+func TestGeminiStreamRoutesOpenAIToolCallBackToGemini(t *testing.T) {
+	var upstreamBody protocol.OpenAIChatRequest
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w,
+			`data: {"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1,"model":"gpt-upstream","choices":[{"index":0,"delta":{"role":"assistant"}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1,"model":"gpt-upstream","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_capture","type":"function","function":{"name":"builtin_app_load","arguments":"{\"app_id\":\"cap"}},{"index":1,"id":"call_canvas","type":"function","function":{"name":"builtin_app_load","arguments":"{\"app_id\":"}}]}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1,"model":"gpt-upstream","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ture\"}"}},{"index":1,"function":{"arguments":"\"canvas\"}"}}]}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1,"model":"gpt-upstream","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1,"model":"gpt-upstream","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}}`+"\n\n"+
+				"data: [DONE]\n\n",
+		)
+	}))
+	defer upstream.Close()
+	srv, store := createRouteTestServer(t, providerOpenAI, upstream.URL+"/v1", "gemini-public-tool", "gpt-upstream", "sk-secret", upstream.Client())
+	defer store.Close()
+
+	body := `{
+		"contents":[{"role":"user","parts":[{"text":"take a photo"}]}],
+		"tools":[{"functionDeclarations":[{
+			"name":"builtin_app_load",
+			"description":"Load an application",
+			"parameters":{"type":"object","properties":{"app_id":{"type":"string"}}}
+		}]}],
+		"generationConfig":{"thinkingConfig":{"thinkingBudget":-1,"includeThoughts":true}}
+	}`
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1beta/models/gemini-public-tool:streamGenerateContent?alt=sse",
+		strings.NewReader(body),
+	)
+	req.Header.Set("x-goog-api-key", "bh_valid")
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var upstreamTools []protocol.OpenAITool
+	if err := json.Unmarshal(upstreamBody.Tools, &upstreamTools); err != nil {
+		t.Fatalf("decode upstream tools: %v", err)
+	}
+	if !upstreamBody.Stream ||
+		upstreamBody.ReasoningEffort != nil ||
+		len(upstreamTools) != 1 ||
+		upstreamTools[0].Function.Name != "builtin_app_load" {
+		t.Fatalf("upstream body = %+v", upstreamBody)
+	}
+
+	var gotCalls []*protocol.GeminiFunctionCall
+	gotFinish := ""
+	toolFrameCount := 0
+	for _, event := range decodeSSEEvents(t, rr.Body.String()) {
+		var frame protocol.GeminiGenerateResponse
+		if err := json.Unmarshal(event.Data, &frame); err != nil {
+			t.Fatalf("decode Gemini frame: %v, body = %s", err, rr.Body.String())
+		}
+		for _, candidate := range frame.Candidates {
+			if candidate.FinishReason != "" {
+				gotFinish = candidate.FinishReason
+			}
+			frameCalls := make([]*protocol.GeminiFunctionCall, 0, len(candidate.Content.Parts))
+			for _, part := range candidate.Content.Parts {
+				if part.FunctionCall != nil {
+					frameCalls = append(frameCalls, part.FunctionCall)
+				}
+			}
+			if len(frameCalls) > 0 {
+				toolFrameCount++
+				gotCalls = append(gotCalls, frameCalls...)
+				if candidate.FinishReason != "STOP" {
+					t.Fatalf("tool frame finish reason = %q, body = %s", candidate.FinishReason, rr.Body.String())
+				}
+			}
+		}
+	}
+	if toolFrameCount != 1 || len(gotCalls) != 2 {
+		t.Fatalf("tool frames = %d, function calls = %+v, body = %s", toolFrameCount, gotCalls, rr.Body.String())
+	}
+	if gotCalls[0].ID != "call_capture" ||
+		gotCalls[0].Name != "builtin_app_load" ||
+		string(gotCalls[0].Args) != `{"app_id":"capture"}` {
+		t.Fatalf("first function call = %+v, body = %s", gotCalls[0], rr.Body.String())
+	}
+	if gotCalls[1].ID != "call_canvas" ||
+		gotCalls[1].Name != "builtin_app_load" ||
+		string(gotCalls[1].Args) != `{"app_id":"canvas"}` {
+		t.Fatalf("second function call = %+v, body = %s", gotCalls[1], rr.Body.String())
+	}
+	if gotFinish != "STOP" {
+		t.Fatalf("finish reason = %q, body = %s", gotFinish, rr.Body.String())
 	}
 }
 

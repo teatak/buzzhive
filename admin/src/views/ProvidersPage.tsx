@@ -700,11 +700,17 @@ export function ProvidersPage(props: {
               <div className="rounded-md border p-3 text-sm">
                 <div className="flex items-center gap-2">
                   <strong>{providerPresetDisplayName(selectedPreset, t)}</strong>
-                  <Badge variant="outline">{selectedPreset.protocols?.join(", ")}</Badge>
                   {selectedPresetExists && <Badge variant="outline">{t("providers.already_exists")}</Badge>}
                 </div>
                 <div className="mt-2 text-muted-foreground">{selectedPreset.description}</div>
-                <div className="mt-3 mono text-xs text-muted-foreground [overflow-wrap:anywhere]">{selectedPreset.base_url || "-"}</div>
+                <div className="mt-3 grid gap-2">
+                  {selectedPreset.endpoints.map((endpoint) => (
+                    <div key={endpoint.protocol} className="flex min-w-0 items-center gap-2">
+                      <Badge variant="outline">{providerProtocolLabel(endpoint.protocol, t)}</Badge>
+                      <span className="min-w-0 mono text-xs text-muted-foreground [overflow-wrap:anywhere]">{endpoint.base_url}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             <FormTextareaField label={t("provider_keys.optional_keys")} className="mono min-h-28" value={presetKeySecret} onChange={setPresetKeySecret} />

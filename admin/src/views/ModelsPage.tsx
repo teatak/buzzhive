@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import {
   ArrowLeft,
   Braces,
@@ -81,6 +81,7 @@ const routeDefaults = {
   id: 0,
   model_id: 0,
   provider_id: 0,
+  upstream_protocol: "auto",
   upstream_model: "",
   enabled: true,
   priority: 0,
@@ -89,6 +90,7 @@ const routeDefaults = {
 
 export function ModelsPage(props: ModelsPageProps) {
   const { t } = useLocale();
+  const upstreamModelID = useId();
   const [modelOpen, setModelOpen] = useState(false);
   const [presetOpen, setPresetOpen] = useState(false);
   const [routeOpen, setRouteOpen] = useState(false);
@@ -114,6 +116,8 @@ export function ModelsPage(props: ModelsPageProps) {
   const selectedPresets = props.modelPresets.filter((preset) => presetIDs.includes(preset.id));
   const selectedPresetCount = selectedPresets.length;
   const selectedRouteModel = props.models.find((model) => model.id === routeForm.model_id);
+  const selectedRouteProvider = props.providers.find((provider) => provider.id === routeForm.provider_id);
+  const selectedRouteEndpoints = selectedRouteProvider?.endpoints ?? [];
   const selectedModel = selectedModelID == null ? null : props.models.find((model) => model.id === selectedModelID) ?? null;
   const selectedModelRoutes = selectedModel ? routesByModel.get(selectedModel.id) ?? [] : [];
 
@@ -165,7 +169,8 @@ export function ModelsPage(props: ModelsPageProps) {
   }
 
   function openRoute(modelID: number, route?: ModelRoute) {
-    const providerID = props.providers[0]?.id ?? 0;
+    const provider = props.providers[0];
+    const providerID = provider?.id ?? 0;
     const model = props.models.find((item) => item.id === modelID);
     const upstreamModel = model?.name ?? "";
     setRouteForm(route ? { ...route } : {
@@ -281,6 +286,7 @@ export function ModelsPage(props: ModelsPageProps) {
                   <TableHeader>
                     <TableRow>
                       <TableHead>{t("models.provider")}</TableHead>
+                      <TableHead>{t("models.upstream_protocol")}</TableHead>
                       <TableHead>{t("models.upstream_model")}</TableHead>
                       <TableHead className="right">{t("models.priority")}</TableHead>
                       <TableHead className="right">{t("models.weight")}</TableHead>
@@ -292,6 +298,7 @@ export function ModelsPage(props: ModelsPageProps) {
                     {selectedModelRoutes.map((route) => (
                       <TableRow key={route.id}>
                         <TableCell className="mono">{route.provider_name ?? providerName.get(route.provider_id) ?? route.provider_id}</TableCell>
+                        <TableCell className="mono">{route.upstream_protocol === "auto" ? t("models.protocol_auto") : providerProtocolLabel(route.upstream_protocol)}</TableCell>
                         <TableCell className="mono">{route.upstream_model}</TableCell>
                         <TableCell className="right mono">{route.priority}</TableCell>
                         <TableCell className="right mono">{route.weight}</TableCell>
@@ -497,18 +504,33 @@ export function ModelsPage(props: ModelsPageProps) {
               options={props.providers.map((provider) => ({ value: String(provider.id), label: provider.name }))}
               onChange={(value) => {
                 const provider_id = Number(value);
-                setRouteForm({ ...routeForm, provider_id });
+                setRouteForm({ ...routeForm, provider_id, upstream_protocol: "auto" });
               }}
             />
+            <FormSelectField
+              label={t("models.upstream_protocol")}
+              tip={t("models.tip_upstream_protocol")}
+              value={routeForm.upstream_protocol}
+              options={[
+                { value: "auto", label: t("models.protocol_auto") },
+                ...selectedRouteEndpoints.map((endpoint) => ({
+                  value: endpoint.protocol,
+                  label: `${providerProtocolLabel(endpoint.protocol)}${endpoint.enabled ? "" : ` · ${t("common.disabled")}`}`,
+                })),
+              ]}
+              onChange={(value) => setRouteForm({ ...routeForm, upstream_protocol: value })}
+            />
             <Field>
-              <LabelWithTip label={t("models.upstream_model")} tip={t("models.tip_upstream_model")} />
+              <LabelWithTip htmlFor={upstreamModelID} label={t("models.upstream_model")} tip={t("models.tip_upstream_model")} />
               <div className="flex items-center gap-2">
                 <Input
+                  id={upstreamModelID}
                   value={routeForm.upstream_model}
                   onChange={(e) => setRouteForm({ ...routeForm, upstream_model: e.target.value })}
                 />
                 <UpstreamModelFetcher 
                   providerId={routeForm.provider_id} 
+                  protocol={routeForm.upstream_protocol}
                   token={props.token}
                   onSelect={(id) => setRouteForm({ ...routeForm, upstream_model: id })} 
                 />
@@ -766,6 +788,7 @@ function EnabledSelect(props: { value: boolean; onChange: (value: boolean) => vo
 }
 
 function TokenNumberField(props: { label: string; value: number; onChange: (value: number) => void }) {
+  const id = useId();
   const [draft, setDraft] = useState(formatTokenDraft(props.value));
 
   useEffect(() => {
@@ -783,9 +806,11 @@ function TokenNumberField(props: { label: string; value: number; onChange: (valu
   }
 
   return (
-    <FormStaticField label={props.label}>
+    <Field>
+      <LabelWithTip htmlFor={id} label={props.label} />
       <div className="flex min-w-0 items-center gap-2">
         <Input
+          id={id}
           className="min-w-0 flex-1"
           inputMode="numeric"
           value={draft}
@@ -801,12 +826,13 @@ function TokenNumberField(props: { label: string; value: number; onChange: (valu
           {formatTokenHint(parseTokenNumber(draft) ?? props.value)}
         </span>
       </div>
-    </FormStaticField>
+    </Field>
   );
 }
 
 function CapabilityField(props: { value: string; onChange: (value: string) => void }) {
   const { t } = useLocale();
+  const idPrefix = useId();
   const capabilities = parseCapabilities(props.value);
 
   function setCapability(name: string, enabled: boolean) {
@@ -816,12 +842,15 @@ function CapabilityField(props: { value: string; onChange: (value: string) => vo
   return (
     <FormStaticField label={t("models.capabilities")}>
       <div className="grid grid-cols-2 gap-2 rounded-md border bg-muted/20 p-2 sm:grid-cols-4">
-        {capabilityOptions.map((name) => (
-          <label key={name} className="flex items-center gap-3 rounded-md px-2 py-1.5 text-sm hover:bg-muted">
-            <Checkbox checked={Boolean(capabilities[name])} onCheckedChange={(checked) => setCapability(name, checked === true)} />
-            <span>{t(`models.capability_${name}`)}</span>
-          </label>
-        ))}
+        {capabilityOptions.map((name) => {
+          const id = `${idPrefix}-${name}`;
+          return (
+            <label key={name} htmlFor={id} className="flex items-center gap-3 rounded-md px-2 py-1.5 text-sm hover:bg-muted">
+              <Checkbox id={id} checked={Boolean(capabilities[name])} onCheckedChange={(checked) => setCapability(name, checked === true)} />
+              <span>{t(`models.capability_${name}`)}</span>
+            </label>
+          );
+        })}
       </div>
     </FormStaticField>
   );
@@ -868,15 +897,19 @@ function StatusBadge({ enabled }: { enabled: boolean }) {
     : <Badge variant="secondary">{t("common.disabled")}</Badge>;
 }
 
-function UpstreamModelFetcher({ providerId, token, onSelect }: { providerId: number; token: string; onSelect: (id: string) => void }) {
+function UpstreamModelFetcher({ providerId, protocol, token, onSelect }: { providerId: number; protocol: string; token: string; onSelect: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [models, setModels] = useState<string[]>([]);
 
   useEffect(() => {
-    if (open && models.length === 0) {
+    setModels([]);
+  }, [providerId, protocol]);
+
+  useEffect(() => {
+    if (open && providerId && protocol && models.length === 0) {
       setLoading(true);
-      request(`/admin/api/providers/${providerId}/upstream-models`, token)
+      request(`/admin/api/providers/${providerId}/upstream-models?protocol=${encodeURIComponent(protocol)}`, token)
         .then((res: any) => {
           if (Array.isArray(res)) setModels(res);
           else toast.error("Invalid response format");
@@ -884,7 +917,7 @@ function UpstreamModelFetcher({ providerId, token, onSelect }: { providerId: num
         .catch((err: any) => toast.error(err.message || "Failed to fetch models"))
         .finally(() => setLoading(false));
     }
-  }, [open, providerId, token, models.length]);
+  }, [open, providerId, protocol, token, models.length]);
 
   const [searchQuery, setSearchQuery] = useState("");
   const filteredModels = useMemo(() => {
@@ -900,7 +933,7 @@ function UpstreamModelFetcher({ providerId, token, onSelect }: { providerId: num
           type="button"
           variant="outline" 
           size="icon" 
-          disabled={!providerId}
+          disabled={!providerId || !protocol}
           title="获取上游模型"
         >
           <CloudDownload className="size-4" />
@@ -947,4 +980,19 @@ function UpstreamModelFetcher({ providerId, token, onSelect }: { providerId: num
       </PopoverContent>
     </Popover>
   );
+}
+
+function providerProtocolLabel(protocol: string) {
+  switch (protocol) {
+    case "openai":
+      return "OpenAI";
+    case "openai-responses":
+      return "OpenAI Responses";
+    case "anthropic":
+      return "Anthropic";
+    case "gemini":
+      return "Gemini";
+    default:
+      return protocol;
+  }
 }

@@ -87,6 +87,7 @@ func cleanHeaders(in http.Header) http.Header {
 		"Trailer",
 		"Transfer-Encoding",
 		"Upgrade",
+		"X-Api-Key",
 		"X-Forwarded-For",
 		"X-Goog-Api-Key",
 		"X-Real-Ip",

@@ -73,8 +73,8 @@ func TestAnthropicPassthrough(t *testing.T) {
 	}
 
 	if _, err := store.exec(
-		`INSERT INTO model_routes (model_id, provider_id, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, 1, 0, 1, ?, ?)`,
-		modelID, providerID, "claude-3-5-sonnet-upstream", now, now,
+		`INSERT INTO model_routes (model_id, provider_id, upstream_protocol, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 0, 1, ?, ?)`,
+		modelID, providerID, providerAnthropic, "claude-3-5-sonnet-upstream", now, now,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -161,8 +161,12 @@ func TestAnthropicPassthrough(t *testing.T) {
 func TestAnthropicRoutesToOpenAIChat(t *testing.T) {
 	var upstreamPath string
 	var upstreamBody protocol.OpenAIChatRequest
+	var upstreamAuthorization string
+	var upstreamAPIKey string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamPath = r.URL.Path
+		upstreamAuthorization = r.Header.Get("Authorization")
+		upstreamAPIKey = r.Header.Get("x-api-key")
 		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
 			t.Fatal(err)
 		}
@@ -209,7 +213,7 @@ func TestAnthropicRoutesToOpenAIChat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateModelRoute(ModelRoute{ModelID: model.ID, ProviderID: provider.ID, UpstreamModel: "gpt-upstream", Enabled: true, Weight: 1}); err != nil {
+	if _, err := store.CreateModelRoute(ModelRoute{ModelID: model.ID, ProviderID: provider.ID, UpstreamProtocol: providerOpenAI, UpstreamModel: "gpt-upstream", Enabled: true, Weight: 1}); err != nil {
 		t.Fatal(err)
 	}
 	providerRecords, err := store.EnabledProviders()
@@ -252,7 +256,7 @@ func TestAnthropicRoutesToOpenAIChat(t *testing.T) {
 
 	body := `{"model":"claude-public-chat","system":"be brief","messages":[{"role":"user","content":"hi"}],"max_tokens":64}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer bh_valid")
+	req.Header.Set("x-api-key", "bh_valid")
 	rr := httptest.NewRecorder()
 
 	srv.ServeHTTP(rr, req)
@@ -262,6 +266,9 @@ func TestAnthropicRoutesToOpenAIChat(t *testing.T) {
 	}
 	if upstreamPath != "/v1/chat/completions" {
 		t.Fatalf("upstream path = %q", upstreamPath)
+	}
+	if upstreamAuthorization != "Bearer sk-secret" || upstreamAPIKey != "" {
+		t.Fatalf("upstream auth = %q, x-api-key = %q", upstreamAuthorization, upstreamAPIKey)
 	}
 	if upstreamBody.Model != "gpt-upstream" || upstreamBody.MaxOutputTokens == nil || *upstreamBody.MaxOutputTokens != 64 {
 		t.Fatalf("upstream body = %+v", upstreamBody)

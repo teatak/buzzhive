@@ -786,6 +786,49 @@ func writeGeminiStreamEvent(w io.Writer, flusher http.Flusher, event protocol.Ca
 	writeSSEJSON(w, flusher, "", resp)
 }
 
+type geminiStreamEncoder struct {
+	w         io.Writer
+	flusher   http.Flusher
+	toolCalls []protocol.CanonicalStreamEvent
+}
+
+func newGeminiStreamEncoder(w io.Writer, flusher http.Flusher) *geminiStreamEncoder {
+	return &geminiStreamEncoder{w: w, flusher: flusher}
+}
+
+func (e *geminiStreamEncoder) writeEvent(event protocol.CanonicalStreamEvent) {
+	switch event.Type {
+	case protocol.CanonicalStreamToolCallDone:
+		e.toolCalls = append(e.toolCalls, event)
+		return
+	case protocol.CanonicalStreamResponseDone:
+		if len(e.toolCalls) > 0 {
+			sort.SliceStable(e.toolCalls, func(i, j int) bool {
+				return e.toolCalls[i].Index < e.toolCalls[j].Index
+			})
+			toolCalls := make([]protocol.CanonicalToolCall, 0, len(e.toolCalls))
+			for _, call := range e.toolCalls {
+				toolCalls = append(toolCalls, protocol.CanonicalToolCall{
+					ID:        call.CallID,
+					Name:      call.Name,
+					Arguments: call.Arguments,
+					Signature: call.Signature,
+				})
+			}
+			writeSSEJSON(e.w, e.flusher, "", protocol.CanonicalToGeminiGenerateResponse(
+				protocol.CanonicalResponse{
+					Role:         "assistant",
+					ToolCalls:    toolCalls,
+					FinishReason: event.FinishReason,
+				},
+			))
+			e.toolCalls = nil
+			return
+		}
+	}
+	writeGeminiStreamEvent(e.w, e.flusher, event)
+}
+
 func canonicalStreamReadError(err error) protocol.CanonicalStreamEvent {
 	return protocol.CanonicalStreamEvent{
 		Type: protocol.CanonicalStreamError,

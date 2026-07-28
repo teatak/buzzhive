@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/teatak/cart/v3"
@@ -25,6 +26,32 @@ func (s *Server) handleProviderUpstreamModelsAdmin(c *cart.Context) error {
 		c.JSON(http.StatusBadRequest, cart.H{"error": "provider has no endpoints"})
 		return nil
 	}
+	protocol := normalizeRouteProtocol(c.Request.URL.Query().Get("protocol"))
+	var endpoint ProviderEndpoint
+	if protocol == providerAuto {
+		for _, preferred := range []string{providerOpenAI, providerOpenAIResponses, providerAnthropic, providerGemini} {
+			for _, candidate := range provider.Endpoints {
+				if candidate.Enabled && strings.EqualFold(candidate.Protocol, preferred) {
+					endpoint = candidate
+					break
+				}
+			}
+			if endpoint.ID != 0 {
+				break
+			}
+		}
+	} else {
+		for _, candidate := range provider.Endpoints {
+			if candidate.Enabled && strings.EqualFold(candidate.Protocol, protocol) {
+				endpoint = candidate
+				break
+			}
+		}
+	}
+	if endpoint.ID == 0 {
+		c.JSON(http.StatusBadRequest, cart.H{"error": "provider does not have an enabled endpoint for the selected protocol"})
+		return nil
+	}
 
 	keys, err := s.store.ProviderKeys(providerID, true)
 	if err != nil || len(keys) == 0 {
@@ -32,7 +59,6 @@ func (s *Server) handleProviderUpstreamModelsAdmin(c *cart.Context) error {
 		return nil
 	}
 
-	endpoint := provider.Endpoints[0]
 	var activeKey ProviderKey
 	found := false
 	for _, k := range keys {
@@ -47,7 +73,11 @@ func (s *Server) handleProviderUpstreamModelsAdmin(c *cart.Context) error {
 	}
 
 	baseURL := endpoint.BaseURL
-	url := providerRequestPath(baseURL, "/v1/models")
+	path := "/v1/models"
+	if endpoint.Protocol == providerGemini {
+		path = "/v1beta/models"
+	}
+	url := providerRequestPath(baseURL, path)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -58,9 +88,13 @@ func (s *Server) handleProviderUpstreamModelsAdmin(c *cart.Context) error {
 		return nil
 	}
 
-	if endpoint.Protocol == "anthropic" {
+	if endpoint.Protocol == providerAnthropic {
 		req.Header.Set("x-api-key", activeKey.Secret)
 		req.Header.Set("anthropic-version", "2023-06-01")
+	} else if endpoint.Protocol == providerGemini {
+		query := req.URL.Query()
+		query.Set("key", activeKey.Secret)
+		req.URL.RawQuery = query.Encode()
 	} else {
 		req.Header.Set("Authorization", "Bearer "+activeKey.Secret)
 	}

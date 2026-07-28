@@ -53,11 +53,12 @@ func createGeminiRouteTestStore(t *testing.T, baseURL, publicModel, upstreamMode
 		t.Fatal(err)
 	}
 	if _, err := store.CreateModelRoute(ModelRoute{
-		ModelID:       model.ID,
-		ProviderID:    provider.ID,
-		UpstreamModel: upstreamModel,
-		Enabled:       true,
-		Weight:        1,
+		ModelID:          model.ID,
+		ProviderID:       provider.ID,
+		UpstreamProtocol: providerGemini,
+		UpstreamModel:    upstreamModel,
+		Enabled:          true,
+		Weight:           1,
 	}); err != nil {
 		store.Close()
 		t.Fatal(err)
@@ -1833,8 +1834,8 @@ func TestOpenAIChatUsesModelRouteUpstreamModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.exec(
-		`INSERT INTO model_routes (model_id, provider_id, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, 1, 0, 1, ?, ?)`,
-		modelID, providerID, "gemini-upstream", now, now,
+		`INSERT INTO model_routes (model_id, provider_id, upstream_protocol, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 0, 1, ?, ?)`,
+		modelID, providerID, providerGemini, "gemini-upstream", now, now,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -2086,8 +2087,8 @@ func TestOpenAIChatPassesThroughOpenAICompatibleProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.exec(
-		`INSERT INTO model_routes (model_id, provider_id, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, 1, 0, 1, ?, ?)`,
-		modelID, providerID, "gpt-upstream", now, now,
+		`INSERT INTO model_routes (model_id, provider_id, upstream_protocol, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 0, 1, ?, ?)`,
+		modelID, providerID, providerOpenAI, "gpt-upstream", now, now,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -2226,8 +2227,8 @@ func TestOpenAIResponsesPassesThroughOpenAICompatibleProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.exec(
-		`INSERT INTO model_routes (model_id, provider_id, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, 1, 0, 1, ?, ?)`,
-		modelID, providerID, "openai/gpt-oss-120b", now, now,
+		`INSERT INTO model_routes (model_id, provider_id, upstream_protocol, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 0, 1, ?, ?)`,
+		modelID, providerID, providerOpenAIResponses, "openai/gpt-oss-120b", now, now,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -2359,7 +2360,7 @@ func TestOpenAIResponsesRoutesToOpenAIChat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateModelRoute(ModelRoute{ModelID: model.ID, ProviderID: provider.ID, UpstreamModel: "gpt-upstream", Enabled: true, Weight: 1}); err != nil {
+	if _, err := store.CreateModelRoute(ModelRoute{ModelID: model.ID, ProviderID: provider.ID, UpstreamProtocol: providerOpenAI, UpstreamModel: "gpt-upstream", Enabled: true, Weight: 1}); err != nil {
 		t.Fatal(err)
 	}
 	providerRecords, err := store.EnabledProviders()
@@ -2579,8 +2580,8 @@ func TestOpenAICompatibleStreamPassThroughFlushesChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.exec(
-		`INSERT INTO model_routes (model_id, provider_id, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, 1, 0, 1, ?, ?)`,
-		modelID, providerID, "gpt-upstream", now, now,
+		`INSERT INTO model_routes (model_id, provider_id, upstream_protocol, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 0, 1, ?, ?)`,
+		modelID, providerID, providerOpenAI, "gpt-upstream", now, now,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -2812,8 +2813,8 @@ func TestOpenAIChatSwitchesModelRoutesWhenRouteKeysCooling(t *testing.T) {
 		{"gemini-b"},
 	} {
 		if _, err := store.exec(
-			`INSERT INTO model_routes (model_id, provider_id, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, 1, 0, 1, ?, ?)`,
-			modelID, providerID, target.model, now, now,
+			`INSERT INTO model_routes (model_id, provider_id, upstream_protocol, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 0, 1, ?, ?)`,
+			modelID, providerID, providerGemini, target.model, now, now,
 		); err != nil {
 			t.Fatal(err)
 		}

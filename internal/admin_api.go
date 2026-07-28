@@ -282,6 +282,12 @@ func (s *Server) authenticate(r *http.Request) (AuthToken, bool) {
 	if key := r.URL.Query().Get("key"); key != "" {
 		tokens = append(tokens, strings.TrimSpace(key))
 	}
+	if key := r.Header.Get("x-goog-api-key"); key != "" {
+		tokens = append(tokens, strings.TrimSpace(key))
+	}
+	if key := r.Header.Get("x-api-key"); key != "" {
+		tokens = append(tokens, strings.TrimSpace(key))
+	}
 
 	for _, token := range tokens {
 		user, ok := s.authTokens[token]
@@ -578,13 +584,14 @@ type modelWriteRequest struct {
 }
 
 type modelRouteWriteRequest struct {
-	ID            int64  `json:"id"`
-	ModelID       int64  `json:"model_id"`
-	ProviderID    int64  `json:"provider_id"`
-	UpstreamModel string `json:"upstream_model"`
-	Enabled       *bool  `json:"enabled"`
-	Priority      *int   `json:"priority"`
-	Weight        *int   `json:"weight"`
+	ID               int64  `json:"id"`
+	ModelID          int64  `json:"model_id"`
+	ProviderID       int64  `json:"provider_id"`
+	UpstreamProtocol string `json:"upstream_protocol"`
+	UpstreamModel    string `json:"upstream_model"`
+	Enabled          *bool  `json:"enabled"`
+	Priority         *int   `json:"priority"`
+	Weight           *int   `json:"weight"`
 }
 
 func (s *Server) handleProviders(c *cart.Context) error {
@@ -927,12 +934,13 @@ func (s *Server) handleModelRoutes(c *cart.Context) error {
 			return jsonError(c, http.StatusBadRequest, err)
 		}
 		created, err := s.store.CreateModelRoute(ModelRoute{
-			ModelID:       req.ModelID,
-			ProviderID:    req.ProviderID,
-			UpstreamModel: req.UpstreamModel,
-			Enabled:       boolWithDefault(req.Enabled, true),
-			Priority:      intWithDefault(req.Priority, 0),
-			Weight:        intWithDefault(req.Weight, 1),
+			ModelID:          req.ModelID,
+			ProviderID:       req.ProviderID,
+			UpstreamProtocol: req.UpstreamProtocol,
+			UpstreamModel:    req.UpstreamModel,
+			Enabled:          boolWithDefault(req.Enabled, true),
+			Priority:         intWithDefault(req.Priority, 0),
+			Weight:           intWithDefault(req.Weight, 1),
 		})
 		if err != nil {
 			return jsonError(c, http.StatusBadRequest, err)
@@ -952,6 +960,9 @@ func (s *Server) handleModelRoutes(c *cart.Context) error {
 		}
 		if req.ProviderID != 0 {
 			route.ProviderID = req.ProviderID
+		}
+		if req.UpstreamProtocol != "" {
+			route.UpstreamProtocol = req.UpstreamProtocol
 		}
 		if req.UpstreamModel != "" {
 			route.UpstreamModel = req.UpstreamModel

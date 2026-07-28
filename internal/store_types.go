@@ -133,14 +133,15 @@ type Model struct {
 }
 
 type ModelRoute struct {
-	ID            int64  `json:"id"`
-	ModelID       int64  `json:"model_id"`
-	ProviderID    int64  `json:"provider_id"`
-	UpstreamModel string `json:"upstream_model"`
-	Enabled       bool   `json:"enabled"`
-	Priority      int    `json:"priority"`
-	Weight        int    `json:"weight"`
-	ProviderName  string `json:"provider_name,omitempty"`
+	ID               int64  `json:"id"`
+	ModelID          int64  `json:"model_id"`
+	ProviderID       int64  `json:"provider_id"`
+	ProviderName     string `json:"provider_name,omitempty"`
+	UpstreamProtocol string `json:"upstream_protocol"`
+	UpstreamModel    string `json:"upstream_model"`
+	Enabled          bool   `json:"enabled"`
+	Priority         int    `json:"priority"`
+	Weight           int    `json:"weight"`
 }
 
 type RouteTarget struct {
@@ -152,6 +153,7 @@ type RouteTarget struct {
 	ProviderName       string
 	ProviderEndpointID int64
 	ProviderType       string
+	RouteProtocol      string
 	UpstreamModel      string
 	Priority           int
 	Weight             int

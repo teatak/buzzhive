@@ -130,6 +130,28 @@ func TestPrepareGeminiRequestMapsReasoningPerTargetModel(t *testing.T) {
 	}
 }
 
+func TestMapReasoningBudgetToOpenAIEffort(t *testing.T) {
+	tests := []struct {
+		budget int
+		want   string
+	}{
+		{budget: -1, want: ""},
+		{budget: 0, want: ""},
+		{budget: 128, want: "minimal"},
+		{budget: 1024, want: "low"},
+		{budget: 8192, want: "medium"},
+		{budget: 24576, want: "high"},
+	}
+	for _, tt := range tests {
+		budget := tt.budget
+		reasoning := &protocol.CanonicalReasoning{BudgetTokens: &budget}
+		mapReasoningBudgetToOpenAIEffort(reasoning)
+		if reasoning.BudgetTokens != nil || reasoning.Effort != tt.want {
+			t.Fatalf("budget %d mapped to %+v, want effort %q", tt.budget, reasoning, tt.want)
+		}
+	}
+}
+
 func TestDirectProtocolTargetsPreserveRouteOrder(t *testing.T) {
 	targets := []RouteTarget{
 		{ID: 1, ProviderType: providerAnthropic},

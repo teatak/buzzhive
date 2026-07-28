@@ -380,8 +380,9 @@ func (s *Store) ModelRoutes(modelID int64) ([]ModelRoute, error) {
 		SELECT
 			mr.id,
 			mr.model_id,
-			mr.provider_id,
+			p.id,
 			p.name,
+			mr.upstream_protocol,
 			mr.upstream_model,
 			mr.enabled,
 			mr.priority,
@@ -406,6 +407,7 @@ func (s *Store) ModelRoutes(modelID int64) ([]ModelRoute, error) {
 			&item.ModelID,
 			&item.ProviderID,
 			&item.ProviderName,
+			&item.UpstreamProtocol,
 			&item.UpstreamModel,
 			&enabled,
 			&item.Priority,
@@ -433,13 +435,14 @@ func (s *Store) ModelRoute(id int64) (ModelRoute, error) {
 }
 
 func (s *Store) CreateModelRoute(route ModelRoute) (ModelRoute, error) {
+	route.UpstreamProtocol = normalizeRouteProtocol(route.UpstreamProtocol)
 	if route.ModelID == 0 || route.ProviderID == 0 || route.UpstreamModel == "" {
 		return ModelRoute{}, errors.New("model_id, provider_id and upstream_model are required")
 	}
 	if _, err := s.Model(route.ModelID); err != nil {
 		return ModelRoute{}, err
 	}
-	if _, err := s.Provider(route.ProviderID); err != nil {
+	if err := s.validateProviderRouteProtocol(route.ProviderID, route.UpstreamProtocol); err != nil {
 		return ModelRoute{}, err
 	}
 	if route.Weight == 0 {
@@ -447,8 +450,8 @@ func (s *Store) CreateModelRoute(route ModelRoute) (ModelRoute, error) {
 	}
 	now := storeNow()
 	id, err := s.insertReturningID(
-		`INSERT INTO model_routes (model_id, provider_id, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		route.ModelID, route.ProviderID, route.UpstreamModel, boolInt(route.Enabled), route.Priority, route.Weight, now, now,
+		`INSERT INTO model_routes (model_id, provider_id, upstream_protocol, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		route.ModelID, route.ProviderID, route.UpstreamProtocol, route.UpstreamModel, boolInt(route.Enabled), route.Priority, route.Weight, now, now,
 	)
 	if err != nil {
 		return ModelRoute{}, err
@@ -457,26 +460,55 @@ func (s *Store) CreateModelRoute(route ModelRoute) (ModelRoute, error) {
 }
 
 func (s *Store) UpdateModelRoute(route ModelRoute) (ModelRoute, error) {
+	route.UpstreamProtocol = normalizeRouteProtocol(route.UpstreamProtocol)
 	if route.ID == 0 || route.ModelID == 0 || route.ProviderID == 0 || route.UpstreamModel == "" {
 		return ModelRoute{}, errors.New("id, model_id, provider_id and upstream_model are required")
 	}
 	if _, err := s.Model(route.ModelID); err != nil {
 		return ModelRoute{}, err
 	}
-	if _, err := s.Provider(route.ProviderID); err != nil {
+	if err := s.validateProviderRouteProtocol(route.ProviderID, route.UpstreamProtocol); err != nil {
 		return ModelRoute{}, err
 	}
 	if route.Weight == 0 {
 		route.Weight = 1
 	}
 	_, err := s.exec(
-		`UPDATE model_routes SET model_id = ?, provider_id = ?, upstream_model = ?, enabled = ?, priority = ?, weight = ?, updated_at = ? WHERE id = ?`,
-		route.ModelID, route.ProviderID, route.UpstreamModel, boolInt(route.Enabled), route.Priority, route.Weight, storeNow(), route.ID,
+		`UPDATE model_routes SET model_id = ?, provider_id = ?, upstream_protocol = ?, upstream_model = ?, enabled = ?, priority = ?, weight = ?, updated_at = ? WHERE id = ?`,
+		route.ModelID, route.ProviderID, route.UpstreamProtocol, route.UpstreamModel, boolInt(route.Enabled), route.Priority, route.Weight, storeNow(), route.ID,
 	)
 	if err != nil {
 		return ModelRoute{}, err
 	}
 	return s.ModelRoute(route.ID)
+}
+
+func normalizeRouteProtocol(protocol string) string {
+	protocol = strings.ToLower(strings.TrimSpace(protocol))
+	if protocol == "" {
+		return providerAuto
+	}
+	return protocol
+}
+
+func (s *Store) validateProviderRouteProtocol(providerID int64, protocol string) error {
+	if _, err := s.Provider(providerID); err != nil {
+		return err
+	}
+	if protocol == providerAuto {
+		return nil
+	}
+	var exists bool
+	if err := s.queryRow(
+		`SELECT EXISTS(SELECT 1 FROM provider_endpoints WHERE provider_id = ? AND protocol = ?)`,
+		providerID, protocol,
+	).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return errors.New("provider does not support the selected protocol")
+	}
+	return nil
 }
 
 func (s *Store) DeleteModelRoute(id int64) error {
