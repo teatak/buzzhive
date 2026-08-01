@@ -1,7 +1,9 @@
 import type { View } from "../types/admin";
 
 export const viewFromHash = (): View => {
-  switch (window.location.hash.replace("#", "")) {
+  const hash = window.location.hash.replace("#", "");
+  if (/^users\/\d+$/.test(hash)) return "userDetail";
+  switch (hash) {
     case "users":
       return "users";
     case "my-api-keys":
@@ -18,9 +20,17 @@ export const viewFromHash = (): View => {
   }
 };
 
+export const userIDFromHash = (): number => {
+  const match = window.location.hash.replace("#", "").match(/^users\/(\d+)$/);
+  return match ? Number(match[1]) : 0;
+};
+
+export const hashForUser = (userID: number) => `users/${userID}`;
+
 export const hashForView = (view: View) => {
   switch (view) {
     case "users":
+    case "userDetail":
       return "users";
     case "myKeys":
       return "my-api-keys";

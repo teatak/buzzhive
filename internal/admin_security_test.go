@@ -1,9 +1,13 @@
 package buzzhive
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,6 +50,9 @@ func TestAdminOnlyRoutesRejectNonAdmin(t *testing.T) {
 	}{
 		{http.MethodGet, "/admin/api/config"},
 		{http.MethodPost, "/admin/api/flush-exhausted"},
+		{http.MethodGet, "/admin/api/users/1"},
+		{http.MethodGet, "/admin/api/users/1/api-keys"},
+		{http.MethodGet, "/admin/api/users/1/usage"},
 	} {
 		t.Run(tt.path, func(t *testing.T) {
 			rr := httptest.NewRecorder()
@@ -56,6 +63,110 @@ func TestAdminOnlyRoutesRejectNonAdmin(t *testing.T) {
 				t.Fatalf("status = %d, want 403, body = %s", rr.Code, rr.Body.String())
 			}
 		})
+	}
+}
+
+func TestAdminCanManageAndInspectAnotherUsersAPIKeys(t *testing.T) {
+	srv := newAdminRouteTestServer(t)
+	adminToken := createAdminRouteTestSession(t, srv, "admin", "admin")
+	target, err := srv.store.CreateAppUser("target", "password", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	createBody := bytes.NewBufferString(`{"name":"managed-key"}`)
+	createdRR := httptest.NewRecorder()
+	createdReq := httptest.NewRequest(http.MethodPost, "/admin/api/users/"+strconv.FormatInt(target.ID, 10)+"/api-keys", createBody)
+	createdReq.Header.Set("Authorization", "Bearer "+adminToken)
+	createdReq.Header.Set("Content-Type", "application/json")
+	srv.adminAPI.ServeHTTP(createdRR, createdReq)
+	if createdRR.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", createdRR.Code, createdRR.Body.String())
+	}
+	var created AuthToken
+	if err := json.Unmarshal(createdRR.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.UserID != target.ID || !strings.HasPrefix(created.Token, "bh_") {
+		t.Fatalf("created key = %+v", created)
+	}
+
+	if err := srv.store.InsertUsageBatch([]UsageRecord{{
+		UserID:         target.ID,
+		UserName:       target.Username,
+		UserAPIKeyID:   created.ID,
+		UserAPIKeyName: created.Name,
+		Model:          "test-model",
+		Status:         http.StatusOK,
+		TotalTokens:    42,
+		CreatedAt:      time.Now().UTC(),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	keysRR := httptest.NewRecorder()
+	keysReq := httptest.NewRequest(http.MethodGet, "/admin/api/users/"+strconv.FormatInt(target.ID, 10)+"/api-keys", nil)
+	keysReq.Header.Set("Authorization", "Bearer "+adminToken)
+	srv.adminAPI.ServeHTTP(keysRR, keysReq)
+	if keysRR.Code != http.StatusOK {
+		t.Fatalf("keys status = %d, body = %s", keysRR.Code, keysRR.Body.String())
+	}
+	var keys []UserAPIKeyDetails
+	if err := json.Unmarshal(keysRR.Body.Bytes(), &keys); err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0].UserID != target.ID || keys[0].Token == created.Token || keys[0].Requests != 1 || keys[0].TotalTokens != 42 {
+		t.Fatalf("keys = %+v", keys)
+	}
+
+	other, err := srv.store.CreateAppUser("other", "password", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongOwnerRR := httptest.NewRecorder()
+	wrongOwnerReq := httptest.NewRequest(
+		http.MethodPut,
+		"/admin/api/users/"+strconv.FormatInt(other.ID, 10)+"/api-keys/"+strconv.FormatInt(created.ID, 10),
+		bytes.NewBufferString(`{"valid":false}`),
+	)
+	wrongOwnerReq.Header.Set("Authorization", "Bearer "+adminToken)
+	wrongOwnerReq.Header.Set("Content-Type", "application/json")
+	srv.adminAPI.ServeHTTP(wrongOwnerRR, wrongOwnerReq)
+	if wrongOwnerRR.Code != http.StatusNotFound {
+		t.Fatalf("wrong owner status = %d, want 404, body = %s", wrongOwnerRR.Code, wrongOwnerRR.Body.String())
+	}
+
+	query := url.Values{}
+	query.Set("from", time.Now().Add(-time.Hour).Format(time.RFC3339))
+	query.Set("to", time.Now().Add(time.Hour).Format(time.RFC3339))
+	usageRR := httptest.NewRecorder()
+	usageReq := httptest.NewRequest(http.MethodGet, "/admin/api/users/"+strconv.FormatInt(target.ID, 10)+"/usage?"+query.Encode(), nil)
+	usageReq.Header.Set("Authorization", "Bearer "+adminToken)
+	srv.adminAPI.ServeHTTP(usageRR, usageReq)
+	if usageRR.Code != http.StatusOK {
+		t.Fatalf("usage status = %d, body = %s", usageRR.Code, usageRR.Body.String())
+	}
+	var usage UsageSummary
+	if err := json.Unmarshal(usageRR.Body.Bytes(), &usage); err != nil {
+		t.Fatal(err)
+	}
+	if usage.Requests != 1 || usage.TotalTokens != 42 {
+		t.Fatalf("usage = %+v", usage)
+	}
+
+	selfRR := httptest.NewRecorder()
+	selfReq := httptest.NewRequest(http.MethodGet, "/admin/api/user-api-keys", nil)
+	selfReq.Header.Set("Authorization", "Bearer "+adminToken)
+	srv.adminAPI.ServeHTTP(selfRR, selfReq)
+	if selfRR.Code != http.StatusOK {
+		t.Fatalf("self keys status = %d, body = %s", selfRR.Code, selfRR.Body.String())
+	}
+	var selfKeys []AuthToken
+	if err := json.Unmarshal(selfRR.Body.Bytes(), &selfKeys); err != nil {
+		t.Fatal(err)
+	}
+	if len(selfKeys) != 0 {
+		t.Fatalf("admin self keys leaked target keys: %+v", selfKeys)
 	}
 }
 

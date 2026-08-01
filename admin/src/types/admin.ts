@@ -1,8 +1,14 @@
-export type View = "dashboard" | "users" | "myKeys" | "providers" | "models";
+export type View = "dashboard" | "users" | "userDetail" | "myKeys" | "providers" | "models";
 
 export type Session = { user: AppUser };
 export type AppUser = { id: number; username: string; role: string; valid: boolean };
 export type UserAPIKey = { id: number; user_id: number; name: string; token: string; valid: boolean };
+export type UserAPIKeyDetails = UserAPIKey & {
+  created_at: string;
+  last_used_at?: string;
+  requests: number;
+  total_tokens: number;
+};
 
 export type ProviderRecord = {
   id: number;

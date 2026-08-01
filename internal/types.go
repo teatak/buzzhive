@@ -47,6 +47,18 @@ type AuthToken struct {
 	Valid    bool   `yaml:"valid" json:"valid"`
 }
 
+type UserAPIKeyDetails struct {
+	ID          int64      `json:"id"`
+	UserID      int64      `json:"user_id"`
+	Name        string     `json:"name"`
+	Token       string     `json:"token,omitempty"`
+	Valid       bool       `json:"valid"`
+	CreatedAt   time.Time  `json:"created_at"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	Requests    int64      `json:"requests"`
+	TotalTokens int64      `json:"total_tokens"`
+}
+
 type APIKey struct {
 	ID                   int64  `yaml:"-" json:"id"`
 	ProviderID           int64  `yaml:"-" json:"provider_id,omitempty"`

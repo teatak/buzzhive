@@ -85,7 +85,7 @@ export function naturalMonthRange(date = new Date()): { from: string; to: string
   return { from: isoMinute(from), to: isoMinute(to) };
 }
 
-export function usagePath(filter: { key_id: string; model: string; from: string; to: string }) {
+export function usagePath(filter: { key_id: string; model: string; from: string; to: string }, basePath = "/admin/api/usage") {
 	const params = new URLSearchParams({
 		from: toAPILocalInstant(filter.from),
 		to: toAPILocalInstant(filter.to),
@@ -93,7 +93,7 @@ export function usagePath(filter: { key_id: string; model: string; from: string;
 	});
   if (filter.key_id !== "all") params.set("key_id", filter.key_id);
   if (filter.model !== "all") params.set("model", filter.model);
-  return `/admin/api/usage?${params.toString()}`;
+  return `${basePath}?${params.toString()}`;
 }
 
 function usageDateKey(value: string): string {

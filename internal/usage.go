@@ -230,6 +230,21 @@ func (s *Server) usageWriter() {
 }
 
 func (s *Server) handleUsage(c *cart.Context) error {
+	return s.handleUsageForUser(c, adminUser(c).ID)
+}
+
+func (s *Server) handleUserUsageAdmin(c *cart.Context) error {
+	userID, err := c.ParamInt64("user_id")
+	if err != nil || userID <= 0 {
+		return jsonError(c, http.StatusBadRequest, "invalid user id")
+	}
+	if _, err := s.store.User(userID); err != nil {
+		return jsonError(c, http.StatusNotFound, "user not found")
+	}
+	return s.handleUsageForUser(c, userID)
+}
+
+func (s *Server) handleUsageForUser(c *cart.Context, userID int64) error {
 	loc, err := usageLocationFromRequest(c.Request)
 	if err != nil {
 		return jsonError(c, http.StatusBadRequest, err)
@@ -242,9 +257,8 @@ func (s *Server) handleUsage(c *cart.Context) error {
 	if err != nil {
 		return jsonError(c, http.StatusBadRequest, err)
 	}
-	user := adminUser(c)
 	usage, err := s.store.UsageSummary(UsageQuery{
-		UserID:       user.ID,
+		UserID:       userID,
 		UserAPIKeyID: keyID,
 		Model:        strings.TrimSpace(c.Request.URL.Query().Get("model")),
 		From:         from,

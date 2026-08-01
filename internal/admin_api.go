@@ -40,6 +40,14 @@ func (s *Server) newAdminAPI() http.Handler {
 
 	s.adminOnlyRoute(api, "/config").GET(s.handleConfig)
 	s.adminOnlyRoute(api, "/users").GET(s.handleUsersAdmin).POST(s.handleUsersAdmin)
+	s.adminOnlyRoute(api, "/users/:user_id").GET(s.handleUserAdmin)
+	s.adminOnlyRoute(api, "/users/:user_id/api-keys").
+		GET(s.handleUserAPIKeysForAdmin).
+		POST(s.handleUserAPIKeysForAdmin)
+	s.adminOnlyRoute(api, "/users/:user_id/api-keys/:key_id").
+		PUT(s.handleUserAPIKeyForAdmin).
+		DELETE(s.handleUserAPIKeyForAdmin)
+	s.adminOnlyRoute(api, "/users/:user_id/usage").GET(s.handleUserUsageAdmin)
 	s.adminOnlyRoute(api, "/providers").
 		GET(s.handleProvidersAdmin).
 		POST(s.handleProvidersAdmin).
@@ -231,6 +239,93 @@ func (s *Server) handleData(c *cart.Context) error {
 
 func (s *Server) handleUsersAdmin(c *cart.Context) error {
 	return s.handleUsers(c)
+}
+
+func (s *Server) handleUserAdmin(c *cart.Context) error {
+	userID, err := c.ParamInt64("user_id")
+	if err != nil || userID <= 0 {
+		return jsonError(c, http.StatusBadRequest, "invalid user id")
+	}
+	user, err := s.store.User(userID)
+	if err != nil {
+		return jsonError(c, http.StatusNotFound, "user not found")
+	}
+	return jsonOK(c, user)
+}
+
+func (s *Server) handleUserAPIKeysForAdmin(c *cart.Context) error {
+	userID, err := c.ParamInt64("user_id")
+	if err != nil || userID <= 0 {
+		return jsonError(c, http.StatusBadRequest, "invalid user id")
+	}
+	if _, err := s.store.User(userID); err != nil {
+		return jsonError(c, http.StatusNotFound, "user not found")
+	}
+
+	switch c.Request.Method {
+	case http.MethodGet:
+		keys, err := s.store.UserAPIKeyDetails(userID)
+		if err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+		for i := range keys {
+			keys[i].Token = maskSecret(keys[i].Token)
+		}
+		return jsonOK(c, keys)
+	case http.MethodPost:
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		created, err := s.store.CreateUserAPIKey(AuthToken{
+			UserID: userID,
+			Name:   strings.TrimSpace(req.Name),
+			Token:  "bh_" + randomHex(24),
+			Valid:  true,
+		})
+		if err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		if err := s.reloadRuntimeState(); err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+		return jsonOK(c, created)
+	default:
+		return jsonError(c, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleUserAPIKeyForAdmin(c *cart.Context) error {
+	userID, userErr := c.ParamInt64("user_id")
+	keyID, keyErr := c.ParamInt64("key_id")
+	if userErr != nil || keyErr != nil || userID <= 0 || keyID <= 0 {
+		return jsonError(c, http.StatusBadRequest, "invalid user or key id")
+	}
+	if _, err := s.store.UserAPIKey(keyID, userID); err != nil {
+		return jsonError(c, http.StatusNotFound, "api key not found")
+	}
+
+	switch c.Request.Method {
+	case http.MethodPut:
+		var req struct {
+			Valid bool `json:"valid"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		if err := s.store.SetUserAPIKeyValid(keyID, userID, req.Valid); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+	case http.MethodDelete:
+		if err := s.store.DeleteUserAPIKey(keyID, userID); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+	default:
+		return jsonError(c, http.StatusMethodNotAllowed, "method not allowed")
+	}
+	return s.reloadRuntime(c)
 }
 
 func (s *Server) handleUserAPIKeysAdmin(c *cart.Context) error {

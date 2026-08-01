@@ -55,7 +55,7 @@ export function AppSidebar({ role, view, onNavigate }: AppSidebarProps) {
                 <SidebarMenuItem key={item.view}>
                   <SidebarMenuButton
                     type="button"
-                    isActive={view === item.view}
+                    isActive={view === item.view || (item.view === "users" && view === "userDetail")}
                     tooltip={t(item.labelKey)}
                     className="hover:bg-primary/10 hover:text-foreground dark:hover:bg-primary/25 dark:hover:text-white data-[active=true]:bg-indigo-600 data-[active=true]:text-white data-[active=true]:hover:bg-indigo-600 data-[active=true]:hover:text-white"
                     onClick={() => onNavigate(item.view)}

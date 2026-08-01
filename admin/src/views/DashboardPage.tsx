@@ -2,7 +2,7 @@ import { Activity, BarChart3, CircleOff, KeyRound, Loader2 } from "lucide-react"
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { ButtonGroup } from "../components/ui/button-group";
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { TokenUsageChart } from "../features/usage/TokenUsageChart";
@@ -13,36 +13,73 @@ import { modelDisplayName } from "../lib/model";
 import { cn, formatCompactNumber } from "../lib/utils";
 import type { Model, UsagePoint, UsageSummary, UserAPIKey } from "../types/admin";
 
-type UsageFilter = {
+export type UsageFilter = {
   key_id: string;
   model: string;
   from: string;
   to: string;
 };
 
-export function DashboardPage(props: {
+export type UsageDashboardProps = {
   usage: UsageSummary | null;
   usageFilter: UsageFilter;
   usageIsToday: boolean;
   usageSeries: UsagePoint[];
-  tokenUsage: UsageSummary | null;
-  tokenUsageFilter: UsageFilter;
-  tokenUsageIsToday: boolean;
-  tokenUsageSeries: UsagePoint[];
   userAPIKeys: UserAPIKey[];
   models: Model[];
   ownActiveKeys: UserAPIKey[];
   onUsageFilterChange: (filter: UsageFilter) => void;
   onResetUsageToToday: () => void;
   onSelectUsageRange: (from: string, to: string) => void;
-  onTokenUsageFilterChange: (filter: UsageFilter) => void;
-  onResetTokenUsageToToday: () => void;
-  onSelectTokenUsageRange: (from: string, to: string) => void;
-}) {
+};
+
+export function DashboardPage(props: UsageDashboardProps) {
+  const { t } = useLocale();
+  return (
+    <UsageDashboard
+      {...props}
+      apiKeyMetricLabel={t("nav.my_keys")}
+      allKeysLabel={t("usage.all_my_keys")}
+    />
+  );
+}
+
+export function UsageDashboard(props: UsageDashboardProps & { apiKeyMetricLabel: string; allKeysLabel: string }) {
   const { t } = useLocale();
 
   return (
     <div className="stack">
+      <Card size="sm" className="overflow-visible">
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <CardTitle className="shrink-0">{t("usage.filters")}</CardTitle>
+            {props.usage && (
+              <Badge variant="outline" className="shrink-0">
+                {usageBucketLabel(props.usage.bucket_minutes, t)}
+              </Badge>
+            )}
+            <Badge variant="secondary" className="w-full min-w-0 truncate sm:w-auto">
+              {displayMinute(props.usageFilter.from)} - {displayMinute(props.usageFilter.to)}
+            </Badge>
+          </div>
+          <UsageRangeAction
+            filter={props.usageFilter}
+            isToday={props.usageIsToday}
+            onChange={props.onUsageFilterChange}
+            onResetToday={props.onResetUsageToToday}
+          />
+        </CardHeader>
+        <CardContent>
+          <UsageFilterControls
+            filter={props.usageFilter}
+            userAPIKeys={props.userAPIKeys}
+            models={props.models}
+            allKeysLabel={props.allKeysLabel}
+            onChange={props.onUsageFilterChange}
+          />
+        </CardContent>
+      </Card>
+
       {props.usage ? (
         <>
           <section className="metrics">
@@ -54,7 +91,7 @@ export function DashboardPage(props: {
             </Card>
             <Card>
               <CardContent className="metric-content">
-                <div className="metric-label"><KeyRound size={17} /> {t("nav.my_keys")}</div>
+                <div className="metric-label"><KeyRound size={17} /> {props.apiKeyMetricLabel}</div>
                 <div className="metric-value">{props.ownActiveKeys.length}</div>
               </CardContent>
             </Card>
@@ -70,6 +107,7 @@ export function DashboardPage(props: {
                 <div className="metric-value">{Math.round(props.usage.avg_latency_ms)}ms</div>
               </CardContent>
             </Card>
+            <TokenUsageMetricCards usage={props.usage} />
           </section>
 
           <Card>
@@ -79,61 +117,24 @@ export function DashboardPage(props: {
                 <Badge variant="outline" className="shrink-0">
                   {usageBucketLabel(props.usage.bucket_minutes, t)}
                 </Badge>
-                <Badge variant="secondary" className="min-w-0 truncate">
-                  {displayMinute(props.usageFilter.from)} - {displayMinute(props.usageFilter.to)}
-                </Badge>
               </div>
-              <UsageRangeAction
-                filter={props.usageFilter}
-                isToday={props.usageIsToday}
-                onChange={props.onUsageFilterChange}
-                onResetToday={props.onResetUsageToToday}
-              />
             </CardHeader>
             <CardContent>
-              <UsageFilterControls
-                filter={props.usageFilter}
-                userAPIKeys={props.userAPIKeys}
-                models={props.models}
-                onChange={props.onUsageFilterChange}
-              />
               <UsageChart series={props.usageSeries} bucketMinutes={props.usage.bucket_minutes} onRangeSelect={props.onSelectUsageRange} />
             </CardContent>
           </Card>
-        </>
-      ) : (
-        <DashboardLoadingPanel />
-      )}
 
-      {props.tokenUsage ? (
-        <>
-          <TokenUsageMetrics usage={props.tokenUsage} />
           <Card>
             <CardHeader>
               <div className="flex min-w-0 items-center gap-2">
                 <CardTitle className="shrink-0">{t("usage.tokens_title")}</CardTitle>
                 <Badge variant="outline" className="shrink-0">
-                  {usageBucketLabel(props.tokenUsage.bucket_minutes, t)}
-                </Badge>
-                <Badge variant="secondary" className="min-w-0 truncate">
-                  {displayMinute(props.tokenUsageFilter.from)} - {displayMinute(props.tokenUsageFilter.to)}
+                  {usageBucketLabel(props.usage.bucket_minutes, t)}
                 </Badge>
               </div>
-              <UsageRangeAction
-                filter={props.tokenUsageFilter}
-                isToday={props.tokenUsageIsToday}
-                onChange={props.onTokenUsageFilterChange}
-                onResetToday={props.onResetTokenUsageToToday}
-              />
             </CardHeader>
             <CardContent>
-              <UsageFilterControls
-                filter={props.tokenUsageFilter}
-                userAPIKeys={props.userAPIKeys}
-                models={props.models}
-                onChange={props.onTokenUsageFilterChange}
-              />
-              <TokenUsageChart series={props.tokenUsageSeries} bucketMinutes={props.tokenUsage.bucket_minutes} onRangeSelect={props.onSelectTokenUsageRange} />
+              <TokenUsageChart series={props.usageSeries} bucketMinutes={props.usage.bucket_minutes} onRangeSelect={props.onSelectUsageRange} />
             </CardContent>
           </Card>
         </>
@@ -162,17 +163,17 @@ function UsageRangeAction(props: { filter: UsageFilter; isToday: boolean; onChan
   const { t } = useLocale();
 
   return (
-    <CardAction className="row-span-1 self-center">
+    <div className="self-start sm:self-center">
       <ButtonGroup aria-label={t("usage.range_shortcuts")}>
         <RangeShortcut label={t("common.today")} active={props.isToday} onClick={props.onResetToday} />
         <RangeShortcut label={t("common.last_3_days")} active={isRange(props.filter, recentDaysRange(3))} onClick={() => props.onChange({ ...props.filter, ...recentDaysRange(3) })} />
         <RangeShortcut label={t("common.this_month")} active={isRange(props.filter, naturalMonthRange())} onClick={() => props.onChange({ ...props.filter, ...naturalMonthRange() })} />
       </ButtonGroup>
-    </CardAction>
+    </div>
   );
 }
 
-function UsageFilterControls(props: { filter: UsageFilter; userAPIKeys: UserAPIKey[]; models: Model[]; onChange: (filter: UsageFilter) => void }) {
+function UsageFilterControls(props: { filter: UsageFilter; userAPIKeys: UserAPIKey[]; models: Model[]; allKeysLabel: string; onChange: (filter: UsageFilter) => void }) {
   const { t } = useLocale();
 
   return (
@@ -185,7 +186,7 @@ function UsageFilterControls(props: { filter: UsageFilter; userAPIKeys: UserAPIK
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">{t("usage.all_my_keys")}</SelectItem>
+          <SelectItem value="all">{props.allKeysLabel}</SelectItem>
           {props.userAPIKeys.map((key) => (
             <SelectItem key={key.id} value={String(key.id)}>{key.name}</SelectItem>
           ))}
@@ -223,7 +224,7 @@ function UsageFilterControls(props: { filter: UsageFilter; userAPIKeys: UserAPIK
   );
 }
 
-function TokenUsageMetrics(props: { usage: UsageSummary }) {
+function TokenUsageMetricCards(props: { usage: UsageSummary }) {
 	const { t } = useLocale();
 	const usage = props.usage;
 	const promptTokens = usage.prompt_tokens;
@@ -236,7 +237,7 @@ function TokenUsageMetrics(props: { usage: UsageSummary }) {
 	];
 
   return (
-    <section className="metrics">
+    <>
       {items.map((item) => (
         <Card key={item.label}>
           <CardContent className="metric-content">
@@ -245,7 +246,7 @@ function TokenUsageMetrics(props: { usage: UsageSummary }) {
           </CardContent>
         </Card>
       ))}
-    </section>
+    </>
   );
 }
 

@@ -1,6 +1,7 @@
 package buzzhive
 
 import (
+	"database/sql"
 	"errors"
 
 	"golang.org/x/crypto/bcrypt"
@@ -51,6 +52,17 @@ func (s *Store) Users() ([]AppUser, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) User(id int64) (AppUser, error) {
+	var user AppUser
+	var valid int
+	if err := s.queryRow(`SELECT id, username, role, valid FROM users WHERE id = ?`, id).
+		Scan(&user.ID, &user.Username, &user.Role, &valid); err != nil {
+		return AppUser{}, err
+	}
+	user.Valid = valid != 0
+	return user, nil
+}
+
 func (s *Store) UserAPIKeys() ([]AuthToken, error) {
 	rows, err := s.query(`SELECT id, user_id, name, token, valid FROM user_api_keys ORDER BY id`)
 	if err != nil {
@@ -66,6 +78,59 @@ func (s *Store) UserAPIKeys() ([]AuthToken, error) {
 			return nil, err
 		}
 		key.Valid = valid != 0
+		out = append(out, key)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UserAPIKeyDetails(userID int64) ([]UserAPIKeyDetails, error) {
+	rows, err := s.query(`
+		SELECT k.id, k.user_id, k.name, k.token, k.valid, k.created_at,
+			COALESCE(stats.requests, 0), COALESCE(stats.total_tokens, 0), last_used.created_at
+		FROM user_api_keys k
+		LEFT JOIN (
+			SELECT user_api_key_id, SUM(requests) AS requests, SUM(total_tokens_sum) AS total_tokens
+			FROM usage_stats_daily
+			WHERE user_id = ?
+			GROUP BY user_api_key_id
+		) stats ON stats.user_api_key_id = k.id
+		LEFT JOIN LATERAL (
+			SELECT created_at
+			FROM usage_logs
+			WHERE user_api_key_id = k.id AND user_id = k.user_id
+			ORDER BY created_at DESC
+			LIMIT 1
+		) last_used ON TRUE
+		WHERE k.user_id = ?
+		ORDER BY k.id`, userID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]UserAPIKeyDetails, 0)
+	for rows.Next() {
+		var key UserAPIKeyDetails
+		var valid int
+		var lastUsed sql.NullTime
+		if err := rows.Scan(
+			&key.ID,
+			&key.UserID,
+			&key.Name,
+			&key.Token,
+			&valid,
+			&key.CreatedAt,
+			&key.Requests,
+			&key.TotalTokens,
+			&lastUsed,
+		); err != nil {
+			return nil, err
+		}
+		key.Valid = valid != 0
+		if lastUsed.Valid {
+			value := lastUsed.Time
+			key.LastUsedAt = &value
+		}
 		out = append(out, key)
 	}
 	return out, rows.Err()

@@ -7,7 +7,7 @@ import { request, storageKey } from "./api/client";
 import { LocaleToggle } from "./i18n/LocaleToggle";
 import { tNow, useLocale } from "./i18n/locale";
 import { fillUsageSeries, naturalDayRange, usagePath } from "./lib/date";
-import { hashForView, viewFromHash } from "./router/views";
+import { hashForUser, hashForView, userIDFromHash, viewFromHash } from "./router/views";
 import type {
   AdminConfig,
   AdminData,
@@ -47,6 +47,7 @@ import { AdminLayout } from "./layout/AdminLayout";
 import { DashboardPage } from "./views/DashboardPage";
 import { MyApiKeysPage } from "./views/MyApiKeysPage";
 import { UsersPage } from "./views/UsersPage";
+import { UserDetailPage } from "./views/UserDetailPage";
 import { ProvidersPage } from "./views/ProvidersPage";
 import { ModelsPage } from "./views/ModelsPage";
 
@@ -57,8 +58,6 @@ type ConfirmAction = {
   successLabel: string;
   onConfirm: () => Promise<void>;
 };
-
-const HOLD_DASHBOARD_USAGE_REQUESTS = false;
 
 function asList<T>(value: T[] | null | undefined): T[] {
   return value ?? [];
@@ -85,6 +84,7 @@ function fallbackCopyText(value: string) {
 export function App() {
   const { locale, t } = useLocale();
   const [view, setView] = useState<View>(viewFromHash());
+  const [userDetailID, setUserDetailID] = useState(userIDFromHash());
   const [token, setToken] = useState(localStorage.getItem(storageKey) ?? "");
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [setupRequired, setSetupRequired] = useState(false);
@@ -93,7 +93,6 @@ export function App() {
   const [config, setConfig] = useState<AdminConfig | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
-  const [tokenUsage, setTokenUsage] = useState<UsageSummary | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
   const [userAPIKeys, setUserAPIKeys] = useState<UserAPIKey[]>([]);
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
@@ -120,11 +119,6 @@ export function App() {
     model: "all",
     ...naturalDayRange(),
   });
-  const [tokenUsageFilter, setTokenUsageFilter] = useState({
-    key_id: "all",
-    model: "all",
-    ...naturalDayRange(),
-  });
 
   async function load(activeToken = token) {
     const [nextSession, data, nextStats] = await Promise.all([
@@ -146,17 +140,6 @@ export function App() {
       request<Model[]>("/admin/api/models", activeToken),
     ]);
     setStats(nextStats);
-    if (HOLD_DASHBOARD_USAGE_REQUESTS) {
-      setUsage(null);
-      setTokenUsage(null);
-    } else {
-      const [nextUsage, nextTokenUsage] = await Promise.all([
-        request<UsageSummary>(usagePath(usageFilter), activeToken),
-        request<UsageSummary>(usagePath(tokenUsageFilter), activeToken),
-      ]);
-      setUsage(nextUsage);
-      setTokenUsage(nextTokenUsage);
-    }
     setUserAPIKeys(asList(nextUserAPIKeys));
     setModels(asList(nextModels));
   }
@@ -195,7 +178,7 @@ export function App() {
 
   async function loadView(activeView = view, activeToken = token) {
     if (!activeToken) return;
-    if (activeView === "users" && session?.user.role !== "admin") return;
+    if ((activeView === "users" || activeView === "userDetail") && session?.user.role !== "admin") return;
     if (activeView === "providers" && session?.user.role !== "admin") return;
     if (activeView === "models" && session?.user.role !== "admin") return;
 
@@ -208,6 +191,8 @@ export function App() {
         return;
       case "users":
         await loadUsers(activeToken);
+        return;
+      case "userDetail":
         return;
       case "providers":
         await loadProviders(activeToken);
@@ -417,7 +402,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const onHashChange = () => setView(viewFromHash());
+    const onHashChange = () => {
+      setView(viewFromHash());
+      setUserDetailID(userIDFromHash());
+    };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
@@ -441,25 +429,13 @@ export function App() {
 
   useEffect(() => {
     if (!token || !session || view !== "dashboard") return;
-    if (HOLD_DASHBOARD_USAGE_REQUESTS) {
-      setUsage(null);
-      return;
-    }
+    let active = true;
+    setUsage(null);
     request<UsageSummary>(usagePath(usageFilter), token)
-      .then(setUsage)
+      .then((nextUsage) => { if (active) setUsage(nextUsage); })
       .catch((error) => toast.error(error instanceof Error ? error.message : tNow("toast.action_failed")));
+    return () => { active = false; };
   }, [usageFilter, token, session?.user.id, view]);
-
-  useEffect(() => {
-    if (!token || !session || view !== "dashboard") return;
-    if (HOLD_DASHBOARD_USAGE_REQUESTS) {
-      setTokenUsage(null);
-      return;
-    }
-    request<UsageSummary>(usagePath(tokenUsageFilter), token)
-      .then(setTokenUsage)
-      .catch((error) => toast.error(error instanceof Error ? error.message : tNow("toast.action_failed")));
-  }, [tokenUsageFilter, token, session?.user.id, view]);
 
   function navigate(nextView: View) {
     const hash = hashForView(nextView);
@@ -467,24 +443,27 @@ export function App() {
       window.location.hash = hash;
     }
     setView(nextView);
+    if (nextView !== "userDetail") setUserDetailID(0);
+  }
+
+  function openUser(user: AppUser) {
+    const hash = hashForUser(user.id);
+    if (window.location.hash !== `#${hash}`) window.location.hash = hash;
+    setUserDetailID(user.id);
+    setView("userDetail");
   }
 
   useEffect(() => {
-    if (session && session.user.role !== "admin" && (view === "users" || view === "providers" || view === "models")) {
+    if (session && session.user.role !== "admin" && (view === "users" || view === "userDetail" || view === "providers" || view === "models")) {
       navigate("dashboard");
     }
   }, [session, view]);
 
   const todayRange = naturalDayRange();
   const usageIsToday = usageFilter.from === todayRange.from && usageFilter.to === todayRange.to;
-  const tokenUsageIsToday = tokenUsageFilter.from === todayRange.from && tokenUsageFilter.to === todayRange.to;
   const usageSeries = useMemo(
     () => fillUsageSeries(usage?.series ?? [], usageFilter.from, usageFilter.to, usage?.bucket_minutes ?? 1),
     [usage?.series, usage?.bucket_minutes, usageFilter.from, usageFilter.to],
-  );
-  const tokenUsageSeries = useMemo(
-    () => fillUsageSeries(tokenUsage?.series ?? [], tokenUsageFilter.from, tokenUsageFilter.to, tokenUsage?.bucket_minutes ?? 1),
-    [tokenUsage?.series, tokenUsage?.bucket_minutes, tokenUsageFilter.from, tokenUsageFilter.to],
   );
 
   if (booting) {
@@ -573,6 +552,7 @@ export function App() {
   const title = {
     dashboard: t("nav.dashboard"),
     users: t("nav.users"),
+    userDetail: t("users.detail"),
     myKeys: t("nav.my_keys"),
     providers: t("nav.providers"),
     models: t("nav.models"),
@@ -594,24 +574,27 @@ export function App() {
               usageFilter={usageFilter}
               usageIsToday={usageIsToday}
               usageSeries={usageSeries}
-              tokenUsage={tokenUsage}
-              tokenUsageFilter={tokenUsageFilter}
-              tokenUsageIsToday={tokenUsageIsToday}
-              tokenUsageSeries={tokenUsageSeries}
               userAPIKeys={userAPIKeys}
               models={models}
               ownActiveKeys={ownActiveKeys}
               onUsageFilterChange={setUsageFilter}
               onResetUsageToToday={() => setUsageFilter((current) => ({ ...current, ...naturalDayRange() }))}
               onSelectUsageRange={(from, to) => setUsageFilter((current) => ({ ...current, from, to }))}
-              onTokenUsageFilterChange={setTokenUsageFilter}
-              onResetTokenUsageToToday={() => setTokenUsageFilter((current) => ({ ...current, ...naturalDayRange() }))}
-              onSelectTokenUsageRange={(from, to) => setTokenUsageFilter((current) => ({ ...current, from, to }))}
             />
           )}
 
           {view === "users" && session.user.role === "admin" && (
-            <UsersPage users={users} onNewUser={() => setShowUserDialog(true)} />
+            <UsersPage users={users} onNewUser={() => setShowUserDialog(true)} onOpenUser={openUser} />
+          )}
+
+          {view === "userDetail" && session.user.role === "admin" && userDetailID > 0 && (
+            <UserDetailPage
+              token={token}
+              userID={userDetailID}
+              copiedTarget={copiedTarget}
+              onBack={() => navigate("users")}
+              onCopyText={(value, target) => void copyText(value, target)}
+            />
           )}
 
           {view === "myKeys" && (
