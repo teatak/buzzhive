@@ -572,5 +572,5 @@ function QuotaStat(props: { label: string; value: string; icon?: ReactNode }) {
 }
 
 function formatCredits(microcredits: number, locale: string) {
-  return new Intl.NumberFormat(locale, { maximumFractionDigits: 3 }).format(microcredits / 1_000_000);
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(microcredits / 1_000_000);
 }

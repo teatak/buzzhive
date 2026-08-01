@@ -280,8 +280,8 @@ export function ModelsPage(props: ModelsPageProps) {
             <div className="space-y-2">
               <h3 className="text-sm font-medium">{t("models.quota_rates")}</h3>
               <div className="grid gap-3 sm:grid-cols-3">
-                <ModelStat label={t("models.quota_uncached_input_rate")} value={formatModelNumber(selectedModel.quota_uncached_input_rate)} />
                 <ModelStat label={t("models.quota_cached_input_rate")} value={formatModelNumber(selectedModel.quota_cached_input_rate)} />
+                <ModelStat label={t("models.quota_uncached_input_rate")} value={formatModelNumber(selectedModel.quota_uncached_input_rate)} />
                 <ModelStat label={t("models.quota_output_rate")} value={formatModelNumber(selectedModel.quota_output_rate)} />
               </div>
             </div>
@@ -421,8 +421,8 @@ export function ModelsPage(props: ModelsPageProps) {
             <div className="space-y-3 rounded-lg border p-3">
               <div className="text-sm font-medium">{t("models.quota_rates")}</div>
               <div className="grid gap-4 sm:grid-cols-3">
-                <FormNumberField label={t("models.quota_uncached_input_rate")} min={0} step="any" value={modelForm.quota_uncached_input_rate} onChange={(quota_uncached_input_rate) => setModelForm({ ...modelForm, quota_uncached_input_rate })} />
                 <FormNumberField label={t("models.quota_cached_input_rate")} min={0} step="any" value={modelForm.quota_cached_input_rate} onChange={(quota_cached_input_rate) => setModelForm({ ...modelForm, quota_cached_input_rate })} />
+                <FormNumberField label={t("models.quota_uncached_input_rate")} min={0} step="any" value={modelForm.quota_uncached_input_rate} onChange={(quota_uncached_input_rate) => setModelForm({ ...modelForm, quota_uncached_input_rate })} />
                 <FormNumberField label={t("models.quota_output_rate")} min={0} step="any" value={modelForm.quota_output_rate} onChange={(quota_output_rate) => setModelForm({ ...modelForm, quota_output_rate })} />
               </div>
             </div>
