@@ -139,7 +139,7 @@ export function App() {
     const [nextStats, nextUserAPIKeys, nextModels, nextQuota] = await Promise.all([
       request<Stats>("/admin/api/stats", activeToken),
       request<UserAPIKey[]>("/admin/api/user-api-keys", activeToken),
-      request<Model[]>("/admin/api/models", activeToken),
+      request<Model[]>("/admin/api/model-options", activeToken),
       request<UserQuotaStatus>("/admin/api/quota", activeToken),
     ]);
     setStats(nextStats);

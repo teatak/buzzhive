@@ -98,6 +98,32 @@ func TestUserCanReadOwnQuota(t *testing.T) {
 	}
 }
 
+func TestUserCanReadEnabledModelOptions(t *testing.T) {
+	srv := newAdminRouteTestServer(t)
+	userToken := createAdminRouteTestSession(t, srv, "model-options-user", "user")
+	if _, err := srv.store.CreateModel(Model{Name: "enabled-option", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.store.CreateModel(Model{Name: "disabled-option", Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/model-options", nil)
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	srv.adminAPI.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var models []Model
+	if err := json.Unmarshal(rr.Body.Bytes(), &models); err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 1 || models[0].Name != "enabled-option" {
+		t.Fatalf("model options = %+v", models)
+	}
+}
+
 func TestAdminCanManageAndInspectAnotherUsersAPIKeys(t *testing.T) {
 	srv := newAdminRouteTestServer(t)
 	adminToken := createAdminRouteTestSession(t, srv, "admin", "admin")

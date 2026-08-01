@@ -34,6 +34,7 @@ func (s *Server) newAdminAPI() http.Handler {
 	api.Route("/stats").GET(s.handleStats)
 	api.Route("/usage").GET(s.handleUsage)
 	api.Route("/quota").GET(s.handleOwnQuota)
+	api.Route("/model-options").GET(s.handleModelOptions)
 	api.Route("/data").GET(s.handleData)
 	api.Route("/user-api-keys").
 		GET(s.handleUserAPIKeysAdmin).
@@ -241,6 +242,20 @@ func (s *Server) handleOwnQuota(c *cart.Context) error {
 		return jsonError(c, http.StatusInternalServerError, err)
 	}
 	return jsonOK(c, status)
+}
+
+func (s *Server) handleModelOptions(c *cart.Context) error {
+	models, err := s.store.Models()
+	if err != nil {
+		return jsonError(c, http.StatusInternalServerError, err)
+	}
+	enabled := make([]Model, 0, len(models))
+	for _, model := range models {
+		if model.Enabled {
+			enabled = append(enabled, model)
+		}
+	}
+	return jsonOK(c, enabled)
 }
 
 func (s *Server) handleConfig(c *cart.Context) error {

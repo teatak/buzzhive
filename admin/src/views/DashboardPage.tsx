@@ -52,6 +52,8 @@ export function UsageDashboard(props: UsageDashboardProps & { apiKeyMetricLabel:
 
   return (
     <div className="stack">
+      {props.quota && <QuotaSummary quota={props.quota} />}
+
       <Card size="sm" className="overflow-visible">
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -82,8 +84,6 @@ export function UsageDashboard(props: UsageDashboardProps & { apiKeyMetricLabel:
           />
         </CardContent>
       </Card>
-
-      {props.quota && <QuotaSummary quota={props.quota} />}
 
       {props.usage ? (
         <>
@@ -165,36 +165,33 @@ function QuotaSummary({ quota }: { quota: UserQuotaStatus }) {
   }
 
   return (
-    <Card size="sm">
-      <CardContent className="grid items-center gap-3 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] md:gap-5">
-        <div className="flex items-center gap-2 font-medium">
-          <CircleGauge className="text-muted-foreground" size={17} />
-          {t("users.quota")}
-        </div>
-        <QuotaPool
-          label={t("users.weekly_quota_remaining")}
-          remaining={quota.weekly_remaining_microcredits}
-          total={quota.weekly_quota_credits}
-          locale={locale}
-          emptyLabel={t("users.no_weekly_quota")}
-          detail={quota.weekly_quota_credits > 0 ? (
-            <span className="flex items-center gap-1" title={formatDate(quota.period_end)}>
-              <CalendarClock size={12} /> {t("users.quota_resets_at")} {formatDate(quota.period_end)}
-            </span>
-          ) : undefined}
-        />
-        <QuotaPool
-          label={t("users.lifetime_quota_remaining")}
-          remaining={quota.lifetime_remaining_microcredits}
-          total={quota.lifetime_quota_credits}
-          locale={locale}
-        />
-      </CardContent>
-    </Card>
+    <section aria-label={t("users.quota")} className="grid gap-4 md:grid-cols-2">
+      <QuotaCard
+        icon={<CalendarClock size={17} />}
+        label={t("users.weekly_quota_remaining")}
+        remaining={quota.weekly_remaining_microcredits}
+        total={quota.weekly_quota_credits}
+        locale={locale}
+        emptyLabel={t("users.no_weekly_quota")}
+        detail={quota.weekly_quota_credits > 0 ? (
+          <span title={formatDate(quota.period_end)}>
+            {t("users.quota_resets_at")} {formatDate(quota.period_end)}
+          </span>
+        ) : undefined}
+      />
+      <QuotaCard
+        icon={<CircleGauge size={17} />}
+        label={t("users.lifetime_quota_remaining")}
+        remaining={quota.lifetime_remaining_microcredits}
+        total={quota.lifetime_quota_credits}
+        locale={locale}
+      />
+    </section>
   );
 }
 
-function QuotaPool(props: {
+function QuotaCard(props: {
+  icon: ReactNode;
   label: string;
   remaining: number;
   total: number;
@@ -202,29 +199,28 @@ function QuotaPool(props: {
   emptyLabel?: string;
   detail?: ReactNode;
 }) {
-  if (props.total <= 0) {
-    return (
-      <div className="min-w-0">
-        <div className="text-xs text-muted-foreground">{props.label}</div>
-        <div className="mt-1 text-sm font-medium">{props.emptyLabel ?? formatCredits(0, props.locale)}</div>
-      </div>
-    );
-  }
   const totalMicrocredits = props.total * 1_000_000;
-  const used = Math.max(0, totalMicrocredits - props.remaining);
-  const progress = Math.min(100, (used / totalMicrocredits) * 100);
+  const progress = totalMicrocredits > 0
+    ? Math.min(100, Math.max(0, (props.remaining / totalMicrocredits) * 100))
+    : 0;
+  const value = props.total > 0
+    ? `${formatCredits(props.remaining, props.locale)} / ${formatCredits(totalMicrocredits, props.locale)}`
+    : (props.emptyLabel ?? formatCredits(0, props.locale));
 
   return (
-    <div className="min-w-0">
-      <div className="flex items-center justify-between gap-3 text-xs">
-        <span className="truncate text-muted-foreground">{props.label}</span>
-        <span className="shrink-0 font-medium tabular-nums">
-          {formatCredits(props.remaining, props.locale)} / {formatCredits(totalMicrocredits, props.locale)}
-        </span>
-      </div>
-      <Progress className="mt-1.5" value={progress} />
-      {props.detail && <div className="mt-1 text-xs text-muted-foreground">{props.detail}</div>}
-    </div>
+    <Card size="sm">
+      <CardContent className="flex h-full flex-col gap-2.5">
+        <div className="flex min-w-0 items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-muted-foreground">
+            {props.icon}
+            <span className="truncate">{props.label}</span>
+          </div>
+          <span className="shrink-0 text-sm font-semibold tabular-nums">{value}</span>
+        </div>
+        <Progress value={progress} />
+        {props.detail && <div className="text-xs text-muted-foreground">{props.detail}</div>}
+      </CardContent>
+    </Card>
   );
 }
 
