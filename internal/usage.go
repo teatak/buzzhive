@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,12 +15,13 @@ import (
 )
 
 type TokenUsage struct {
-	PromptTokens     int64
-	CompletionTokens int64
-	TotalTokens      int64
-	CachedTokens     int64
-	ReasoningTokens  int64
-	RawUsage         string
+	PromptTokens      int64
+	CompletionTokens  int64
+	TotalTokens       int64
+	CachedTokens      int64
+	ReasoningTokens   int64
+	QuotaMicrocredits int64
+	RawUsage          string
 }
 
 func (u TokenUsage) IsZero() bool {
@@ -40,6 +42,7 @@ func (s *Server) recordProviderResultUsage(user AuthToken, model string, result 
 	if len(usages) > 0 {
 		usage = usages[0]
 	}
+	usage.QuotaMicrocredits = quotaMicrocreditsForUsage(usage, result.Target)
 	s.recordUsage(user, result.Key, model, result.Target.UpstreamModel, status, latency, usage)
 }
 
@@ -61,25 +64,33 @@ func (s *Server) recordUsage(user AuthToken, key APIKey, model, upstreamModel st
 
 	now := time.Now().UTC()
 	record := UsageRecord{
-		UserID:           user.UserID,
-		UserName:         userName,
-		UserAPIKeyID:     user.ID,
-		UserAPIKeyName:   user.Name,
-		ProviderID:       key.ProviderID,
-		ProviderName:     key.ProviderName,
-		ProviderKeyID:    key.ProviderKeyID,
-		ProviderKeyName:  key.Name,
-		Model:            model,
-		UpstreamModel:    upstreamModel,
-		Status:           status,
-		LatencyMS:        latencyMS,
-		PromptTokens:     usage.PromptTokens,
-		CompletionTokens: usage.CompletionTokens,
-		TotalTokens:      usage.TotalTokens,
-		CachedTokens:     usage.CachedTokens,
-		ReasoningTokens:  usage.ReasoningTokens,
-		RawUsage:         usage.RawUsage,
-		CreatedAt:        now,
+		UserID:            user.UserID,
+		UserName:          userName,
+		UserAPIKeyID:      user.ID,
+		UserAPIKeyName:    user.Name,
+		ProviderID:        key.ProviderID,
+		ProviderName:      key.ProviderName,
+		ProviderKeyID:     key.ProviderKeyID,
+		ProviderKeyName:   key.Name,
+		Model:             model,
+		UpstreamModel:     upstreamModel,
+		Status:            status,
+		LatencyMS:         latencyMS,
+		PromptTokens:      usage.PromptTokens,
+		CompletionTokens:  usage.CompletionTokens,
+		TotalTokens:       usage.TotalTokens,
+		CachedTokens:      usage.CachedTokens,
+		ReasoningTokens:   usage.ReasoningTokens,
+		QuotaMicrocredits: usage.QuotaMicrocredits,
+		RawUsage:          usage.RawUsage,
+		CreatedAt:         now,
+	}
+	if user.UserID > 0 && !user.QuotaAnchor.IsZero() && (user.WeeklyQuotaCredits > 0 || user.LifetimeQuotaCredits > 0) {
+		periodStart, periodEnd := weeklyQuotaPeriod(user.QuotaAnchor, now)
+		record.QuotaPeriodStart = periodStart
+		record.QuotaPeriodEnd = &periodEnd
+		record.WeeklyQuotaLimitMicrocredits = user.WeeklyQuotaCredits * creditMicrocredits
+		record.UsesLifetimeQuota = user.LifetimeQuotaCredits > 0
 	}
 
 	s.statsMu.Lock()
@@ -97,7 +108,7 @@ func (s *Server) recordUsage(user AuthToken, key APIKey, model, upstreamModel st
 	s.stats.LastUpdated = record.CreatedAt
 	s.statsMu.Unlock()
 
-	if s.usageCh == nil {
+	if s.usageCh == nil || user.WeeklyQuotaCredits > 0 || user.LifetimeQuotaCredits > 0 {
 		if err := s.store.InsertUsageBatch([]UsageRecord{record}); err != nil {
 			log.Printf("record usage: %v", err)
 		}
@@ -108,6 +119,31 @@ func (s *Server) recordUsage(user AuthToken, key APIKey, model, upstreamModel st
 	default:
 		log.Printf("usage queue full; dropping usage record")
 	}
+}
+
+func quotaMicrocreditsForUsage(usage TokenUsage, target RouteTarget) int64 {
+	uncachedInput := usage.PromptTokens - usage.CachedTokens
+	if uncachedInput < 0 {
+		uncachedInput = 0
+	}
+	total := quotaComponent(0, uncachedInput, target.QuotaUncachedInputRate)
+	total = quotaComponent(total, usage.CachedTokens, target.QuotaCachedInputRate)
+	outputTokens := usage.CompletionTokens
+	if totalOutput := usage.TotalTokens - usage.PromptTokens; totalOutput > outputTokens {
+		outputTokens = totalOutput
+	}
+	return quotaComponent(total, outputTokens, target.QuotaOutputRate)
+}
+
+func quotaComponent(total, tokens int64, rate float64) int64 {
+	if total < 0 || tokens <= 0 || rate <= 0 {
+		return max(total, 0)
+	}
+	component := math.Round(float64(tokens) * rate)
+	if math.IsInf(component, 0) || component >= float64(math.MaxInt64-total) {
+		return math.MaxInt64
+	}
+	return total + int64(component)
 }
 
 func tokenUsageFromOpenAIResponseBody(raw []byte) TokenUsage {

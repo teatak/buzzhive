@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestEnsureSchemaCreatesCoreTables(t *testing.T) {
@@ -17,11 +18,139 @@ func TestEnsureSchemaCreatesCoreTables(t *testing.T) {
 		"models",
 		"model_routes",
 		"usage_logs",
+		"user_quota_usage",
 		"usage_stats_hourly",
 		"usage_stats_daily",
 	} {
 		if !postgresTableExists(t, store.db, table) {
 			t.Fatalf("expected table %s to exist", table)
+		}
+	}
+}
+
+func TestEnsureSchemaCreatesQuotaColumns(t *testing.T) {
+	store := openTestStore(t)
+
+	for _, column := range []struct {
+		table    string
+		name     string
+		dataType string
+	}{
+		{"users", "weekly_quota_credits", "bigint"},
+		{"users", "lifetime_quota_credits", "bigint"},
+		{"users", "lifetime_quota_used_microcredits", "bigint"},
+		{"users", "quota_anchor_at", "timestamp with time zone"},
+		{"models", "quota_uncached_input_rate", "numeric"},
+		{"models", "quota_cached_input_rate", "numeric"},
+		{"models", "quota_output_rate", "numeric"},
+		{"usage_logs", "quota_microcredits", "bigint"},
+	} {
+		dataType, nullable, _ := postgresColumnInfo(t, store.db, column.table, column.name)
+		if dataType != column.dataType || nullable != "NO" {
+			t.Fatalf("%s.%s = type %q nullable %q", column.table, column.name, dataType, nullable)
+		}
+	}
+	dataType, nullable, _ := postgresColumnInfo(t, store.db, "user_quota_usage", "period_end")
+	if dataType != "timestamp with time zone" || nullable != "YES" {
+		t.Fatalf("user_quota_usage.period_end = type %q nullable %q", dataType, nullable)
+	}
+}
+
+func TestEnsureSchemaPreservesWeeklyQuotaColumn(t *testing.T) {
+	store := openTestStoreWithSetup(t, func(db *sql.DB) {
+		_, err := db.Exec(`
+			CREATE TABLE users (
+				id BIGSERIAL PRIMARY KEY,
+				username TEXT NOT NULL UNIQUE,
+				password_hash TEXT NOT NULL,
+				role TEXT NOT NULL DEFAULT 'user',
+				valid INTEGER NOT NULL DEFAULT 1,
+				weekly_quota_credits BIGINT NOT NULL DEFAULT 0,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+			);
+			INSERT INTO users (username, password_hash, weekly_quota_credits) VALUES ('quota-user', 'hash', 37);
+		`)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	var weeklyCredits, lifetimeCredits int64
+	var anchor, createdAt time.Time
+	if err := store.db.QueryRow(`SELECT weekly_quota_credits, lifetime_quota_credits, quota_anchor_at, created_at FROM users WHERE username = 'quota-user'`).
+		Scan(&weeklyCredits, &lifetimeCredits, &anchor, &createdAt); err != nil {
+		t.Fatal(err)
+	}
+	if weeklyCredits != 37 || lifetimeCredits != 0 || !anchor.Equal(createdAt) {
+		t.Fatalf("quota migration = %d/%d/%v, created %v", weeklyCredits, lifetimeCredits, anchor, createdAt)
+	}
+	if !postgresColumnExists(t, store.db, "users", "weekly_quota_credits") {
+		t.Fatal("users.weekly_quota_credits should be preserved")
+	}
+}
+
+func TestEnsureSchemaMigratesQuotaCycleIntoWeeklyAndLifetimePools(t *testing.T) {
+	anchor := time.Date(2026, time.July, 20, 8, 0, 0, 0, time.UTC)
+	store := openTestStoreWithSetup(t, func(db *sql.DB) {
+		if _, err := db.Exec(`
+			CREATE TABLE users (
+				id BIGSERIAL PRIMARY KEY,
+				username TEXT NOT NULL UNIQUE,
+				password_hash TEXT NOT NULL,
+				role TEXT NOT NULL DEFAULT 'user',
+				valid INTEGER NOT NULL DEFAULT 1,
+				quota_credits BIGINT NOT NULL DEFAULT 0,
+				quota_cycle TEXT NOT NULL DEFAULT 'weekly',
+				quota_anchor_at TIMESTAMPTZ NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+			);
+			CREATE TABLE user_quota_usage (
+				user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				period_start TIMESTAMPTZ NOT NULL,
+				period_end TIMESTAMPTZ,
+				used_microcredits BIGINT NOT NULL DEFAULT 0,
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+				PRIMARY KEY (user_id, period_start)
+			)
+		`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`
+			INSERT INTO users (username, password_hash, quota_credits, quota_cycle, quota_anchor_at)
+			VALUES
+				('weekly-old-user', 'hash', 37, 'weekly', $1),
+				('lifetime-old-user', 'hash', 11, 'lifetime', $1)
+		`, anchor); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`
+			INSERT INTO user_quota_usage (user_id, period_start, used_microcredits)
+			SELECT id, $1, 4000000 FROM users WHERE username = 'lifetime-old-user'
+		`, anchor); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	var weeklyCredits, lifetimeCredits, lifetimeUsed int64
+	if err := store.db.QueryRow(`SELECT weekly_quota_credits, lifetime_quota_credits, lifetime_quota_used_microcredits FROM users WHERE username = 'weekly-old-user'`).
+		Scan(&weeklyCredits, &lifetimeCredits, &lifetimeUsed); err != nil {
+		t.Fatal(err)
+	}
+	if weeklyCredits != 37 || lifetimeCredits != 0 || lifetimeUsed != 0 {
+		t.Fatalf("weekly migration = %d/%d/%d", weeklyCredits, lifetimeCredits, lifetimeUsed)
+	}
+	if err := store.db.QueryRow(`SELECT weekly_quota_credits, lifetime_quota_credits, lifetime_quota_used_microcredits FROM users WHERE username = 'lifetime-old-user'`).
+		Scan(&weeklyCredits, &lifetimeCredits, &lifetimeUsed); err != nil {
+		t.Fatal(err)
+	}
+	if weeklyCredits != 0 || lifetimeCredits != 11 || lifetimeUsed != 4_000_000 {
+		t.Fatalf("lifetime migration = %d/%d/%d", weeklyCredits, lifetimeCredits, lifetimeUsed)
+	}
+	for _, oldColumn := range []string{"quota_credits", "quota_cycle", "extra_quota_credits", "extra_quota_used_microcredits"} {
+		if postgresColumnExists(t, store.db, "users", oldColumn) {
+			t.Fatalf("users.%s should be removed", oldColumn)
 		}
 	}
 }
@@ -152,6 +281,23 @@ func TestEnsureSchemaUpgradesPublishedRoutesWithoutLosingAccounts(t *testing.T) 
 	}
 	if passwordHash != "hash-kept" {
 		t.Fatalf("password hash = %q", passwordHash)
+	}
+	var weeklyQuotaCredits, lifetimeQuotaCredits, lifetimeQuotaUsedMicrocredits int64
+	var quotaAnchor sql.NullTime
+	if err := store.db.QueryRow(`SELECT weekly_quota_credits, lifetime_quota_credits, lifetime_quota_used_microcredits, quota_anchor_at FROM users WHERE username = 'admin'`).
+		Scan(&weeklyQuotaCredits, &lifetimeQuotaCredits, &lifetimeQuotaUsedMicrocredits, &quotaAnchor); err != nil {
+		t.Fatal(err)
+	}
+	if weeklyQuotaCredits != 0 || lifetimeQuotaCredits != 0 || lifetimeQuotaUsedMicrocredits != 0 || !quotaAnchor.Valid {
+		t.Fatalf("quota = %d/%d/%d/%v, want unlimited quota with anchor", weeklyQuotaCredits, lifetimeQuotaCredits, lifetimeQuotaUsedMicrocredits, quotaAnchor)
+	}
+	var uncachedRate, cachedRate, outputRate float64
+	if err := store.db.QueryRow(`SELECT quota_uncached_input_rate, quota_cached_input_rate, quota_output_rate FROM models WHERE name = 'published-model'`).
+		Scan(&uncachedRate, &cachedRate, &outputRate); err != nil {
+		t.Fatal(err)
+	}
+	if uncachedRate != 1 || cachedRate != 1 || outputRate != 1 {
+		t.Fatalf("quota rates = %v/%v/%v, want 1/1/1", uncachedRate, cachedRate, outputRate)
 	}
 	var protocol string
 	if err := store.db.QueryRow(`SELECT upstream_protocol FROM model_routes WHERE upstream_model = 'published-upstream'`).Scan(&protocol); err != nil {

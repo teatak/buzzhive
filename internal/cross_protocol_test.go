@@ -496,6 +496,9 @@ func TestGeminiRoutesToAnthropic(t *testing.T) {
 	if upstreamBody.Model != "claude-upstream" || len(upstreamBody.Messages) != 1 {
 		t.Fatalf("upstream body = %+v", upstreamBody)
 	}
+	if upstreamBody.MaxTokens == nil || *upstreamBody.MaxTokens != defaultAnthropicMaxOutputTokens {
+		t.Fatalf("max tokens = %v", upstreamBody.MaxTokens)
+	}
 	var got protocol.GeminiGenerateResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
@@ -873,7 +876,7 @@ func TestAnthropicToolStreamRoutesToOpenAIResponses(t *testing.T) {
 	defer store.Close()
 
 	body := serveCrossProtocolRequest(t, srv, "/v1/messages", `{"model":"anthropic-stream-responses","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
-	for _, want := range []string{"message_start", `"type":"tool_use"`, `"id":"call_1"`, `"name":"lookup"`, `"partial_json":"{\\\"q\\\":\\\"hello\\\"}"`, `"stop_reason":"tool_use"`, "message_stop"} {
+	for _, want := range []string{"message_start", `"type":"tool_use"`, `"id":"call_1"`, `"name":"lookup"`, `"partial_json":"{\"q\":\"hello\"}"`, `"stop_reason":"tool_use"`, "message_stop"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("stream missing %q: %s", want, body)
 		}

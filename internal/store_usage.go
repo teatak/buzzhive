@@ -34,9 +34,10 @@ func (s *Store) InsertUsageBatch(records []UsageRecord) error {
 			total_tokens,
 			cached_tokens,
 			reasoning_tokens,
+			quota_microcredits,
 			raw_usage,
 			created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return err
@@ -54,6 +55,33 @@ func (s *Store) InsertUsageBatch(records []UsageRecord) error {
 		return err
 	}
 	defer dailyStmt.Close()
+	quotaStmt, err := s.prepareTx(tx, `
+		INSERT INTO user_quota_usage (
+			user_id,
+			period_start,
+			period_end,
+			used_microcredits,
+			updated_at
+		) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, period_start) DO UPDATE SET
+			period_end = excluded.period_end,
+			used_microcredits = user_quota_usage.used_microcredits + excluded.used_microcredits,
+			updated_at = excluded.updated_at
+		RETURNING used_microcredits`)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	defer quotaStmt.Close()
+	lifetimeQuotaStmt, err := s.prepareTx(tx, `
+		UPDATE users
+		SET lifetime_quota_used_microcredits = lifetime_quota_used_microcredits + ?
+		WHERE id = ?`)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	defer lifetimeQuotaStmt.Close()
 
 	for _, record := range records {
 		createdAt := record.CreatedAt
@@ -80,6 +108,7 @@ func (s *Store) InsertUsageBatch(records []UsageRecord) error {
 			record.TotalTokens,
 			record.CachedTokens,
 			record.ReasoningTokens,
+			record.QuotaMicrocredits,
 			record.RawUsage,
 			createdAt,
 		); err != nil {
@@ -94,8 +123,42 @@ func (s *Store) InsertUsageBatch(records []UsageRecord) error {
 			_ = tx.Rollback()
 			return err
 		}
+		if record.UserID > 0 && record.QuotaMicrocredits > 0 && !record.QuotaPeriodStart.IsZero() {
+			var periodEnd any
+			if record.QuotaPeriodEnd != nil {
+				periodEnd = record.QuotaPeriodEnd.UTC()
+			}
+			var usedMicrocredits int64
+			if err := quotaStmt.QueryRow(
+				record.UserID,
+				record.QuotaPeriodStart.UTC(),
+				periodEnd,
+				record.QuotaMicrocredits,
+				createdAt,
+			).Scan(&usedMicrocredits); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+			if record.UsesLifetimeQuota {
+				previousUsed := usedMicrocredits - record.QuotaMicrocredits
+				lifetimeUsed := quotaOverage(usedMicrocredits, record.WeeklyQuotaLimitMicrocredits) - quotaOverage(previousUsed, record.WeeklyQuotaLimitMicrocredits)
+				if lifetimeUsed > 0 {
+					if _, err := lifetimeQuotaStmt.Exec(lifetimeUsed, record.UserID); err != nil {
+						_ = tx.Rollback()
+						return err
+					}
+				}
+			}
+		}
 	}
 	return tx.Commit()
+}
+
+func quotaOverage(used, limit int64) int64 {
+	if used <= limit {
+		return 0
+	}
+	return used - limit
 }
 
 func usageStatsUpsertSQL(table string) string {

@@ -12,6 +12,8 @@ import (
 	"github.com/teatak/buzzhive/internal/protocol"
 )
 
+const defaultAnthropicMaxOutputTokens = 4096
+
 func routeTargetsUseMixedProtocols(targets []RouteTarget) bool {
 	if len(targets) < 2 {
 		return false
@@ -63,6 +65,9 @@ func (s *Server) proxyMixedCanonicalRoutes(
 	inbound string,
 	includeUsage bool,
 ) {
+	if !s.enforceUserQuota(w, inbound, user) {
+		return
+	}
 	requests := make(map[RouteTarget]ProviderRequest, len(targets))
 	preparedTargets := make([]RouteTarget, 0, len(targets))
 	var preparationErr error
@@ -152,7 +157,7 @@ func (s *Server) proxyMixedCanonicalRoutes(
 	s.rememberToolSignatures(r.Context(), user, model, canonicalResp.ToolCalls)
 	writeConvertedHeaders(w, result)
 	writeCanonicalResponse(w, inbound, canonicalResp)
-	s.recordProviderResultUsage(user, model, result, http.StatusOK, tokenUsageFromCanonical(canonicalResp.Usage))
+	s.recordProviderResultUsage(user, model, result, http.StatusOK, tokenUsageFromProviderBody(raw, result.Target.ProviderType))
 }
 
 func (s *Server) prepareCanonicalProviderRequest(
@@ -213,6 +218,13 @@ func (s *Server) prepareCanonicalProviderRequest(
 		request.Path = "/v1/responses"
 		payload = converted
 	case providerAnthropic:
+		if targetReq.MaxOutputTokens == nil {
+			maxOutputTokens := defaultAnthropicMaxOutputTokens
+			if target.MaxOutputTokens > 0 {
+				maxOutputTokens = int(target.MaxOutputTokens)
+			}
+			targetReq.MaxOutputTokens = &maxOutputTokens
+		}
 		converted, err := protocol.CanonicalToAnthropicMessagesRequest(targetReq)
 		if err != nil {
 			return ProviderRequest{}, err
@@ -327,7 +339,14 @@ func tokenUsageFromProviderBody(raw []byte, providerType string) TokenUsage {
 		if json.Unmarshal(raw, &response) == nil {
 			canonical, err := protocol.AnthropicMessagesResponseToCanonical(response)
 			if err == nil {
-				return tokenUsageFromCanonical(canonical.Usage)
+				usage := tokenUsageFromCanonical(canonical.Usage)
+				var envelope struct {
+					Usage json.RawMessage `json:"usage"`
+				}
+				if json.Unmarshal(raw, &envelope) == nil && !isEmptyRawJSON(envelope.Usage) {
+					usage.RawUsage = compactRawJSON(envelope.Usage)
+				}
+				return usage
 			}
 		}
 	default:

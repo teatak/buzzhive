@@ -1,17 +1,19 @@
-import { Activity, BarChart3, CircleOff, KeyRound, Loader2 } from "lucide-react";
+import type { ReactNode } from "react";
+import { Activity, BarChart3, CalendarClock, CircleGauge, CircleOff, KeyRound, Loader2 } from "lucide-react";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { ButtonGroup } from "../components/ui/button-group";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
+import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { TokenUsageChart } from "../features/usage/TokenUsageChart";
 import { UsageChart } from "../features/usage/UsageChart";
 import { useLocale } from "../i18n/locale";
-import { displayMinute, naturalMonthRange, recentDaysRange } from "../lib/date";
+import { displayMinute, formatDate, naturalMonthRange, recentDaysRange } from "../lib/date";
 import { modelDisplayName } from "../lib/model";
 import { cn, formatCompactNumber } from "../lib/utils";
-import type { Model, UsagePoint, UsageSummary, UserAPIKey } from "../types/admin";
+import type { Model, UsagePoint, UsageSummary, UserAPIKey, UserQuotaStatus } from "../types/admin";
 
 export type UsageFilter = {
   key_id: string;
@@ -22,6 +24,7 @@ export type UsageFilter = {
 
 export type UsageDashboardProps = {
   usage: UsageSummary | null;
+  quota?: UserQuotaStatus | null;
   usageFilter: UsageFilter;
   usageIsToday: boolean;
   usageSeries: UsagePoint[];
@@ -79,6 +82,8 @@ export function UsageDashboard(props: UsageDashboardProps & { apiKeyMetricLabel:
           />
         </CardContent>
       </Card>
+
+      {props.quota && <QuotaSummary quota={props.quota} />}
 
       {props.usage ? (
         <>
@@ -143,6 +148,88 @@ export function UsageDashboard(props: UsageDashboardProps & { apiKeyMetricLabel:
       )}
     </div>
   );
+}
+
+function QuotaSummary({ quota }: { quota: UserQuotaStatus }) {
+  const { locale, t } = useLocale();
+  if (quota.unlimited) {
+    return (
+      <Card size="sm">
+        <CardContent className="flex items-center gap-2">
+          <CircleGauge className="text-muted-foreground" size={17} />
+          <span className="font-medium">{t("users.quota")}</span>
+          <Badge variant="secondary">{t("users.quota_unlimited")}</Badge>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card size="sm">
+      <CardContent className="grid items-center gap-3 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] md:gap-5">
+        <div className="flex items-center gap-2 font-medium">
+          <CircleGauge className="text-muted-foreground" size={17} />
+          {t("users.quota")}
+        </div>
+        <QuotaPool
+          label={t("users.weekly_quota_remaining")}
+          remaining={quota.weekly_remaining_microcredits}
+          total={quota.weekly_quota_credits}
+          locale={locale}
+          emptyLabel={t("users.no_weekly_quota")}
+          detail={quota.weekly_quota_credits > 0 ? (
+            <span className="flex items-center gap-1" title={formatDate(quota.period_end)}>
+              <CalendarClock size={12} /> {t("users.quota_resets_at")} {formatDate(quota.period_end)}
+            </span>
+          ) : undefined}
+        />
+        <QuotaPool
+          label={t("users.lifetime_quota_remaining")}
+          remaining={quota.lifetime_remaining_microcredits}
+          total={quota.lifetime_quota_credits}
+          locale={locale}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+function QuotaPool(props: {
+  label: string;
+  remaining: number;
+  total: number;
+  locale: string;
+  emptyLabel?: string;
+  detail?: ReactNode;
+}) {
+  if (props.total <= 0) {
+    return (
+      <div className="min-w-0">
+        <div className="text-xs text-muted-foreground">{props.label}</div>
+        <div className="mt-1 text-sm font-medium">{props.emptyLabel ?? formatCredits(0, props.locale)}</div>
+      </div>
+    );
+  }
+  const totalMicrocredits = props.total * 1_000_000;
+  const used = Math.max(0, totalMicrocredits - props.remaining);
+  const progress = Math.min(100, (used / totalMicrocredits) * 100);
+
+  return (
+    <div className="min-w-0">
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <span className="truncate text-muted-foreground">{props.label}</span>
+        <span className="shrink-0 font-medium tabular-nums">
+          {formatCredits(props.remaining, props.locale)} / {formatCredits(totalMicrocredits, props.locale)}
+        </span>
+      </div>
+      <Progress className="mt-1.5" value={progress} />
+      {props.detail && <div className="mt-1 text-xs text-muted-foreground">{props.detail}</div>}
+    </div>
+  );
+}
+
+function formatCredits(microcredits: number, locale: string) {
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 3 }).format(microcredits / 1_000_000);
 }
 
 function RangeShortcut(props: { label: string; active: boolean; onClick: () => void }) {

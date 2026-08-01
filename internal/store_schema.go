@@ -22,9 +22,19 @@ func (s *Store) schemaStatements() []string {
 			password_hash TEXT NOT NULL,
 			role TEXT NOT NULL DEFAULT 'user',
 			valid INTEGER NOT NULL DEFAULT 1,
+			weekly_quota_credits BIGINT NOT NULL DEFAULT 0,
+			lifetime_quota_credits BIGINT NOT NULL DEFAULT 0,
+			lifetime_quota_used_microcredits BIGINT NOT NULL DEFAULT 0,
+			quota_anchor_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_quota_credits BIGINT NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS lifetime_quota_credits BIGINT NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS lifetime_quota_used_microcredits BIGINT NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_anchor_at TIMESTAMPTZ`,
+		`UPDATE users SET quota_anchor_at = created_at WHERE quota_anchor_at IS NULL`,
+		`ALTER TABLE users ALTER COLUMN quota_anchor_at SET NOT NULL`,
 		`CREATE TABLE IF NOT EXISTS user_api_keys (
 			id BIGSERIAL PRIMARY KEY,
 			user_id BIGINT NOT NULL,
@@ -86,12 +96,18 @@ func (s *Store) schemaStatements() []string {
 			context_window BIGINT NOT NULL DEFAULT 0,
 			max_input_tokens BIGINT NOT NULL DEFAULT 0,
 			max_output_tokens BIGINT NOT NULL DEFAULT 0,
+			quota_uncached_input_rate NUMERIC(20,6) NOT NULL DEFAULT 1,
+			quota_cached_input_rate NUMERIC(20,6) NOT NULL DEFAULT 1,
+			quota_output_rate NUMERIC(20,6) NOT NULL DEFAULT 1,
 			capabilities TEXT NOT NULL DEFAULT '{}',
 			selection_policy TEXT NOT NULL DEFAULT 'round_robin',
 			enabled INTEGER NOT NULL DEFAULT 1,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
+		`ALTER TABLE models ADD COLUMN IF NOT EXISTS quota_uncached_input_rate NUMERIC(20,6) NOT NULL DEFAULT 1`,
+		`ALTER TABLE models ADD COLUMN IF NOT EXISTS quota_cached_input_rate NUMERIC(20,6) NOT NULL DEFAULT 1`,
+		`ALTER TABLE models ADD COLUMN IF NOT EXISTS quota_output_rate NUMERIC(20,6) NOT NULL DEFAULT 1`,
 		`CREATE TABLE IF NOT EXISTS model_routes (
 			id BIGSERIAL PRIMARY KEY,
 			model_id BIGINT NOT NULL,
@@ -128,9 +144,63 @@ func (s *Store) schemaStatements() []string {
 			total_tokens BIGINT NOT NULL DEFAULT 0,
 			cached_tokens BIGINT NOT NULL DEFAULT 0,
 			reasoning_tokens BIGINT NOT NULL DEFAULT 0,
+			quota_microcredits BIGINT NOT NULL DEFAULT 0,
 			raw_usage TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
+		`ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS quota_microcredits BIGINT NOT NULL DEFAULT 0`,
+		`CREATE TABLE IF NOT EXISTS user_quota_usage (
+			user_id BIGINT NOT NULL,
+			period_start TIMESTAMPTZ NOT NULL,
+			period_end TIMESTAMPTZ,
+			used_microcredits BIGINT NOT NULL DEFAULT 0,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			PRIMARY KEY (user_id, period_start),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`ALTER TABLE user_quota_usage ALTER COLUMN period_end DROP NOT NULL`,
+		`DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'quota_credits'
+			) THEN
+				IF EXISTS (
+					SELECT 1 FROM information_schema.columns
+					WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'quota_cycle'
+				) THEN
+					UPDATE users SET
+						weekly_quota_credits = CASE WHEN quota_cycle = 'weekly' THEN quota_credits ELSE weekly_quota_credits END,
+						lifetime_quota_credits = CASE WHEN quota_cycle = 'lifetime' THEN quota_credits ELSE lifetime_quota_credits END;
+					UPDATE users u SET lifetime_quota_used_microcredits = GREATEST(
+						u.lifetime_quota_used_microcredits,
+						COALESCE((
+							SELECT q.used_microcredits
+							FROM user_quota_usage q
+							WHERE q.user_id = u.id AND q.period_start = u.quota_anchor_at
+						), 0)
+					) WHERE u.quota_cycle = 'lifetime';
+				ELSE
+					UPDATE users SET weekly_quota_credits = quota_credits;
+				END IF;
+			END IF;
+			IF EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'extra_quota_credits'
+			) THEN
+				UPDATE users SET lifetime_quota_credits = lifetime_quota_credits + extra_quota_credits;
+			END IF;
+			IF EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'extra_quota_used_microcredits'
+			) THEN
+				UPDATE users SET lifetime_quota_used_microcredits = GREATEST(lifetime_quota_used_microcredits, extra_quota_used_microcredits);
+			END IF;
+		END $$`,
+		`ALTER TABLE users DROP COLUMN IF EXISTS quota_credits`,
+		`ALTER TABLE users DROP COLUMN IF EXISTS extra_quota_credits`,
+		`ALTER TABLE users DROP COLUMN IF EXISTS extra_quota_used_microcredits`,
+		`ALTER TABLE users DROP COLUMN IF EXISTS quota_cycle`,
 		`CREATE TABLE IF NOT EXISTS usage_stats_hourly (
 			bucket_start TIMESTAMPTZ NOT NULL,
 			user_id BIGINT NOT NULL DEFAULT 0,
@@ -172,6 +242,7 @@ func (s *Store) schemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_model_routes_provider_protocol ON model_routes(provider_id, upstream_protocol)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_user_created ON usage_logs(user_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_key_created ON usage_logs(user_api_key_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_quota_usage_period ON user_quota_usage(user_id, period_end)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_stats_hourly_user_bucket ON usage_stats_hourly(user_id, bucket_start)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_stats_hourly_key_bucket ON usage_stats_hourly(user_api_key_id, bucket_start)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_stats_daily_user_bucket ON usage_stats_daily(user_id, bucket_start)`,

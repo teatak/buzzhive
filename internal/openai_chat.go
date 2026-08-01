@@ -166,6 +166,9 @@ func geminiThinkingLevelForOpenAIReasoningEffort(effort *string, model string) (
 }
 
 func (s *Server) proxyRaw(w http.ResponseWriter, r *http.Request, body []byte, user AuthToken, model string, targets []RouteTarget, inbound string) {
+	if !s.enforceUserQuota(w, inbound, user) {
+		return
+	}
 	reqDiag := openAIDiagnosticRequest{}
 	if isOpenAIProviderType(inbound) {
 		reqDiag = openAIDiagnosticRequestFromBody(body)

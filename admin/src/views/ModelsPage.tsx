@@ -63,6 +63,9 @@ const modelDefaults: Model = {
   context_window: 0,
   max_input_tokens: 0,
   max_output_tokens: 0,
+  quota_uncached_input_rate: 1,
+  quota_cached_input_rate: 1,
+  quota_output_rate: 1,
   capabilities: defaultCapabilities,
   selection_policy: "round_robin",
   enabled: true,
@@ -274,6 +277,14 @@ export function ModelsPage(props: ModelsPageProps) {
               <ModelStat label={t("models.max_output_tokens")} value={formatModelNumber(selectedModel.max_output_tokens)} />
               <ModelStat label={t("models.policy")} value={policyLabel(t, selectedModel.selection_policy)} />
             </div>
+            <div className="space-y-2">
+              <h3 className="text-sm font-medium">{t("models.quota_rates")}</h3>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <ModelStat label={t("models.quota_uncached_input_rate")} value={formatModelNumber(selectedModel.quota_uncached_input_rate)} />
+                <ModelStat label={t("models.quota_cached_input_rate")} value={formatModelNumber(selectedModel.quota_cached_input_rate)} />
+                <ModelStat label={t("models.quota_output_rate")} value={formatModelNumber(selectedModel.quota_output_rate)} />
+              </div>
+            </div>
             <div className="flex items-center gap-2">
               <h3 className="text-lg font-semibold">{t("models.routes")}</h3>
               <Badge variant="secondary">{selectedModelRoutes.length}</Badge>
@@ -406,6 +417,14 @@ export function ModelsPage(props: ModelsPageProps) {
             <div className="grid gap-4 sm:grid-cols-2">
               <TokenNumberField label={t("models.context_window")} value={modelForm.context_window} onChange={(context_window) => setModelForm({ ...modelForm, context_window })} />
               <TokenNumberField label={t("models.max_output_tokens")} value={modelForm.max_output_tokens} onChange={(max_output_tokens) => setModelForm({ ...modelForm, max_output_tokens })} />
+            </div>
+            <div className="space-y-3 rounded-lg border p-3">
+              <div className="text-sm font-medium">{t("models.quota_rates")}</div>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <FormNumberField label={t("models.quota_uncached_input_rate")} min={0} step="any" value={modelForm.quota_uncached_input_rate} onChange={(quota_uncached_input_rate) => setModelForm({ ...modelForm, quota_uncached_input_rate })} />
+                <FormNumberField label={t("models.quota_cached_input_rate")} min={0} step="any" value={modelForm.quota_cached_input_rate} onChange={(quota_cached_input_rate) => setModelForm({ ...modelForm, quota_cached_input_rate })} />
+                <FormNumberField label={t("models.quota_output_rate")} min={0} step="any" value={modelForm.quota_output_rate} onChange={(quota_output_rate) => setModelForm({ ...modelForm, quota_output_rate })} />
+              </div>
             </div>
             <CapabilityField value={modelForm.capabilities} onChange={(capabilities) => setModelForm({ ...modelForm, capabilities })} />
             <div className="grid gap-4 sm:grid-cols-2">

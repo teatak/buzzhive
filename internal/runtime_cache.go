@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -17,6 +18,7 @@ type RuntimeCache struct {
 
 type adminSessionCacheValue struct {
 	User      AppUser `json:"user"`
+	IssuedAt  string  `json:"issued_at,omitempty"`
 	ExpiresAt string  `json:"expires_at"`
 }
 
@@ -98,7 +100,32 @@ func (c *RuntimeCache) AdminSession(ctx context.Context, token string) (SessionU
 		_ = c.DeleteAdminSession(ctx, token)
 		return SessionUser{}, errRuntimeCacheMiss
 	}
-	return SessionUser{User: value.User, ExpiresAt: expiresAt}, nil
+	legacySession := value.IssuedAt == ""
+	issuedAt := expiresAt.Add(-adminSessionTTL)
+	if !legacySession {
+		issuedAt, err = time.Parse(time.RFC3339Nano, value.IssuedAt)
+		if err != nil {
+			return SessionUser{}, err
+		}
+	}
+	if revokedAt, err := c.adminSessionsRevokedAt(ctx, value.User.ID); err == nil && !issuedAt.After(revokedAt) {
+		_ = c.DeleteAdminSession(ctx, token)
+		return SessionUser{}, errRuntimeCacheMiss
+	} else if err != nil && !errors.Is(err, errRuntimeCacheMiss) {
+		return SessionUser{}, err
+	}
+
+	// Sessions written before per-user indexes existed are registered once on read.
+	if legacySession {
+		hash := sessionHash(token)
+		pipe := c.client.Pipeline()
+		pipe.SAdd(ctx, adminUserSessionsKey(value.User.ID), hash)
+		pipe.Expire(ctx, adminUserSessionsKey(value.User.ID), adminSessionTTL)
+		if _, err := pipe.Exec(ctx); err != nil {
+			return SessionUser{}, err
+		}
+	}
+	return SessionUser{User: value.User, IssuedAt: issuedAt, ExpiresAt: expiresAt}, nil
 }
 
 func (c *RuntimeCache) SetAdminSession(ctx context.Context, token string, sessionUser SessionUser) error {
@@ -109,14 +136,24 @@ func (c *RuntimeCache) SetAdminSession(ctx context.Context, token string, sessio
 	if ttl <= 0 {
 		return c.DeleteAdminSession(ctx, token)
 	}
+	if sessionUser.IssuedAt.IsZero() {
+		sessionUser.IssuedAt = time.Now()
+	}
 	raw, err := json.Marshal(adminSessionCacheValue{
 		User:      sessionUser.User,
+		IssuedAt:  sessionUser.IssuedAt.Format(time.RFC3339Nano),
 		ExpiresAt: sessionUser.ExpiresAt.Format(time.RFC3339),
 	})
 	if err != nil {
 		return err
 	}
-	return c.client.Set(ctx, adminSessionKey(token), raw, ttl).Err()
+	hash := sessionHash(token)
+	pipe := c.client.TxPipeline()
+	pipe.Set(ctx, adminSessionKeyFromHash(hash), raw, ttl)
+	pipe.SAdd(ctx, adminUserSessionsKey(sessionUser.User.ID), hash)
+	pipe.Expire(ctx, adminUserSessionsKey(sessionUser.User.ID), adminSessionTTL)
+	_, err = pipe.Exec(ctx)
+	return err
 }
 
 func (c *RuntimeCache) DeleteAdminSession(ctx context.Context, token string) error {
@@ -127,7 +164,55 @@ func (c *RuntimeCache) DeleteAdminSession(ctx context.Context, token string) err
 }
 
 func adminSessionKey(token string) string {
-	return "bh:admin-session:" + sessionHash(token)
+	return adminSessionKeyFromHash(sessionHash(token))
+}
+
+func adminSessionKeyFromHash(hash string) string {
+	return "bh:admin-session:" + hash
+}
+
+func adminUserSessionsKey(userID int64) string {
+	return "bh:admin-user-sessions:" + strconv.FormatInt(userID, 10)
+}
+
+func adminSessionsRevokedKey(userID int64) string {
+	return "bh:admin-sessions-revoked:" + strconv.FormatInt(userID, 10)
+}
+
+func (c *RuntimeCache) adminSessionsRevokedAt(ctx context.Context, userID int64) (time.Time, error) {
+	value, err := c.client.Get(ctx, adminSessionsRevokedKey(userID)).Result()
+	if errors.Is(err, redis.Nil) {
+		return time.Time{}, errRuntimeCacheMiss
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	revokedAt, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return revokedAt, nil
+}
+
+func (c *RuntimeCache) RevokeAdminSessions(ctx context.Context, userID int64) error {
+	if !c.Enabled() {
+		return nil
+	}
+	hashes, err := c.client.SMembers(ctx, adminUserSessionsKey(userID)).Result()
+	if err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(hashes)+1)
+	for _, hash := range hashes {
+		keys = append(keys, adminSessionKeyFromHash(hash))
+	}
+	keys = append(keys, adminUserSessionsKey(userID))
+
+	pipe := c.client.TxPipeline()
+	pipe.Del(ctx, keys...)
+	pipe.Set(ctx, adminSessionsRevokedKey(userID), time.Now().UTC().Format(time.RFC3339Nano), adminSessionTTL)
+	_, err = pipe.Exec(ctx)
+	return err
 }
 
 func (c *RuntimeCache) RouteSession(ctx context.Context, key string) (RouteSession, error) {

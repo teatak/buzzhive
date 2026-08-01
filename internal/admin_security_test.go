@@ -53,6 +53,7 @@ func TestAdminOnlyRoutesRejectNonAdmin(t *testing.T) {
 		{http.MethodGet, "/admin/api/users/1"},
 		{http.MethodGet, "/admin/api/users/1/api-keys"},
 		{http.MethodGet, "/admin/api/users/1/usage"},
+		{http.MethodGet, "/admin/api/users/1/quota"},
 	} {
 		t.Run(tt.path, func(t *testing.T) {
 			rr := httptest.NewRecorder()
@@ -63,6 +64,37 @@ func TestAdminOnlyRoutesRejectNonAdmin(t *testing.T) {
 				t.Fatalf("status = %d, want 403, body = %s", rr.Code, rr.Body.String())
 			}
 		})
+	}
+}
+
+func TestUserCanReadOwnQuota(t *testing.T) {
+	srv := newAdminRouteTestServer(t)
+	user, err := srv.store.CreateAppUser("quota-self-user", "password", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err = srv.store.UpdateUserQuota(user.ID, 12, 3, user.CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := srv.createSession(user)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/quota", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	srv.adminAPI.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var status UserQuotaStatus
+	if err := json.Unmarshal(rr.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.WeeklyQuotaCredits != 12 || status.LifetimeQuotaCredits != 3 || status.Unlimited {
+		t.Fatalf("quota status = %+v", status)
 	}
 }
 
@@ -167,6 +199,221 @@ func TestAdminCanManageAndInspectAnotherUsersAPIKeys(t *testing.T) {
 	}
 	if len(selfKeys) != 0 {
 		t.Fatalf("admin self keys leaked target keys: %+v", selfKeys)
+	}
+}
+
+func TestAdminCanUpdateAndResetUserQuota(t *testing.T) {
+	srv := newAdminRouteTestServer(t)
+	adminToken := createAdminRouteTestSession(t, srv, "quota-admin", "admin")
+	target, err := srv.store.CreateAppUser("quota-target", "password", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := srv.store.CreateUserAPIKey(AuthToken{UserID: target.ID, Name: "quota-key", Token: "bh_quota_target", Valid: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := "/admin/api/users/" + strconv.FormatInt(target.ID, 10) + "/quota"
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, path, bytes.NewBufferString(`{"weekly_quota_credits":25,"lifetime_quota_credits":5}`))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	srv.adminAPI.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var status UserQuotaStatus
+	if err := json.Unmarshal(rr.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.WeeklyQuotaCredits != 25 || status.LifetimeQuotaCredits != 5 || status.PeriodEnd.IsZero() || status.Unlimited {
+		t.Fatalf("quota status = %+v", status)
+	}
+	runtimeKey, ok := srv.authTokens[key.Token]
+	if !ok || runtimeKey.WeeklyQuotaCredits != 25 || runtimeKey.LifetimeQuotaCredits != 5 || runtimeKey.QuotaAnchor.IsZero() {
+		t.Fatalf("runtime key = %+v, loaded = %v", runtimeKey, ok)
+	}
+	anchorBeforeReset := runtimeKey.QuotaAnchor
+
+	resetRR := httptest.NewRecorder()
+	resetReq := httptest.NewRequest(http.MethodPost, path+"/reset", nil)
+	resetReq.Header.Set("Authorization", "Bearer "+adminToken)
+	srv.adminAPI.ServeHTTP(resetRR, resetReq)
+	if resetRR.Code != http.StatusOK {
+		t.Fatalf("reset status = %d, body = %s", resetRR.Code, resetRR.Body.String())
+	}
+	runtimeKey = srv.authTokens[key.Token]
+	if !runtimeKey.QuotaAnchor.After(anchorBeforeReset) {
+		t.Fatalf("quota anchor was not reset: %v <= %v", runtimeKey.QuotaAnchor, anchorBeforeReset)
+	}
+
+	missingRR := httptest.NewRecorder()
+	missingReq := httptest.NewRequest(http.MethodPut, path, bytes.NewBufferString(`{}`))
+	missingReq.Header.Set("Authorization", "Bearer "+adminToken)
+	missingReq.Header.Set("Content-Type", "application/json")
+	srv.adminAPI.ServeHTTP(missingRR, missingReq)
+	if missingRR.Code != http.StatusBadRequest {
+		t.Fatalf("missing quota status = %d, body = %s", missingRR.Code, missingRR.Body.String())
+	}
+}
+
+func TestAdminCanResetAllWeeklyQuotas(t *testing.T) {
+	srv := newAdminRouteTestServer(t)
+	adminToken := createAdminRouteTestSession(t, srv, "weekly-reset-admin", "admin")
+	weekly, err := srv.store.CreateAppUser("weekly-api-user", "password", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifetime, err := srv.store.CreateAppUser("lifetime-api-user", "password", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	weekly, err = srv.store.UpdateUserQuota(weekly.ID, 10, 0, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.store.UpdateUserQuota(lifetime.ID, 0, 10, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	weeklyBefore, _ := srv.store.User(weekly.ID)
+	lifetimeBefore, _ := srv.store.User(lifetime.ID)
+	time.Sleep(time.Millisecond)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/quotas/weekly/reset", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	srv.adminAPI.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	weeklyAfter, _ := srv.store.User(weekly.ID)
+	lifetimeAfter, _ := srv.store.User(lifetime.ID)
+	if !weeklyAfter.QuotaAnchor.After(weeklyBefore.QuotaAnchor) {
+		t.Fatalf("weekly anchor was not reset: %v", weeklyAfter.QuotaAnchor)
+	}
+	if !lifetimeAfter.QuotaAnchor.Equal(lifetimeBefore.QuotaAnchor) {
+		t.Fatalf("lifetime anchor changed: %v -> %v", lifetimeBefore.QuotaAnchor, lifetimeAfter.QuotaAnchor)
+	}
+}
+
+func TestAdminCanManageUserAccessAndRevokeSessions(t *testing.T) {
+	srv := newAdminRouteTestServer(t)
+	adminToken := createAdminRouteTestSession(t, srv, "access-admin", "admin")
+	target, err := srv.store.CreateAppUser("access-target", "password", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetToken, err := srv.createSession(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := srv.store.CreateUserAPIKey(AuthToken{UserID: target.ID, Name: "access-key", Token: "bh_access_target", Valid: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.reloadRuntimeState(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := srv.authTokens[key.Token]; !ok {
+		t.Fatal("target API key was not loaded")
+	}
+
+	disableRR := httptest.NewRecorder()
+	disableReq := httptest.NewRequest(
+		http.MethodPut,
+		"/admin/api/users/"+strconv.FormatInt(target.ID, 10),
+		bytes.NewBufferString(`{"valid":false,"role":"user"}`),
+	)
+	disableReq.Header.Set("Authorization", "Bearer "+adminToken)
+	disableReq.Header.Set("Content-Type", "application/json")
+	srv.adminAPI.ServeHTTP(disableRR, disableReq)
+	if disableRR.Code != http.StatusOK {
+		t.Fatalf("disable status = %d, body = %s", disableRR.Code, disableRR.Body.String())
+	}
+
+	sessionRR := httptest.NewRecorder()
+	sessionReq := httptest.NewRequest(http.MethodGet, "/admin/api/session", nil)
+	sessionReq.Header.Set("Authorization", "Bearer "+targetToken)
+	srv.adminAPI.ServeHTTP(sessionRR, sessionReq)
+	if sessionRR.Code != http.StatusUnauthorized {
+		t.Fatalf("disabled user session status = %d, want 401", sessionRR.Code)
+	}
+	if _, ok := srv.authTokens[key.Token]; ok {
+		t.Fatal("disabled user's API key remained active")
+	}
+
+	enableRR := httptest.NewRecorder()
+	enableReq := httptest.NewRequest(
+		http.MethodPut,
+		"/admin/api/users/"+strconv.FormatInt(target.ID, 10),
+		bytes.NewBufferString(`{"valid":true,"role":"admin"}`),
+	)
+	enableReq.Header.Set("Authorization", "Bearer "+adminToken)
+	enableReq.Header.Set("Content-Type", "application/json")
+	srv.adminAPI.ServeHTTP(enableRR, enableReq)
+	if enableRR.Code != http.StatusOK {
+		t.Fatalf("enable status = %d, body = %s", enableRR.Code, enableRR.Body.String())
+	}
+	var updated AppUser
+	if err := json.Unmarshal(enableRR.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Valid || updated.Role != "admin" {
+		t.Fatalf("updated user = %+v", updated)
+	}
+	if _, ok := srv.authTokens[key.Token]; !ok {
+		t.Fatal("re-enabled user's API key was not restored")
+	}
+
+	targetToken, err = srv.createSession(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revokeRR := httptest.NewRecorder()
+	revokeReq := httptest.NewRequest(http.MethodPost, "/admin/api/users/"+strconv.FormatInt(target.ID, 10)+"/sessions/revoke", nil)
+	revokeReq.Header.Set("Authorization", "Bearer "+adminToken)
+	srv.adminAPI.ServeHTTP(revokeRR, revokeReq)
+	if revokeRR.Code != http.StatusOK {
+		t.Fatalf("revoke status = %d, body = %s", revokeRR.Code, revokeRR.Body.String())
+	}
+
+	sessionRR = httptest.NewRecorder()
+	sessionReq = httptest.NewRequest(http.MethodGet, "/admin/api/session", nil)
+	sessionReq.Header.Set("Authorization", "Bearer "+targetToken)
+	srv.adminAPI.ServeHTTP(sessionRR, sessionReq)
+	if sessionRR.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked session status = %d, want 401", sessionRR.Code)
+	}
+}
+
+func TestAdminUserAccessProtectsCurrentAndLastAdministrator(t *testing.T) {
+	srv := newAdminRouteTestServer(t)
+	adminToken := createAdminRouteTestSession(t, srv, "protected-admin", "admin")
+	admin, err := srv.store.VerifyPassword("protected-admin", "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	selfRR := httptest.NewRecorder()
+	selfReq := httptest.NewRequest(
+		http.MethodPut,
+		"/admin/api/users/"+strconv.FormatInt(admin.ID, 10),
+		bytes.NewBufferString(`{"valid":false,"role":"user"}`),
+	)
+	selfReq.Header.Set("Authorization", "Bearer "+adminToken)
+	selfReq.Header.Set("Content-Type", "application/json")
+	srv.adminAPI.ServeHTTP(selfRR, selfReq)
+	if selfRR.Code != http.StatusBadRequest {
+		t.Fatalf("self update status = %d, want 400, body = %s", selfRR.Code, selfRR.Body.String())
+	}
+
+	actor, err := srv.store.CreateAppUser("non-admin-actor", "password", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.store.UpdateAppUser(actor.ID, admin.ID, "user", true); err == nil || !strings.Contains(err.Error(), "last active administrator") {
+		t.Fatalf("last administrator update error = %v", err)
 	}
 }
 

@@ -3,6 +3,7 @@ package buzzhive
 import (
 	"database/sql"
 	"errors"
+	"math"
 	"strings"
 	"time"
 )
@@ -276,7 +277,9 @@ func (s *Store) DeleteProviderKeys(ids []int64) error {
 
 func (s *Store) Models() ([]Model, error) {
 	rows, err := s.query(`
-		SELECT id, name, display_name, description, context_window, max_input_tokens, max_output_tokens, capabilities, selection_policy, enabled, created_at, updated_at
+		SELECT id, name, display_name, description, context_window, max_input_tokens, max_output_tokens,
+			quota_uncached_input_rate, quota_cached_input_rate, quota_output_rate,
+			capabilities, selection_policy, enabled, created_at, updated_at
 		FROM models
 		ORDER BY name`)
 	if err != nil {
@@ -289,7 +292,12 @@ func (s *Store) Models() ([]Model, error) {
 		var item Model
 		var enabled int
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&item.ID, &item.Name, &item.DisplayName, &item.Description, &item.ContextWindow, &item.MaxInputTokens, &item.MaxOutputTokens, &item.Capabilities, &item.SelectionPolicy, &enabled, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(
+			&item.ID, &item.Name, &item.DisplayName, &item.Description,
+			&item.ContextWindow, &item.MaxInputTokens, &item.MaxOutputTokens,
+			&item.QuotaUncachedInputRate, &item.QuotaCachedInputRate, &item.QuotaOutputRate,
+			&item.Capabilities, &item.SelectionPolicy, &enabled, &createdAt, &updatedAt,
+		); err != nil {
 			return nil, err
 		}
 		item.Enabled = enabled != 0
@@ -305,11 +313,18 @@ func (s *Store) Model(id int64) (Model, error) {
 	var enabled int
 	var createdAt, updatedAt time.Time
 	err := s.queryRow(`
-		SELECT id, name, display_name, description, context_window, max_input_tokens, max_output_tokens, capabilities, selection_policy, enabled, created_at, updated_at
+		SELECT id, name, display_name, description, context_window, max_input_tokens, max_output_tokens,
+			quota_uncached_input_rate, quota_cached_input_rate, quota_output_rate,
+			capabilities, selection_policy, enabled, created_at, updated_at
 		FROM models
 		WHERE id = ?`,
 		id,
-	).Scan(&item.ID, &item.Name, &item.DisplayName, &item.Description, &item.ContextWindow, &item.MaxInputTokens, &item.MaxOutputTokens, &item.Capabilities, &item.SelectionPolicy, &enabled, &createdAt, &updatedAt)
+	).Scan(
+		&item.ID, &item.Name, &item.DisplayName, &item.Description,
+		&item.ContextWindow, &item.MaxInputTokens, &item.MaxOutputTokens,
+		&item.QuotaUncachedInputRate, &item.QuotaCachedInputRate, &item.QuotaOutputRate,
+		&item.Capabilities, &item.SelectionPolicy, &enabled, &createdAt, &updatedAt,
+	)
 	item.Enabled = enabled != 0
 	item.CreatedAt = formatStoreTime(createdAt)
 	item.UpdatedAt = formatStoreTime(updatedAt)
@@ -326,10 +341,13 @@ func (s *Store) CreateModel(model Model) (Model, error) {
 	if model.SelectionPolicy == "" {
 		model.SelectionPolicy = "round_robin"
 	}
+	if err := validateModelQuotaRates(model); err != nil {
+		return Model{}, err
+	}
 	now := storeNow()
 	id, err := s.insertReturningID(
-		`INSERT INTO models (name, display_name, description, context_window, max_input_tokens, max_output_tokens, capabilities, selection_policy, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		model.Name, model.DisplayName, model.Description, model.ContextWindow, model.MaxInputTokens, model.MaxOutputTokens, model.Capabilities, model.SelectionPolicy, boolInt(model.Enabled), now, now,
+		`INSERT INTO models (name, display_name, description, context_window, max_input_tokens, max_output_tokens, quota_uncached_input_rate, quota_cached_input_rate, quota_output_rate, capabilities, selection_policy, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		model.Name, model.DisplayName, model.Description, model.ContextWindow, model.MaxInputTokens, model.MaxOutputTokens, model.QuotaUncachedInputRate, model.QuotaCachedInputRate, model.QuotaOutputRate, model.Capabilities, model.SelectionPolicy, boolInt(model.Enabled), now, now,
 	)
 	if err != nil {
 		return Model{}, err
@@ -347,14 +365,27 @@ func (s *Store) UpdateModel(model Model) (Model, error) {
 	if model.SelectionPolicy == "" {
 		model.SelectionPolicy = "round_robin"
 	}
+	if err := validateModelQuotaRates(model); err != nil {
+		return Model{}, err
+	}
 	_, err := s.exec(
-		`UPDATE models SET name = ?, display_name = ?, description = ?, context_window = ?, max_input_tokens = ?, max_output_tokens = ?, capabilities = ?, selection_policy = ?, enabled = ?, updated_at = ? WHERE id = ?`,
-		model.Name, model.DisplayName, model.Description, model.ContextWindow, model.MaxInputTokens, model.MaxOutputTokens, model.Capabilities, model.SelectionPolicy, boolInt(model.Enabled), storeNow(), model.ID,
+		`UPDATE models SET name = ?, display_name = ?, description = ?, context_window = ?, max_input_tokens = ?, max_output_tokens = ?, quota_uncached_input_rate = ?, quota_cached_input_rate = ?, quota_output_rate = ?, capabilities = ?, selection_policy = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+		model.Name, model.DisplayName, model.Description, model.ContextWindow, model.MaxInputTokens, model.MaxOutputTokens, model.QuotaUncachedInputRate, model.QuotaCachedInputRate, model.QuotaOutputRate, model.Capabilities, model.SelectionPolicy, boolInt(model.Enabled), storeNow(), model.ID,
 	)
 	if err != nil {
 		return Model{}, err
 	}
 	return s.Model(model.ID)
+}
+
+func validateModelQuotaRates(model Model) error {
+	if math.IsNaN(model.QuotaUncachedInputRate) || math.IsInf(model.QuotaUncachedInputRate, 0) ||
+		math.IsNaN(model.QuotaCachedInputRate) || math.IsInf(model.QuotaCachedInputRate, 0) ||
+		math.IsNaN(model.QuotaOutputRate) || math.IsInf(model.QuotaOutputRate, 0) ||
+		model.QuotaUncachedInputRate < 0 || model.QuotaCachedInputRate < 0 || model.QuotaOutputRate < 0 {
+		return errors.New("quota rates must be non-negative")
+	}
+	return nil
 }
 
 func (s *Store) DeleteModel(id int64) error {

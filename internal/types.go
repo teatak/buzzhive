@@ -39,12 +39,15 @@ type Config struct {
 }
 
 type AuthToken struct {
-	ID       int64  `yaml:"-" json:"id"`
-	UserID   int64  `yaml:"-" json:"user_id"`
-	UserName string `yaml:"-" json:"user_name,omitempty"`
-	Name     string `yaml:"name" json:"name"`
-	Token    string `yaml:"token,omitempty" json:"token,omitempty"`
-	Valid    bool   `yaml:"valid" json:"valid"`
+	ID                   int64     `yaml:"-" json:"id"`
+	UserID               int64     `yaml:"-" json:"user_id"`
+	UserName             string    `yaml:"-" json:"user_name,omitempty"`
+	Name                 string    `yaml:"name" json:"name"`
+	Token                string    `yaml:"token,omitempty" json:"token,omitempty"`
+	Valid                bool      `yaml:"valid" json:"valid"`
+	WeeklyQuotaCredits   int64     `yaml:"-" json:"-"`
+	LifetimeQuotaCredits int64     `yaml:"-" json:"-"`
+	QuotaAnchor          time.Time `yaml:"-" json:"-"`
 }
 
 type UserAPIKeyDetails struct {
@@ -151,10 +154,14 @@ type AdminData struct {
 }
 
 type AppUser struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
-	Valid    bool   `json:"valid"`
+	ID                   int64     `json:"id"`
+	Username             string    `json:"username"`
+	Role                 string    `json:"role"`
+	Valid                bool      `json:"valid"`
+	WeeklyQuotaCredits   int64     `json:"weekly_quota_credits"`
+	LifetimeQuotaCredits int64     `json:"lifetime_quota_credits"`
+	QuotaAnchor          time.Time `json:"quota_anchor_at"`
+	CreatedAt            time.Time `json:"created_at"`
 }
 
 type LoginRequest struct {

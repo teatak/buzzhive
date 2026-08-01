@@ -22,25 +22,30 @@ type RedisConfig struct {
 }
 
 type UsageRecord struct {
-	UserID           int64
-	UserName         string
-	UserAPIKeyID     int64
-	UserAPIKeyName   string
-	ProviderID       int64
-	ProviderName     string
-	ProviderKeyID    int64
-	ProviderKeyName  string
-	Model            string
-	UpstreamModel    string
-	Status           int
-	LatencyMS        int64
-	PromptTokens     int64
-	CompletionTokens int64
-	TotalTokens      int64
-	CachedTokens     int64
-	ReasoningTokens  int64
-	RawUsage         string
-	CreatedAt        time.Time
+	UserID                       int64
+	UserName                     string
+	UserAPIKeyID                 int64
+	UserAPIKeyName               string
+	ProviderID                   int64
+	ProviderName                 string
+	ProviderKeyID                int64
+	ProviderKeyName              string
+	Model                        string
+	UpstreamModel                string
+	Status                       int
+	LatencyMS                    int64
+	PromptTokens                 int64
+	CompletionTokens             int64
+	TotalTokens                  int64
+	CachedTokens                 int64
+	ReasoningTokens              int64
+	QuotaMicrocredits            int64
+	WeeklyQuotaLimitMicrocredits int64
+	UsesLifetimeQuota            bool
+	QuotaPeriodStart             time.Time
+	QuotaPeriodEnd               *time.Time
+	RawUsage                     string
+	CreatedAt                    time.Time
 }
 
 type UsageSummary struct {
@@ -118,18 +123,21 @@ type ProviderKey struct {
 }
 
 type Model struct {
-	ID              int64  `json:"id"`
-	Name            string `json:"name"`
-	DisplayName     string `json:"display_name"`
-	Description     string `json:"description"`
-	ContextWindow   int64  `json:"context_window"`
-	MaxInputTokens  int64  `json:"max_input_tokens"`
-	MaxOutputTokens int64  `json:"max_output_tokens"`
-	Capabilities    string `json:"capabilities"`
-	SelectionPolicy string `json:"selection_policy"`
-	Enabled         bool   `json:"enabled"`
-	CreatedAt       string `json:"created_at,omitempty"`
-	UpdatedAt       string `json:"updated_at,omitempty"`
+	ID                     int64   `json:"id"`
+	Name                   string  `json:"name"`
+	DisplayName            string  `json:"display_name"`
+	Description            string  `json:"description"`
+	ContextWindow          int64   `json:"context_window"`
+	MaxInputTokens         int64   `json:"max_input_tokens"`
+	MaxOutputTokens        int64   `json:"max_output_tokens"`
+	QuotaUncachedInputRate float64 `json:"quota_uncached_input_rate"`
+	QuotaCachedInputRate   float64 `json:"quota_cached_input_rate"`
+	QuotaOutputRate        float64 `json:"quota_output_rate"`
+	Capabilities           string  `json:"capabilities"`
+	SelectionPolicy        string  `json:"selection_policy"`
+	Enabled                bool    `json:"enabled"`
+	CreatedAt              string  `json:"created_at,omitempty"`
+	UpdatedAt              string  `json:"updated_at,omitempty"`
 }
 
 type ModelRoute struct {
@@ -145,18 +153,34 @@ type ModelRoute struct {
 }
 
 type RouteTarget struct {
-	ID                 int64
-	ModelID            int64
-	ModelName          string
-	SelectionPolicy    string
-	ProviderID         int64
-	ProviderName       string
-	ProviderEndpointID int64
-	ProviderType       string
-	RouteProtocol      string
-	UpstreamModel      string
-	Priority           int
-	Weight             int
+	ID                     int64
+	ModelID                int64
+	ModelName              string
+	SelectionPolicy        string
+	MaxOutputTokens        int64
+	QuotaUncachedInputRate float64
+	QuotaCachedInputRate   float64
+	QuotaOutputRate        float64
+	ProviderID             int64
+	ProviderName           string
+	ProviderEndpointID     int64
+	ProviderType           string
+	RouteProtocol          string
+	UpstreamModel          string
+	Priority               int
+	Weight                 int
+}
+
+type UserQuotaStatus struct {
+	WeeklyQuotaCredits            int64     `json:"weekly_quota_credits"`
+	WeeklyUsedMicrocredits        int64     `json:"weekly_used_microcredits"`
+	WeeklyRemainingMicrocredits   int64     `json:"weekly_remaining_microcredits"`
+	LifetimeQuotaCredits          int64     `json:"lifetime_quota_credits"`
+	LifetimeUsedMicrocredits      int64     `json:"lifetime_used_microcredits"`
+	LifetimeRemainingMicrocredits int64     `json:"lifetime_remaining_microcredits"`
+	PeriodStart                   time.Time `json:"period_start"`
+	PeriodEnd                     time.Time `json:"period_end"`
+	Unlimited                     bool      `json:"unlimited"`
 }
 
 type RouteSession struct {
@@ -174,5 +198,6 @@ func (t RouteTarget) CooldownModel() string {
 
 type SessionUser struct {
 	User      AppUser
+	IssuedAt  time.Time
 	ExpiresAt time.Time
 }

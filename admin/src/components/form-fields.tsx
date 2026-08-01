@@ -66,13 +66,13 @@ export function FormTextField(props: {
   );
 }
 
-export function FormNumberField(props: { label: string; tip?: string; value: number; onChange: (value: number) => void }) {
+export function FormNumberField(props: { label: string; tip?: string; value: number; min?: number; step?: number | "any"; onChange: (value: number) => void }) {
   const id = useId();
 
   return (
     <Field>
       <LabelWithTip htmlFor={id} label={props.label} tip={props.tip} />
-      <Input id={id} type="number" value={props.value} onChange={(event) => props.onChange(Number(event.target.value))} />
+      <Input id={id} type="number" min={props.min} step={props.step} value={props.value} onChange={(event) => props.onChange(Number(event.target.value))} />
     </Field>
   );
 }

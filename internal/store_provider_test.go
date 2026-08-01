@@ -149,8 +149,11 @@ func TestProviderManagementCRUD(t *testing.T) {
 	}
 
 	model, err := store.CreateModel(Model{
-		Name:    "mimo-v2.5",
-		Enabled: true,
+		Name:                   "mimo-v2.5",
+		QuotaUncachedInputRate: 1.25,
+		QuotaCachedInputRate:   0.1,
+		QuotaOutputRate:        3.5,
+		Enabled:                true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -176,6 +179,9 @@ func TestProviderManagementCRUD(t *testing.T) {
 	}
 	if !ok || len(targets) != 2 || targets[0].RouteProtocol != providerAuto || targets[1].RouteProtocol != providerAuto || targets[0].UpstreamModel != "mimo/v2.5" {
 		t.Fatalf("resolved targets = %+v, ok=%v", targets, ok)
+	}
+	if targets[0].QuotaUncachedInputRate != 1.25 || targets[0].QuotaCachedInputRate != 0.1 || targets[0].QuotaOutputRate != 3.5 {
+		t.Fatalf("resolved quota rates = %+v", targets[0])
 	}
 
 	endpointID := provider.Endpoints[0].ID

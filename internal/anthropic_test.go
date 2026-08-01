@@ -283,7 +283,7 @@ func TestAnthropicRoutesToOpenAIChat(t *testing.T) {
 	if got.Type != "message" || got.Model != "claude-public-chat" || got.Content[0].Text != "hello from chat" {
 		t.Fatalf("response = %+v", got)
 	}
-	if got.Usage.InputTokens != 7 || got.Usage.OutputTokens != 5 || got.Usage.CacheReadInputTokens != 2 {
+	if got.Usage.InputTokens != 5 || got.Usage.OutputTokens != 5 || got.Usage.CacheReadInputTokens != 2 {
 		t.Fatalf("usage = %+v", got.Usage)
 	}
 }
@@ -378,7 +378,7 @@ func TestAnthropicRoutesToGemini(t *testing.T) {
 	if got.Type != "message" || got.Model != "claude-public-gemini" || got.Content[0].Text != "hello from gemini" {
 		t.Fatalf("response = %+v", got)
 	}
-	if got.Usage.InputTokens != 3 || got.Usage.OutputTokens != 4 || got.Usage.CacheReadInputTokens != 1 {
+	if got.Usage.InputTokens != 2 || got.Usage.OutputTokens != 4 || got.Usage.CacheReadInputTokens != 1 {
 		t.Fatalf("usage = %+v", got.Usage)
 	}
 }

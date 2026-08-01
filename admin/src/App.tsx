@@ -22,6 +22,7 @@ import type {
   Stats,
   UsageSummary,
   UserAPIKey,
+  UserQuotaStatus,
   View,
 } from "./types/admin";
 import { BrandIcon } from "./components/brand-icons";
@@ -93,6 +94,7 @@ export function App() {
   const [config, setConfig] = useState<AdminConfig | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [quota, setQuota] = useState<UserQuotaStatus | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
   const [userAPIKeys, setUserAPIKeys] = useState<UserAPIKey[]>([]);
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
@@ -134,14 +136,16 @@ export function App() {
   }
 
   async function loadDashboard(activeToken = token) {
-    const [nextStats, nextUserAPIKeys, nextModels] = await Promise.all([
+    const [nextStats, nextUserAPIKeys, nextModels, nextQuota] = await Promise.all([
       request<Stats>("/admin/api/stats", activeToken),
       request<UserAPIKey[]>("/admin/api/user-api-keys", activeToken),
       request<Model[]>("/admin/api/models", activeToken),
+      request<UserQuotaStatus>("/admin/api/quota", activeToken),
     ]);
     setStats(nextStats);
     setUserAPIKeys(asList(nextUserAPIKeys));
     setModels(asList(nextModels));
+    setQuota(nextQuota);
   }
 
   async function loadMyAPIKeys(activeToken = token) {
@@ -244,6 +248,18 @@ export function App() {
     setNewUser({ username: "", password: "", role: "user" });
     await refresh();
     toast.success(tNow("users.user_created"));
+  }
+
+  async function resetWeeklyQuotas() {
+    try {
+      await request("/admin/api/quotas/weekly/reset", token, { method: "POST" });
+      await loadUsers();
+      toast.success(tNow("users.weekly_quotas_reset"));
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : tNow("toast.action_failed"));
+      return false;
+    }
   }
 
   async function createUserAPIKey() {
@@ -349,6 +365,7 @@ export function App() {
     setSession(null);
     setConfig(null);
     setStats(null);
+    setQuota(null);
   }
 
   async function changePassword() {
@@ -571,6 +588,7 @@ export function App() {
           {view === "dashboard" && (
             <DashboardPage
               usage={usage}
+              quota={quota}
               usageFilter={usageFilter}
               usageIsToday={usageIsToday}
               usageSeries={usageSeries}
@@ -584,16 +602,18 @@ export function App() {
           )}
 
           {view === "users" && session.user.role === "admin" && (
-            <UsersPage users={users} onNewUser={() => setShowUserDialog(true)} onOpenUser={openUser} />
+            <UsersPage users={users} onNewUser={() => setShowUserDialog(true)} onOpenUser={openUser} onResetWeeklyQuotas={resetWeeklyQuotas} />
           )}
 
           {view === "userDetail" && session.user.role === "admin" && userDetailID > 0 && (
             <UserDetailPage
               token={token}
               userID={userDetailID}
+              currentUserID={session.user.id}
               copiedTarget={copiedTarget}
               onBack={() => navigate("users")}
               onCopyText={(value, target) => void copyText(value, target)}
+              onUserUpdated={(updated) => setUsers((current) => current.map((user) => user.id === updated.id ? updated : user))}
             />
           )}
 

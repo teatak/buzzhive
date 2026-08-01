@@ -2,6 +2,8 @@ package buzzhive
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -31,6 +33,7 @@ func (s *Server) newAdminAPI() http.Handler {
 	api.Route("/password").PUT(s.handlePassword)
 	api.Route("/stats").GET(s.handleStats)
 	api.Route("/usage").GET(s.handleUsage)
+	api.Route("/quota").GET(s.handleOwnQuota)
 	api.Route("/data").GET(s.handleData)
 	api.Route("/user-api-keys").
 		GET(s.handleUserAPIKeysAdmin).
@@ -40,7 +43,11 @@ func (s *Server) newAdminAPI() http.Handler {
 
 	s.adminOnlyRoute(api, "/config").GET(s.handleConfig)
 	s.adminOnlyRoute(api, "/users").GET(s.handleUsersAdmin).POST(s.handleUsersAdmin)
-	s.adminOnlyRoute(api, "/users/:user_id").GET(s.handleUserAdmin)
+	s.adminOnlyRoute(api, "/users/:user_id").GET(s.handleUserAdmin).PUT(s.handleUserAdmin)
+	s.adminOnlyRoute(api, "/users/:user_id/quota").GET(s.handleUserQuotaAdmin).PUT(s.handleUserQuotaAdmin)
+	s.adminOnlyRoute(api, "/users/:user_id/quota/reset").POST(s.handleResetUserQuotaAdmin)
+	s.adminOnlyRoute(api, "/quotas/weekly/reset").POST(s.handleResetWeeklyQuotasAdmin)
+	s.adminOnlyRoute(api, "/users/:user_id/sessions/revoke").POST(s.handleRevokeUserSessionsAdmin)
 	s.adminOnlyRoute(api, "/users/:user_id/api-keys").
 		GET(s.handleUserAPIKeysForAdmin).
 		POST(s.handleUserAPIKeysForAdmin)
@@ -225,6 +232,17 @@ func (s *Server) handleStats(c *cart.Context) error {
 	return jsonOK(c, s.statsSnapshot())
 }
 
+func (s *Server) handleOwnQuota(c *cart.Context) error {
+	status, err := s.store.UserQuotaStatus(adminUser(c).ID, time.Now().UTC())
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return jsonError(c, http.StatusNotFound, "user not found")
+		}
+		return jsonError(c, http.StatusInternalServerError, err)
+	}
+	return jsonOK(c, status)
+}
+
 func (s *Server) handleConfig(c *cart.Context) error {
 	return jsonOK(c, s.adminConfig())
 }
@@ -246,11 +264,132 @@ func (s *Server) handleUserAdmin(c *cart.Context) error {
 	if err != nil || userID <= 0 {
 		return jsonError(c, http.StatusBadRequest, "invalid user id")
 	}
-	user, err := s.store.User(userID)
+	current, err := s.store.User(userID)
 	if err != nil {
 		return jsonError(c, http.StatusNotFound, "user not found")
 	}
-	return jsonOK(c, user)
+	if c.Request.Method == http.MethodGet {
+		return jsonOK(c, current)
+	}
+	if c.Request.Method != http.MethodPut {
+		return jsonError(c, http.StatusMethodNotAllowed, "method not allowed")
+	}
+
+	var req struct {
+		Role  *string `json:"role"`
+		Valid *bool   `json:"valid"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		return jsonError(c, http.StatusBadRequest, err)
+	}
+	role := current.Role
+	valid := current.Valid
+	if req.Role != nil {
+		role = *req.Role
+	}
+	if req.Valid != nil {
+		valid = *req.Valid
+	}
+	updated, err := s.store.UpdateAppUser(adminUser(c).ID, userID, role, valid)
+	if err != nil {
+		return jsonError(c, http.StatusBadRequest, err)
+	}
+	if updated.Role != current.Role || updated.Valid != current.Valid {
+		if err := s.reloadRuntimeState(); err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+		if err := s.revokeAdminSessions(c.Request.Context(), userID); err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+	}
+	return jsonOK(c, updated)
+}
+
+func (s *Server) handleRevokeUserSessionsAdmin(c *cart.Context) error {
+	userID, err := c.ParamInt64("user_id")
+	if err != nil || userID <= 0 {
+		return jsonError(c, http.StatusBadRequest, "invalid user id")
+	}
+	if userID == adminUser(c).ID {
+		return jsonError(c, http.StatusBadRequest, "cannot revoke your own sessions from user management")
+	}
+	if _, err := s.store.User(userID); err != nil {
+		return jsonError(c, http.StatusNotFound, "user not found")
+	}
+	if err := s.revokeAdminSessions(c.Request.Context(), userID); err != nil {
+		return jsonError(c, http.StatusInternalServerError, err)
+	}
+	return jsonOK(c, cart.H{"status": "ok"})
+}
+
+func (s *Server) handleUserQuotaAdmin(c *cart.Context) error {
+	userID, err := c.ParamInt64("user_id")
+	if err != nil || userID <= 0 {
+		return jsonError(c, http.StatusBadRequest, "invalid user id")
+	}
+	if c.Request.Method == http.MethodPut {
+		var req struct {
+			WeeklyQuotaCredits   *int64 `json:"weekly_quota_credits"`
+			LifetimeQuotaCredits *int64 `json:"lifetime_quota_credits"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		if req.WeeklyQuotaCredits == nil || req.LifetimeQuotaCredits == nil {
+			return jsonError(c, http.StatusBadRequest, "weekly_quota_credits and lifetime_quota_credits are required")
+		}
+		if _, err := s.store.UpdateUserQuota(userID, *req.WeeklyQuotaCredits, *req.LifetimeQuotaCredits, time.Now().UTC()); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return jsonError(c, http.StatusNotFound, "user not found")
+			}
+			return jsonError(c, http.StatusBadRequest, err)
+		}
+		if err := s.reloadRuntimeState(); err != nil {
+			return jsonError(c, http.StatusInternalServerError, err)
+		}
+	} else if c.Request.Method != http.MethodGet {
+		return jsonError(c, http.StatusMethodNotAllowed, "method not allowed")
+	}
+	status, err := s.store.UserQuotaStatus(userID, time.Now().UTC())
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return jsonError(c, http.StatusNotFound, "user not found")
+		}
+		return jsonError(c, http.StatusInternalServerError, err)
+	}
+	return jsonOK(c, status)
+}
+
+func (s *Server) handleResetUserQuotaAdmin(c *cart.Context) error {
+	userID, err := c.ParamInt64("user_id")
+	if err != nil || userID <= 0 {
+		return jsonError(c, http.StatusBadRequest, "invalid user id")
+	}
+	if _, err := s.store.ResetUserQuota(userID, time.Now().UTC()); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return jsonError(c, http.StatusNotFound, "user not found")
+		}
+		return jsonError(c, http.StatusInternalServerError, err)
+	}
+	if err := s.reloadRuntimeState(); err != nil {
+		return jsonError(c, http.StatusInternalServerError, err)
+	}
+	status, err := s.store.UserQuotaStatus(userID, time.Now().UTC())
+	if err != nil {
+		return jsonError(c, http.StatusInternalServerError, err)
+	}
+	return jsonOK(c, status)
+}
+
+func (s *Server) handleResetWeeklyQuotasAdmin(c *cart.Context) error {
+	count, err := s.store.ResetWeeklyQuotas(time.Now().UTC())
+	if err != nil {
+		return jsonError(c, http.StatusInternalServerError, err)
+	}
+	if err := s.reloadRuntimeState(); err != nil {
+		return jsonError(c, http.StatusInternalServerError, err)
+	}
+	return jsonOK(c, cart.H{"reset_count": count})
 }
 
 func (s *Server) handleUserAPIKeysForAdmin(c *cart.Context) error {
@@ -439,8 +578,9 @@ func adminTokenFromRequest(r *http.Request) string {
 
 func (s *Server) createSession(user AppUser) (string, error) {
 	token := randomHex(32)
-	expiresAt := time.Now().Add(adminSessionTTL)
-	sessionUser := SessionUser{User: user, ExpiresAt: expiresAt}
+	issuedAt := time.Now()
+	expiresAt := issuedAt.Add(adminSessionTTL)
+	sessionUser := SessionUser{User: user, IssuedAt: issuedAt, ExpiresAt: expiresAt}
 	if s.runtimeCache.Enabled() {
 		if err := s.runtimeCache.SetAdminSession(context.Background(), token, sessionUser); err != nil {
 			return "", err
@@ -458,7 +598,7 @@ func (s *Server) renewAdminSessionIfNeeded(ctx context.Context, token string, se
 		return sessionUser
 	}
 	nextExpiresAt := time.Now().Add(adminSessionTTL)
-	nextSessionUser := SessionUser{User: sessionUser.User, ExpiresAt: nextExpiresAt}
+	nextSessionUser := SessionUser{User: sessionUser.User, IssuedAt: sessionUser.IssuedAt, ExpiresAt: nextExpiresAt}
 	if s.runtimeCache.Enabled() {
 		if err := s.runtimeCache.SetAdminSession(ctx, token, nextSessionUser); err != nil {
 			log.Printf("renew admin session: %v", err)
@@ -481,6 +621,20 @@ func (s *Server) deleteAdminSession(ctx context.Context, token string) error {
 	}
 	s.runtimeMu.Lock()
 	delete(s.adminSessions, token)
+	s.runtimeMu.Unlock()
+	return nil
+}
+
+func (s *Server) revokeAdminSessions(ctx context.Context, userID int64) error {
+	if s.runtimeCache.Enabled() {
+		return s.runtimeCache.RevokeAdminSessions(ctx, userID)
+	}
+	s.runtimeMu.Lock()
+	for token, session := range s.adminSessions {
+		if session.User.ID == userID {
+			delete(s.adminSessions, token)
+		}
+	}
 	s.runtimeMu.Unlock()
 	return nil
 }
@@ -666,16 +820,19 @@ type providerKeyWriteRequest struct {
 }
 
 type modelWriteRequest struct {
-	ID              int64  `json:"id"`
-	Name            string `json:"name"`
-	DisplayName     string `json:"display_name"`
-	Description     string `json:"description"`
-	ContextWindow   int64  `json:"context_window"`
-	MaxInputTokens  int64  `json:"max_input_tokens"`
-	MaxOutputTokens int64  `json:"max_output_tokens"`
-	Capabilities    string `json:"capabilities"`
-	SelectionPolicy string `json:"selection_policy"`
-	Enabled         *bool  `json:"enabled"`
+	ID                     int64    `json:"id"`
+	Name                   string   `json:"name"`
+	DisplayName            string   `json:"display_name"`
+	Description            string   `json:"description"`
+	ContextWindow          int64    `json:"context_window"`
+	MaxInputTokens         int64    `json:"max_input_tokens"`
+	MaxOutputTokens        int64    `json:"max_output_tokens"`
+	QuotaUncachedInputRate *float64 `json:"quota_uncached_input_rate"`
+	QuotaCachedInputRate   *float64 `json:"quota_cached_input_rate"`
+	QuotaOutputRate        *float64 `json:"quota_output_rate"`
+	Capabilities           string   `json:"capabilities"`
+	SelectionPolicy        string   `json:"selection_policy"`
+	Enabled                *bool    `json:"enabled"`
 }
 
 type modelRouteWriteRequest struct {
@@ -909,15 +1066,18 @@ func (s *Server) handleModels(c *cart.Context) error {
 			return jsonError(c, http.StatusBadRequest, err)
 		}
 		created, err := s.store.CreateModel(Model{
-			Name:            req.Name,
-			DisplayName:     req.DisplayName,
-			Description:     req.Description,
-			ContextWindow:   req.ContextWindow,
-			MaxInputTokens:  req.MaxInputTokens,
-			MaxOutputTokens: req.MaxOutputTokens,
-			Capabilities:    req.Capabilities,
-			SelectionPolicy: req.SelectionPolicy,
-			Enabled:         boolWithDefault(req.Enabled, true),
+			Name:                   req.Name,
+			DisplayName:            req.DisplayName,
+			Description:            req.Description,
+			ContextWindow:          req.ContextWindow,
+			MaxInputTokens:         req.MaxInputTokens,
+			MaxOutputTokens:        req.MaxOutputTokens,
+			QuotaUncachedInputRate: float64WithDefault(req.QuotaUncachedInputRate, 1),
+			QuotaCachedInputRate:   float64WithDefault(req.QuotaCachedInputRate, 1),
+			QuotaOutputRate:        float64WithDefault(req.QuotaOutputRate, 1),
+			Capabilities:           req.Capabilities,
+			SelectionPolicy:        req.SelectionPolicy,
+			Enabled:                boolWithDefault(req.Enabled, true),
 		})
 		if err != nil {
 			return jsonError(c, http.StatusBadRequest, err)
@@ -940,6 +1100,15 @@ func (s *Server) handleModels(c *cart.Context) error {
 		model.ContextWindow = req.ContextWindow
 		model.MaxInputTokens = req.MaxInputTokens
 		model.MaxOutputTokens = req.MaxOutputTokens
+		if req.QuotaUncachedInputRate != nil {
+			model.QuotaUncachedInputRate = *req.QuotaUncachedInputRate
+		}
+		if req.QuotaCachedInputRate != nil {
+			model.QuotaCachedInputRate = *req.QuotaCachedInputRate
+		}
+		if req.QuotaOutputRate != nil {
+			model.QuotaOutputRate = *req.QuotaOutputRate
+		}
 		if req.Capabilities != "" {
 			model.Capabilities = req.Capabilities
 		}
@@ -1096,6 +1265,13 @@ func boolWithDefault(value *bool, fallback bool) bool {
 }
 
 func intWithDefault(value *int, fallback int) int {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func float64WithDefault(value *float64, fallback float64) float64 {
 	if value == nil {
 		return fallback
 	}

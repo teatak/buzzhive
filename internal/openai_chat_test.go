@@ -1425,7 +1425,9 @@ func TestOpenAIChatToolsStreamTranslatesGeminiFunctionCall(t *testing.T) {
 	if len(upstreamBody.Tools) != 1 || len(upstreamBody.Tools[0].FunctionDeclarations) != 1 {
 		t.Fatalf("tools = %+v", upstreamBody.Tools)
 	}
-	var toolChunk protocol.OpenAIChatResponse
+	var toolCall protocol.OpenAIToolCall
+	var arguments strings.Builder
+	var finishReason string
 	for _, line := range strings.Split(rr.Body.String(), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "data: ") || line == "data: [DONE]" {
@@ -1435,30 +1437,39 @@ func TestOpenAIChatToolsStreamTranslatesGeminiFunctionCall(t *testing.T) {
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &chunk); err != nil {
 			t.Fatal(err)
 		}
-		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta != nil && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
-			toolChunk = chunk
-			break
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		choice := chunk.Choices[0]
+		if choice.Delta != nil && len(choice.Delta.ToolCalls) > 0 {
+			call := choice.Delta.ToolCalls[0]
+			if call.ID != "" {
+				toolCall = call
+			}
+			arguments.WriteString(call.Function.Arguments)
+		}
+		if choice.FinishReason != nil {
+			finishReason = *choice.FinishReason
 		}
 	}
-	if len(toolChunk.Choices) == 0 {
+	if toolCall.ID == "" {
 		t.Fatalf("stream missing tool call chunk: %s", rr.Body.String())
 	}
-	call := toolChunk.Choices[0].Delta.ToolCalls[0]
-	if call.Index == nil || *call.Index != 0 {
-		t.Fatalf("tool call index = %v", call.Index)
+	if toolCall.Index == nil || *toolCall.Index != 0 {
+		t.Fatalf("tool call index = %v", toolCall.Index)
 	}
-	if call.ID == "" || call.Type != "function" || call.Function.Name != "search" {
-		t.Fatalf("tool call = %+v", call)
+	if toolCall.Type != "function" || toolCall.Function.Name != "search" {
+		t.Fatalf("tool call = %+v", toolCall)
 	}
 	var args map[string]string
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+	if err := json.Unmarshal([]byte(arguments.String()), &args); err != nil {
 		t.Fatal(err)
 	}
 	if args["query"] != "hello" {
 		t.Fatalf("arguments = %+v", args)
 	}
-	if toolChunk.Choices[0].FinishReason == nil || *toolChunk.Choices[0].FinishReason != "tool_calls" {
-		t.Fatalf("finish reason = %v", toolChunk.Choices[0].FinishReason)
+	if finishReason != "tool_calls" {
+		t.Fatalf("finish reason = %q", finishReason)
 	}
 }
 

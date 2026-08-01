@@ -64,15 +64,18 @@ func findModelPreset(id string) (ModelPreset, bool) {
 
 func (p ModelPreset) Model() Model {
 	return Model{
-		Name:            p.Name,
-		DisplayName:     p.DisplayName,
-		Description:     p.Description,
-		ContextWindow:   p.ContextWindow,
-		MaxInputTokens:  p.MaxInputTokens,
-		MaxOutputTokens: p.MaxOutputTokens,
-		Capabilities:    p.Capabilities,
-		SelectionPolicy: p.SelectionPolicy,
-		Enabled:         true,
+		Name:                   p.Name,
+		DisplayName:            p.DisplayName,
+		Description:            p.Description,
+		ContextWindow:          p.ContextWindow,
+		MaxInputTokens:         p.MaxInputTokens,
+		MaxOutputTokens:        p.MaxOutputTokens,
+		Capabilities:           p.Capabilities,
+		SelectionPolicy:        p.SelectionPolicy,
+		QuotaUncachedInputRate: 1,
+		QuotaCachedInputRate:   1,
+		QuotaOutputRate:        1,
+		Enabled:                true,
 	}
 }
 

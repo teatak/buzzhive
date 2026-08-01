@@ -1,7 +1,27 @@
 export type View = "dashboard" | "users" | "userDetail" | "myKeys" | "providers" | "models";
 
 export type Session = { user: AppUser };
-export type AppUser = { id: number; username: string; role: string; valid: boolean };
+export type AppUser = {
+  id: number;
+  username: string;
+  role: string;
+  valid: boolean;
+  weekly_quota_credits: number;
+  lifetime_quota_credits: number;
+  quota_anchor_at: string;
+  created_at: string;
+};
+export type UserQuotaStatus = {
+  weekly_quota_credits: number;
+  weekly_used_microcredits: number;
+  weekly_remaining_microcredits: number;
+  lifetime_quota_credits: number;
+  lifetime_used_microcredits: number;
+  lifetime_remaining_microcredits: number;
+  period_start: string;
+  period_end: string;
+  unlimited: boolean;
+};
 export type UserAPIKey = { id: number; user_id: number; name: string; token: string; valid: boolean };
 export type UserAPIKeyDetails = UserAPIKey & {
   created_at: string;
@@ -59,6 +79,9 @@ export type Model = {
   context_window: number;
   max_input_tokens: number;
   max_output_tokens: number;
+  quota_uncached_input_rate: number;
+  quota_cached_input_rate: number;
+  quota_output_rate: number;
   capabilities: string;
   selection_policy: string;
   enabled: boolean;
