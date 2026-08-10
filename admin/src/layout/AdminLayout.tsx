@@ -58,7 +58,7 @@ export function AdminLayout(props: {
       >
         <AppSidebar role={props.session.user.role} view={props.view} onNavigate={props.onNavigate} />
         <SidebarInset className="min-w-0">
-          <header className="sticky top-0 z-0 flex h-16 shrink-0 items-center gap-2 border-b bg-background px-4 transition-[height,padding] duration-300 ease-in-out">
+          <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 border-b bg-background px-4 transition-[height,padding] duration-300 ease-in-out">
             <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="mr-2 data-vertical:h-4 data-vertical:self-center" />
             <Breadcrumb>
