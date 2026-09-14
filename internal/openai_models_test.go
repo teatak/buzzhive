@@ -8,7 +8,7 @@ import (
 )
 
 func TestPublicModelMetadataKeepsUnknownFieldsAbsent(t *testing.T) {
-	for _, caps := range []string{"", "{}", "null", "invalid", `{"vision":"false"}`, `{"vision":true,"tools":false}`} {
+	for _, caps := range []string{"", "{}", "null", "invalid", `{"vision":"false"}`, `{"vision":null,"tools":"false"}`, `{"stream":true}`} {
 		m := publicModelMetadata(Model{Name: "unknown", Capabilities: caps})
 		b, err := json.Marshal(m)
 		if err != nil {
@@ -30,5 +30,61 @@ func TestPublicModelMetadataKnownDisabledCapabilities(t *testing.T) {
 	b, _ := json.Marshal(m)
 	if !strings.Contains(string(b), `"supported_parameters":[]`) {
 		t.Fatalf("empty list not preserved: %s", b)
+	}
+}
+
+func TestPublicModelMetadataPartialCapabilities(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		caps       string
+		inputs     []string
+		parameters []string
+	}{
+		{"vision and disabled tools", `{"vision":true,"tools":false}`, []string{"text", "image"}, []string{}},
+		{"disabled vision", `{"vision":false}`, []string{"text"}, nil},
+		{"audio", `{"audio_input":true}`, []string{"text", "audio"}, nil},
+		{"tools", `{"tools":true,"reasoning":false,"json_schema":"true"}`, nil, []string{"tools", "tool_choice"}},
+		{"disabled tools", `{"tools":false}`, nil, []string{}},
+		{"reasoning", `{"reasoning":true}`, nil, []string{"reasoning"}},
+		{"structured outputs", `{"json_schema":true}`, nil, []string{"response_format", "structured_outputs"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := publicModelMetadata(Model{Name: "custom-partial", Capabilities: tc.caps})
+			encoded, err := json.Marshal(openAIModelsResponse{Object: "list", Data: []openAIModelObject{model}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire struct {
+				Data []struct {
+					Architecture *modelArchitecture `json:"architecture"`
+					Parameters   []string           `json:"supported_parameters"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(encoded, &wire); err != nil {
+				t.Fatal(err)
+			}
+			item := wire.Data[0]
+			if tc.inputs == nil {
+				if item.Architecture != nil {
+					t.Fatalf("unknown modalities advertised: %s", encoded)
+				}
+			} else if item.Architecture == nil || !reflect.DeepEqual(item.Architecture.InputModalities, tc.inputs) || !reflect.DeepEqual(item.Architecture.OutputModalities, []string{"text"}) {
+				t.Fatalf("configured modalities lost: %s", encoded)
+			}
+			if !reflect.DeepEqual(item.Parameters, tc.parameters) {
+				t.Fatalf("parameters = %#v, want %#v: %s", item.Parameters, tc.parameters, encoded)
+			}
+			// A downstream OpenRouter-compatible importer must retain each saved flag,
+			// including false when the public supported set is an explicit empty list.
+			imported, err := decodeUpstreamModels(strings.NewReader(string(encoded)), "openai")
+			if err != nil || len(imported) != 1 {
+				t.Fatalf("decode public catalog: %v, %+v", err, imported)
+			}
+			for capability, want := range savedModelCapabilities(tc.caps) {
+				if got, known := imported[0].Capabilities[capability]; !known || got != want {
+					t.Errorf("round trip %s = %v (known=%v), want %v", capability, got, known, want)
+				}
+			}
+		})
 	}
 }

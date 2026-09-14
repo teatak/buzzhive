@@ -135,8 +135,13 @@ export function ModelsPage(props: ModelsPageProps) {
     setSaving(true);
     try {
       await request(path, props.token, { method, body: JSON.stringify(body) });
-      await props.onReload();
-      toast.success(t("common.save"));
+      try {
+        await props.onReload();
+        toast.success(t("common.save"));
+      } catch {
+        // The write succeeded: finish the form even if refreshing the list fails.
+        toast.warning(t("toast.saved_refresh_failed"));
+      }
       return true;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("toast.action_failed"));

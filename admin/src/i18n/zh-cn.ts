@@ -269,5 +269,6 @@ export const dict: Record<string, string> = {
   "models.capability_audio_input": "音频输入",
 
   "toast.action_failed": "操作失败",
+  "toast.saved_refresh_failed": "已保存，但列表刷新失败。请刷新页面查看最新数据。",
   "toast.cooling_cleared": "冷却已清除",
 };

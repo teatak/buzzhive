@@ -58,9 +58,9 @@ func publicModelMetadata(model Model) openAIModelObject {
 	caps := savedModelCapabilities(model.Capabilities)
 	_, visionKnown := caps["vision"]
 	_, audioKnown := caps["audio_input"]
-	// An array describes the whole supported set. Omit it when incomplete, so an
-	// unknown input type is not turned into an explicit unsupported capability.
-	if visionKnown && audioKnown {
+	// Publish the configured supported set once any flag in a group is known.
+	// Unconfigured flags are not advertised; a wholly unknown group stays absent.
+	if visionKnown || audioKnown {
 		inputs := []string{"text"}
 		if caps["vision"] {
 			inputs = append(inputs, "image")
@@ -73,7 +73,7 @@ func publicModelMetadata(model Model) openAIModelObject {
 	_, toolsKnown := caps["tools"]
 	_, reasoningKnown := caps["reasoning"]
 	_, schemaKnown := caps["json_schema"]
-	if toolsKnown && reasoningKnown && schemaKnown {
+	if toolsKnown || reasoningKnown || schemaKnown {
 		parameters := []string{}
 		if caps["tools"] {
 			parameters = append(parameters, "tools", "tool_choice")
