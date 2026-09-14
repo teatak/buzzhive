@@ -42,14 +42,14 @@ export function ModelIconField({ model, presets, onChange }: { model: IconModel;
     <Field>
       <LabelWithTip htmlFor={id} label={t("models.icon")} tip={t("models.tip_icon")} />
       <Select value={model.icon || "auto"} onValueChange={(value) => onChange(value === "auto" ? "" : value)}>
-        <SelectTrigger id={id} className="h-10 w-full"><SelectValue /></SelectTrigger>
+        <SelectTrigger id={id} className="w-full py-0 pl-0.75 *:data-[slot=select-value]:gap-2"><SelectValue /></SelectTrigger>
         <SelectContent>
-          <SelectItem value="auto">
+          <SelectItem value="auto" className="pl-1">
             <IconGlyph name={automaticBrand} className="size-6 rounded-md" />
             <span>{t("models.icon_auto")} · {automaticLabel}</span>
           </SelectItem>
           {modelIconOptions.map((option) => (
-            <SelectItem key={option.value} value={option.value}>
+            <SelectItem key={option.value} value={option.value} className="pl-1">
               <IconGlyph name={option.value} className="size-6 rounded-md" />
               <span>{option.label}</span>
             </SelectItem>

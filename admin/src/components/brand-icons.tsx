@@ -352,13 +352,14 @@ export function BrandIcon({
   return (
     <span
       className={cn(
-        "inline-grid shrink-0 place-items-center overflow-hidden",
+        // Brand marks keep their palette inside highlighted menus and buttons.
+        "inline-grid shrink-0 place-items-center overflow-hidden **:text-inherit!",
         shape === "circle" ? "rounded-full" : "rounded-[8px]",
         isOpenRouter
-          ? "bg-white text-[#6834EE] border dark:bg-[#02090B] dark:text-[#C8FF00] dark:border-transparent"
+          ? "bg-white text-[#6834EE]! border dark:bg-[#02090B] dark:text-[#C8FF00]! dark:border-transparent"
           : lightBackground 
-            ? "border bg-white text-black" 
-            : "text-white",
+            ? "border bg-white text-black!"
+            : "text-white!",
         className,
       )}
       style={style}
