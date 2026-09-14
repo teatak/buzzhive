@@ -1,4 +1,14 @@
 export const dict: Record<string, string> = {
+  "models.fetch_upstream": "取得上游模型",
+  "models.search_upstream": "搜尋模型…",
+  "models.loading_upstream": "正在載入模型…",
+  "models.no_upstream": "沒有符合的模型",
+  "models.sync_metadata": "同步上游參數到目前模型",
+  "models.sync_metadata_hint": "儲存時將以上游參數更新模型，影響該模型的所有路由；未列出的參數保留原值。",
+  "models.supported": "支援",
+  "models.unsupported": "不支援",
+  "models.no_metadata": "此模型沒有已知參數，僅儲存路由。",
+
   "common.actions": "操作",
   "common.active": "啟用",
   "common.add": "新增",

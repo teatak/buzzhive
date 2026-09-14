@@ -2,7 +2,6 @@ package buzzhive
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -79,7 +78,7 @@ func (s *Server) handleProviderUpstreamModelsAdmin(c *cart.Context) error {
 	}
 	url := providerRequestPath(baseURL, path)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -111,19 +110,10 @@ func (s *Server) handleProviderUpstreamModelsAdmin(c *cart.Context) error {
 		return nil
 	}
 
-	var result struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	models, err := decodeUpstreamModels(resp.Body, endpoint.Protocol)
+	if err != nil {
 		c.JSON(http.StatusBadGateway, cart.H{"error": "failed to decode upstream response"})
 		return nil
-	}
-
-	models := make([]string, 0, len(result.Data))
-	for _, m := range result.Data {
-		models = append(models, m.ID)
 	}
 	c.JSON(http.StatusOK, models)
 	return nil

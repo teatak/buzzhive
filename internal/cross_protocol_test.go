@@ -39,7 +39,7 @@ func createRouteTestServer(t *testing.T, proto string, baseURL string, publicMod
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateModelRoute(ModelRoute{ModelID: model.ID, ProviderID: provider.ID, UpstreamProtocol: proto, UpstreamModel: upstreamModel, Enabled: true, Weight: 1}); err != nil {
+	if _, err := store.SaveModelRoute(ModelRoute{ModelID: model.ID, ProviderID: provider.ID, UpstreamProtocol: proto, UpstreamModel: upstreamModel, Enabled: true, Weight: 1}, nil); err != nil {
 		t.Fatal(err)
 	}
 	providerRecords, err := store.EnabledProviders()

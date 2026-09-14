@@ -1,4 +1,14 @@
 export const dict: Record<string, string> = {
+  "models.fetch_upstream": "Load upstream models",
+  "models.search_upstream": "Search models…",
+  "models.loading_upstream": "Loading models…",
+  "models.no_upstream": "No matching models",
+  "models.sync_metadata": "Apply upstream parameters to this model",
+  "models.sync_metadata_hint": "Saving applies the shown parameters to the model and all its routes. Unlisted parameters are kept.",
+  "models.supported": "Supported",
+  "models.unsupported": "Unsupported",
+  "models.no_metadata": "This model has no known parameters. Only the route will be saved.",
+
   "common.actions": "Actions",
   "common.active": "active",
   "common.add": "Add",

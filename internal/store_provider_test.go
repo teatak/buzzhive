@@ -158,14 +158,14 @@ func TestProviderManagementCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	route, err := store.CreateModelRoute(ModelRoute{
+	route, err := store.SaveModelRoute(ModelRoute{
 		ModelID:          model.ID,
 		ProviderID:       provider.ID,
 		UpstreamProtocol: providerAuto,
 		UpstreamModel:    "mimo/v2.5",
 		Enabled:          true,
 		Weight:           2,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,13 +200,13 @@ func TestProviderManagementCRUD(t *testing.T) {
 	if route.ProviderID != provider.ID || route.UpstreamProtocol != providerAuto {
 		t.Fatalf("route after provider update = %+v", route)
 	}
-	if _, err := store.CreateModelRoute(ModelRoute{
+	if _, err := store.SaveModelRoute(ModelRoute{
 		ModelID:          model.ID,
 		ProviderID:       provider.ID,
 		UpstreamProtocol: providerGemini,
 		UpstreamModel:    "unsupported",
 		Enabled:          true,
-	}); err == nil {
+	}, nil); err == nil {
 		t.Fatal("expected unsupported provider protocol to be rejected")
 	}
 
@@ -245,14 +245,14 @@ func TestProviderEndpointDisabledIsPreservedAndExcludedFromRoutes(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateModelRoute(ModelRoute{
+	if _, err := store.SaveModelRoute(ModelRoute{
 		ModelID:          model.ID,
 		ProviderID:       provider.ID,
 		UpstreamProtocol: providerOpenAI,
 		UpstreamModel:    "upstream-model",
 		Enabled:          true,
 		Weight:           1,
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatal(err)
 	}
 

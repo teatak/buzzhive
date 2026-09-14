@@ -852,14 +852,15 @@ type modelWriteRequest struct {
 }
 
 type modelRouteWriteRequest struct {
-	ID               int64  `json:"id"`
-	ModelID          int64  `json:"model_id"`
-	ProviderID       int64  `json:"provider_id"`
-	UpstreamProtocol string `json:"upstream_protocol"`
-	UpstreamModel    string `json:"upstream_model"`
-	Enabled          *bool  `json:"enabled"`
-	Priority         *int   `json:"priority"`
-	Weight           *int   `json:"weight"`
+	ModelMetadata    *ModelMetadata `json:"model_metadata"`
+	ID               int64          `json:"id"`
+	ModelID          int64          `json:"model_id"`
+	ProviderID       int64          `json:"provider_id"`
+	UpstreamProtocol string         `json:"upstream_protocol"`
+	UpstreamModel    string         `json:"upstream_model"`
+	Enabled          *bool          `json:"enabled"`
+	Priority         *int           `json:"priority"`
+	Weight           *int           `json:"weight"`
 }
 
 func (s *Server) handleProviders(c *cart.Context) error {
@@ -1221,7 +1222,7 @@ func (s *Server) handleModelRoutes(c *cart.Context) error {
 		if err := c.BindJSON(&req); err != nil {
 			return jsonError(c, http.StatusBadRequest, err)
 		}
-		created, err := s.store.CreateModelRoute(ModelRoute{
+		created, err := s.store.SaveModelRoute(ModelRoute{
 			ModelID:          req.ModelID,
 			ProviderID:       req.ProviderID,
 			UpstreamProtocol: req.UpstreamProtocol,
@@ -1229,7 +1230,7 @@ func (s *Server) handleModelRoutes(c *cart.Context) error {
 			Enabled:          boolWithDefault(req.Enabled, true),
 			Priority:         intWithDefault(req.Priority, 0),
 			Weight:           intWithDefault(req.Weight, 1),
-		})
+		}, req.ModelMetadata)
 		if err != nil {
 			return jsonError(c, http.StatusBadRequest, err)
 		}
@@ -1265,7 +1266,7 @@ func (s *Server) handleModelRoutes(c *cart.Context) error {
 		if req.Weight != nil {
 			route.Weight = *req.Weight
 		}
-		updated, err := s.store.UpdateModelRoute(route)
+		updated, err := s.store.SaveModelRoute(route, req.ModelMetadata)
 		if err != nil {
 			return jsonError(c, http.StatusBadRequest, err)
 		}

@@ -2,6 +2,7 @@ package buzzhive
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"math"
 	"strings"
@@ -465,50 +466,76 @@ func (s *Store) ModelRoute(id int64) (ModelRoute, error) {
 	return ModelRoute{}, sql.ErrNoRows
 }
 
-func (s *Store) CreateModelRoute(route ModelRoute) (ModelRoute, error) {
+// SaveModelRoute commits the route and optional imported model metadata together.
+// The model remains the sole source of metadata after the import.
+func (s *Store) SaveModelRoute(route ModelRoute, metadata *ModelMetadata) (ModelRoute, error) {
 	route.UpstreamProtocol = normalizeRouteProtocol(route.UpstreamProtocol)
 	if route.ModelID == 0 || route.ProviderID == 0 || route.UpstreamModel == "" {
 		return ModelRoute{}, errors.New("model_id, provider_id and upstream_model are required")
 	}
-	if _, err := s.Model(route.ModelID); err != nil {
-		return ModelRoute{}, err
+	if metadata != nil {
+		if metadata.ContextWindow < 0 || metadata.MaxInputTokens < 0 || metadata.MaxOutputTokens < 0 {
+			return ModelRoute{}, errors.New("model token limits must be non-negative")
+		}
+		for key := range metadata.Capabilities {
+			switch key {
+			case "stream", "vision", "audio_input", "tools", "reasoning", "json_schema":
+			default:
+				return ModelRoute{}, errors.New("unknown model capability: " + key)
+			}
+		}
 	}
 	if err := s.validateProviderRouteProtocol(route.ProviderID, route.UpstreamProtocol); err != nil {
 		return ModelRoute{}, err
 	}
 	if route.Weight == 0 {
 		route.Weight = 1
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return ModelRoute{}, err
+	}
+	defer tx.Rollback()
+	var currentCaps string
+	if err := tx.QueryRow(s.rebind(`SELECT capabilities FROM models WHERE id = ? FOR UPDATE`), route.ModelID).Scan(&currentCaps); err != nil {
+		return ModelRoute{}, err
 	}
 	now := storeNow()
-	id, err := s.insertReturningID(
-		`INSERT INTO model_routes (model_id, provider_id, upstream_protocol, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		route.ModelID, route.ProviderID, route.UpstreamProtocol, route.UpstreamModel, boolInt(route.Enabled), route.Priority, route.Weight, now, now,
-	)
+	if route.ID == 0 {
+		err = tx.QueryRow(s.rebind(`INSERT INTO model_routes (model_id, provider_id, upstream_protocol, upstream_model, enabled, priority, weight, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`),
+			route.ModelID, route.ProviderID, route.UpstreamProtocol, route.UpstreamModel, boolInt(route.Enabled), route.Priority, route.Weight, now, now).Scan(&route.ID)
+	} else {
+		var result sql.Result
+		result, err = tx.Exec(s.rebind(`UPDATE model_routes SET model_id = ?, provider_id = ?, upstream_protocol = ?, upstream_model = ?, enabled = ?, priority = ?, weight = ?, updated_at = ? WHERE id = ?`),
+			route.ModelID, route.ProviderID, route.UpstreamProtocol, route.UpstreamModel, boolInt(route.Enabled), route.Priority, route.Weight, now, route.ID)
+		if err == nil {
+			if count, _ := result.RowsAffected(); count == 0 {
+				err = sql.ErrNoRows
+			}
+		}
+	}
 	if err != nil {
 		return ModelRoute{}, err
 	}
-	return s.ModelRoute(id)
-}
-
-func (s *Store) UpdateModelRoute(route ModelRoute) (ModelRoute, error) {
-	route.UpstreamProtocol = normalizeRouteProtocol(route.UpstreamProtocol)
-	if route.ID == 0 || route.ModelID == 0 || route.ProviderID == 0 || route.UpstreamModel == "" {
-		return ModelRoute{}, errors.New("id, model_id, provider_id and upstream_model are required")
+	if metadata != nil {
+		// Merge only supplied facts. False values overwrite true; unknown values do
+		// not clear saved settings. Identity, billing and selection policy stay local.
+		caps := savedModelCapabilities(currentCaps)
+		for key, value := range metadata.Capabilities {
+			caps[key] = value
+		}
+		encoded, _ := json.Marshal(caps)
+		_, err = tx.Exec(s.rebind(`UPDATE models SET
+   context_window = CASE WHEN ? > 0 THEN ? ELSE context_window END,
+   max_input_tokens = CASE WHEN ? > 0 THEN ? ELSE max_input_tokens END,
+   max_output_tokens = CASE WHEN ? > 0 THEN ? ELSE max_output_tokens END,
+   capabilities = ?, updated_at = ? WHERE id = ?`),
+			metadata.ContextWindow, metadata.ContextWindow, metadata.MaxInputTokens, metadata.MaxInputTokens, metadata.MaxOutputTokens, metadata.MaxOutputTokens, string(encoded), now, route.ModelID)
+		if err != nil {
+			return ModelRoute{}, err
+		}
 	}
-	if _, err := s.Model(route.ModelID); err != nil {
-		return ModelRoute{}, err
-	}
-	if err := s.validateProviderRouteProtocol(route.ProviderID, route.UpstreamProtocol); err != nil {
-		return ModelRoute{}, err
-	}
-	if route.Weight == 0 {
-		route.Weight = 1
-	}
-	_, err := s.exec(
-		`UPDATE model_routes SET model_id = ?, provider_id = ?, upstream_protocol = ?, upstream_model = ?, enabled = ?, priority = ?, weight = ?, updated_at = ? WHERE id = ?`,
-		route.ModelID, route.ProviderID, route.UpstreamProtocol, route.UpstreamModel, boolInt(route.Enabled), route.Priority, route.Weight, storeNow(), route.ID,
-	)
-	if err != nil {
+	if err := tx.Commit(); err != nil {
 		return ModelRoute{}, err
 	}
 	return s.ModelRoute(route.ID)

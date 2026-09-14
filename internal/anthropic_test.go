@@ -213,7 +213,7 @@ func TestAnthropicRoutesToOpenAIChat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateModelRoute(ModelRoute{ModelID: model.ID, ProviderID: provider.ID, UpstreamProtocol: providerOpenAI, UpstreamModel: "gpt-upstream", Enabled: true, Weight: 1}); err != nil {
+	if _, err := store.SaveModelRoute(ModelRoute{ModelID: model.ID, ProviderID: provider.ID, UpstreamProtocol: providerOpenAI, UpstreamModel: "gpt-upstream", Enabled: true, Weight: 1}, nil); err != nil {
 		t.Fatal(err)
 	}
 	providerRecords, err := store.EnabledProviders()

@@ -29,8 +29,34 @@
 本次未改管理员设置的 Credits 费率，也未自动迁移线上模型或路由。
 
 
-## 客户端模型发现
+## 上游参数导入与客户端模型发现
 
-`GET /v1/models` 在标准 `id/object/created/owned_by` 字段之外，返回管理员已保存的 `name`（显示名）、`context_length`、`max_input_tokens`、`max_output_tokens` 和 `capabilities` 对象。能力沿用 `vision`、`audio_input`、`tools` 等键，明确的 `false` 会保留，未填写的能力和零值限额不输出。
+模型详情 → 新增/编辑路由 → 获取上游模型。候选项保留名称、窗口、最大输入/输出和能力信息。OpenRouter 读取 `architecture.input_modalities`、`supported_parameters`、`context_length`、`top_provider.max_completion_tokens`；Claude/Gemini 读取各自模型列表字段。DeepSeek 等只有 ID 的接口按完整 ID 精确匹配本地预设补充；远端明确返回的值（包括 false）优先，未知型号不按家族猜测。
 
-目录只展示启用模型，以数据库中的模型配置为准；不会根据名称、预设或单条路由覆盖管理员的元数据。Pudding 导入时可直接读取这些字段，因此经 BuzzHive 转发的自定义模型 ID 也能携带已知参数。
+选择候选后显示参数预览。首条路由默认勾选“同步上游参数到当前模型”；已有路由时默认不勾选。同步会更新公共模型配置并影响该模型所有路由，未列出的参数保留原值。修改提供方、协议或手动输入上游 ID 会清除候选参数。路由和参数在同一数据库事务保存；取消或保存失败不应用参数。模型名称、显示名、描述、图标、Credits 费率和调度策略不参与同步。
+
+`GET /admin/api/providers/:id/upstream-models` 返回对象数组，替代原 ID 字符串数组：
+
+```json
+[{"id":"vendor/model","name":"Upstream Model","context_window":65536,"max_output_tokens":8192,"capabilities":{"vision":true,"audio_input":false,"tools":true,"reasoning":true,"json_schema":false}}]
+```
+
+`GET /v1/models` 保留 OpenAI 的 `object: list` 外层和模型 `id/object/created/owned_by`，元数据改用 OpenRouter 字段，删除旧的对外 `capabilities/max_input_tokens/max_output_tokens`：
+
+```json
+{
+  "object": "list",
+  "data": [{
+    "id": "my-model", "object": "model", "created": 0, "owned_by": "buzzhive",
+    "name": "My Model", "description": "Saved description",
+    "context_length": 65536,
+    "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+    "supported_parameters": ["tools", "tool_choice", "reasoning"],
+    "top_provider": {"context_length": 65536, "max_completion_tokens": 8192}
+  }]
+}
+```
+
+目录只展示启用模型，以数据库保存的模型配置为唯一来源，不在请求时读取上游、选取某条路由或重算预设。零/未知限额省略；`vision/audio_input` 都已配置才输出输入模态列表，`tools/reasoning/json_schema` 都已配置才输出能力对应的参数列表，避免将未知值误报为不支持。显式全部关闭的参数列表返回 `[]`。输出模态为当前文本生成网关的 `text`。`supported_parameters` 发布已配置能力对应的参数，不宣称覆盖上游所有采样参数。
+
+这些是 [OpenRouter 模型元数据字段](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) 的适配，不是完整 OpenRouter 服务协议。不虚构 tokenizer、审核状态或美元定价，内部 Credits 费率不作为 OpenRouter 的 USD/token `pricing` 输出。Pudding 已支持这些公开字段，不需要新增客户端协议分支。

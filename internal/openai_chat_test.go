@@ -52,14 +52,14 @@ func createGeminiRouteTestStore(t *testing.T, baseURL, publicModel, upstreamMode
 		store.Close()
 		t.Fatal(err)
 	}
-	if _, err := store.CreateModelRoute(ModelRoute{
+	if _, err := store.SaveModelRoute(ModelRoute{
 		ModelID:          model.ID,
 		ProviderID:       provider.ID,
 		UpstreamProtocol: providerGemini,
 		UpstreamModel:    upstreamModel,
 		Enabled:          true,
 		Weight:           1,
-	}); err != nil {
+	}, nil); err != nil {
 		store.Close()
 		t.Fatal(err)
 	}
@@ -2371,7 +2371,7 @@ func TestOpenAIResponsesRoutesToOpenAIChat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateModelRoute(ModelRoute{ModelID: model.ID, ProviderID: provider.ID, UpstreamProtocol: providerOpenAI, UpstreamModel: "gpt-upstream", Enabled: true, Weight: 1}); err != nil {
+	if _, err := store.SaveModelRoute(ModelRoute{ModelID: model.ID, ProviderID: provider.ID, UpstreamProtocol: providerOpenAI, UpstreamModel: "gpt-upstream", Enabled: true, Weight: 1}, nil); err != nil {
 		t.Fatal(err)
 	}
 	providerRecords, err := store.EnabledProviders()
@@ -2705,7 +2705,7 @@ func TestOpenAICompatibleStreamPassThroughFlushesChunks(t *testing.T) {
 func TestOpenAIModelsListsEnabledModels(t *testing.T) {
 	store := openTestStore(t)
 
-	if _, err := store.CreateModel(Model{Name: "enabled-model", DisplayName: "Saved Name", ContextWindow: 65536, MaxInputTokens: 60000, MaxOutputTokens: 8192, Capabilities: `{"vision":false,"tools":true}`, Enabled: true}); err != nil {
+	if _, err := store.CreateModel(Model{Name: "enabled-model", DisplayName: "Saved Name", ContextWindow: 65536, MaxInputTokens: 60000, MaxOutputTokens: 8192, Capabilities: `{"vision":false,"audio_input":false,"tools":true,"reasoning":false,"json_schema":false}`, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.CreateModel(Model{Name: "disabled-model", Enabled: false}); err != nil {
@@ -2742,11 +2742,8 @@ func TestOpenAIModelsListsEnabledModels(t *testing.T) {
 		t.Fatalf("models = %+v", got.Data)
 	}
 	m := got.Data[0]
-	if m.Name != "Saved Name" || m.ContextLength != 65536 || m.MaxInputTokens != 60000 || m.MaxOutputTokens != 8192 || m.Capabilities["vision"] || !m.Capabilities["tools"] {
+	if m.Name != "Saved Name" || m.ContextLength != 65536 || m.TopProvider == nil || m.TopProvider.MaxCompletionTokens != 8192 || m.Architecture == nil || len(m.Architecture.InputModalities) != 1 || m.Architecture.InputModalities[0] != "text" || m.SupportedParameters == nil || len(*m.SupportedParameters) != 2 || (*m.SupportedParameters)[0] != "tools" {
 		t.Fatalf("saved metadata lost: %+v", m)
-	}
-	if _, present := m.Capabilities["vision"]; !present {
-		t.Fatal("explicit false was dropped")
 	}
 }
 

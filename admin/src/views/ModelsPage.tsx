@@ -14,7 +14,6 @@ import {
   Settings2,
   Trash2,
   Wrench,
-  CloudDownload,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -28,13 +27,13 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
-import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
+import { UpstreamModelPicker } from "../components/upstream-model-picker";
 import { Field } from "../components/ui/field";
 import { EnabledToggleButton } from "../components/enabled-toggle-button";
 import { FormNumberField, FormSelectField, FormStaticField, FormTextareaField, FormTextField, LabelWithTip } from "../components/form-fields";
 import { useLocale } from "../i18n/locale";
 import { modelDisplayName } from "../lib/model";
-import type { Model, ModelPreset, ModelRoute, ProviderRecord } from "../types/admin";
+import type { Model, ModelPreset, ModelRoute, ProviderRecord, UpstreamModel } from "../types/admin";
 
 type ModelsPageProps = {
   token: string;
@@ -103,6 +102,8 @@ export function ModelsPage(props: ModelsPageProps) {
   const [anchorIndex, setAnchorIndex] = useState<number | null>(null);
   const [lastShiftRange, setLastShiftRange] = useState<string[]>([]);
   const [routeForm, setRouteForm] = useState(routeDefaults);
+  const [selectedUpstream, setSelectedUpstream] = useState<UpstreamModel | null>(null);
+  const [syncMetadata, setSyncMetadata] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selectedModelID, setSelectedModelID] = useState<number | null>(null);
   const [copiedTarget, setCopiedTarget] = useState("");
@@ -119,6 +120,7 @@ export function ModelsPage(props: ModelsPageProps) {
   }, [props.modelRoutes]);
   const selectedPresets = props.modelPresets.filter((preset) => presetIDs.includes(preset.id));
   const selectedPresetCount = selectedPresets.length;
+  const hasUpstreamMetadata = Boolean(selectedUpstream && (selectedUpstream.context_window || selectedUpstream.max_output_tokens || selectedUpstream.max_input_tokens || Object.keys(selectedUpstream.capabilities ?? {}).length));
   const selectedRouteModel = props.models.find((model) => model.id === routeForm.model_id);
   const selectedRouteProvider = props.providers.find((provider) => provider.id === routeForm.provider_id);
   const selectedRouteEndpoints = selectedRouteProvider?.endpoints ?? [];
@@ -135,8 +137,10 @@ export function ModelsPage(props: ModelsPageProps) {
       await request(path, props.token, { method, body: JSON.stringify(body) });
       await props.onReload();
       toast.success(t("common.save"));
+      return true;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("toast.action_failed"));
+      return false;
     } finally {
       setSaving(false);
     }
@@ -173,6 +177,8 @@ export function ModelsPage(props: ModelsPageProps) {
   }
 
   function openRoute(modelID: number, route?: ModelRoute) {
+    setSelectedUpstream(null);
+    setSyncMetadata((routesByModel.get(modelID)?.length ?? 0) === 0);
     const provider = props.providers[0];
     const providerID = provider?.id ?? 0;
     const model = props.models.find((item) => item.id === modelID);
@@ -187,7 +193,7 @@ export function ModelsPage(props: ModelsPageProps) {
   }
 
   async function submitModel() {
-    await save("/admin/api/models", { ...modelForm, max_input_tokens: modelForm.context_window }, modelForm.id ? "PUT" : "POST");
+    await save("/admin/api/models", modelForm, modelForm.id ? "PUT" : "POST");
     setModelOpen(false);
   }
 
@@ -230,8 +236,15 @@ export function ModelsPage(props: ModelsPageProps) {
   }
 
   async function submitRoute() {
-    await save("/admin/api/model-routes", routeForm, routeForm.id ? "PUT" : "POST");
-    setRouteOpen(false);
+    const model_metadata = syncMetadata && hasUpstreamMetadata && selectedUpstream ? {
+      context_window: selectedUpstream.context_window,
+      max_input_tokens: selectedUpstream.max_input_tokens,
+      max_output_tokens: selectedUpstream.max_output_tokens,
+      capabilities: selectedUpstream.capabilities,
+    } : undefined;
+    if (await save("/admin/api/model-routes", { ...routeForm, model_metadata }, routeForm.id ? "PUT" : "POST")) {
+      setRouteOpen(false);
+    }
   }
 
   return (
@@ -516,9 +529,9 @@ export function ModelsPage(props: ModelsPageProps) {
       </Dialog>
 
       <Dialog open={routeOpen} onOpenChange={setRouteOpen}>
-        <DialogContent>
+        <DialogContent className="flex max-h-[90dvh] flex-col sm:max-w-lg">
           <DialogHeader><DialogTitle>{routeForm.id ? t("models.edit_route") : t("models.new_route")}</DialogTitle></DialogHeader>
-          <div className="grid gap-4 py-4">
+          <div className="grid min-h-0 gap-4 overflow-y-auto py-2">
             <FormStaticField label={t("model.model")}>
               <div className="rounded-md border bg-muted px-3 py-2 mono text-sm">{selectedRouteModel?.name ?? routeForm.model_id}</div>
             </FormStaticField>
@@ -529,6 +542,7 @@ export function ModelsPage(props: ModelsPageProps) {
               options={props.providers.map((provider) => ({ value: String(provider.id), label: provider.name }))}
               onChange={(value) => {
                 const provider_id = Number(value);
+                setSelectedUpstream(null);
                 setRouteForm({ ...routeForm, provider_id, upstream_protocol: "auto" });
               }}
             />
@@ -543,7 +557,7 @@ export function ModelsPage(props: ModelsPageProps) {
                   label: `${providerProtocolLabel(endpoint.protocol)}${endpoint.enabled ? "" : ` · ${t("common.disabled")}`}`,
                 })),
               ]}
-              onChange={(value) => setRouteForm({ ...routeForm, upstream_protocol: value })}
+              onChange={(value) => { setSelectedUpstream(null); setRouteForm({ ...routeForm, upstream_protocol: value }); }}
             />
             <Field>
               <LabelWithTip htmlFor={upstreamModelID} label={t("models.upstream_model")} tip={t("models.tip_upstream_model")} />
@@ -551,19 +565,42 @@ export function ModelsPage(props: ModelsPageProps) {
                 <Input
                   id={upstreamModelID}
                   value={routeForm.upstream_model}
-                  onChange={(e) => setRouteForm({ ...routeForm, upstream_model: e.target.value })}
+                  onChange={(e) => { setSelectedUpstream(null); setRouteForm({ ...routeForm, upstream_model: e.target.value }); }}
                 />
-                <UpstreamModelFetcher 
-                  providerId={routeForm.provider_id} 
+                <UpstreamModelPicker
+                  providerId={routeForm.provider_id}
                   protocol={routeForm.upstream_protocol}
                   token={props.token}
-                  onSelect={(id) => setRouteForm({ ...routeForm, upstream_model: id })} 
+                  onSelect={(model) => { setSelectedUpstream(model); setRouteForm({ ...routeForm, upstream_model: model.id }); }}
                 />
               </div>
             </Field>
-            <FormNumberField label={t("models.priority")} tip={t("models.tip_priority")} value={routeForm.priority} onChange={(priority) => setRouteForm({ ...routeForm, priority })} />
-            <FormNumberField label={t("models.weight")} tip={t("models.tip_weight")} value={routeForm.weight} onChange={(weight) => setRouteForm({ ...routeForm, weight })} />
-            <EnabledSelect value={routeForm.enabled} onChange={(enabled) => setRouteForm({ ...routeForm, enabled })} />
+            {selectedUpstream && hasUpstreamMetadata ? (
+              <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <Checkbox checked={syncMetadata} onCheckedChange={(checked) => setSyncMetadata(checked === true)} />
+                  {t("models.sync_metadata")}
+                </label>
+                <p className="text-xs text-muted-foreground">{t("models.sync_metadata_hint")}</p>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  {!!selectedUpstream.context_window && <ModelStat label={t("models.context_window")} value={formatModelNumber(selectedUpstream.context_window)} />}
+                  {!!selectedUpstream.max_output_tokens && <ModelStat label={t("models.max_output_tokens")} value={formatModelNumber(selectedUpstream.max_output_tokens)} />}
+                  {!!selectedUpstream.max_input_tokens && <ModelStat label={t("models.max_input_tokens")} value={formatModelNumber(selectedUpstream.max_input_tokens)} />}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {capabilityOptions.filter((key) => selectedUpstream.capabilities?.[key] !== undefined).map((key) => (
+                    <Badge key={key} variant="outline" className="font-normal">
+                      {t(`models.capability_${key}`)} · {t(selectedUpstream.capabilities![key] ? "models.supported" : "models.unsupported")}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            ) : selectedUpstream ? <p className="text-xs text-muted-foreground">{t("models.no_metadata")}</p> : null}
+            <div className="grid grid-cols-3 items-start gap-3">
+              <FormNumberField label={t("models.priority")} tip={t("models.tip_priority")} value={routeForm.priority} onChange={(priority) => setRouteForm({ ...routeForm, priority })} />
+              <FormNumberField label={t("models.weight")} tip={t("models.tip_weight")} value={routeForm.weight} onChange={(weight) => setRouteForm({ ...routeForm, weight })} />
+              <EnabledSelect value={routeForm.enabled} onChange={(enabled) => setRouteForm({ ...routeForm, enabled })} />
+            </div>
           </div>
           <DialogFooter><Button disabled={saving || !routeForm.model_id || !routeForm.provider_id || !routeForm.upstream_model} onClick={() => void submitRoute()}>{t("common.save")}</Button></DialogFooter>
         </DialogContent>
@@ -874,91 +911,6 @@ function StatusBadge({ enabled }: { enabled: boolean }) {
   return enabled
     ? <Badge variant="outline" className="border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">{t("common.active")}</Badge>
     : <Badge variant="secondary">{t("common.disabled")}</Badge>;
-}
-
-function UpstreamModelFetcher({ providerId, protocol, token, onSelect }: { providerId: number; protocol: string; token: string; onSelect: (id: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [models, setModels] = useState<string[]>([]);
-
-  useEffect(() => {
-    setModels([]);
-  }, [providerId, protocol]);
-
-  useEffect(() => {
-    if (open && providerId && protocol && models.length === 0) {
-      setLoading(true);
-      request(`/admin/api/providers/${providerId}/upstream-models?protocol=${encodeURIComponent(protocol)}`, token)
-        .then((res: any) => {
-          if (Array.isArray(res)) setModels(res);
-          else toast.error("Invalid response format");
-        })
-        .catch((err: any) => toast.error(err.message || "Failed to fetch models"))
-        .finally(() => setLoading(false));
-    }
-  }, [open, providerId, protocol, token, models.length]);
-
-  const [searchQuery, setSearchQuery] = useState("");
-  const filteredModels = useMemo(() => {
-    if (!searchQuery) return models;
-    const lowerQuery = searchQuery.toLowerCase();
-    return models.filter(m => m.toLowerCase().includes(lowerQuery));
-  }, [models, searchQuery]);
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button 
-          type="button"
-          variant="outline" 
-          size="icon" 
-          disabled={!providerId || !protocol}
-          title="获取上游模型"
-        >
-          <CloudDownload className="size-4" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-64 p-0 gap-0 overflow-hidden" align="end">
-        <div className="p-2 border-b">
-          <Input 
-            placeholder="搜索模型..." 
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            className="h-8"
-          />
-        </div>
-        <div 
-          className="max-h-[250px] overflow-y-auto"
-          onWheel={(e) => e.stopPropagation()}
-        >
-          {loading ? (
-            <div className="p-4 text-center text-sm text-muted-foreground">Loading...</div>
-          ) : models.length === 0 ? (
-            <div className="p-4 text-center text-sm text-muted-foreground">No models found</div>
-          ) : filteredModels.length === 0 ? (
-            <div className="p-4 text-center text-sm text-muted-foreground">No matches</div>
-          ) : (
-            <div className="flex flex-col">
-              {filteredModels.map(modelId => (
-                <button
-                  key={modelId}
-                  type="button"
-                  className="px-3 py-2 text-sm text-left hover:bg-muted transition-colors truncate shrink-0"
-                  onClick={() => {
-                    onSelect(modelId);
-                    setOpen(false);
-                  }}
-                  title={modelId}
-                >
-                  {modelId}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
 }
 
 function providerProtocolLabel(protocol: string) {

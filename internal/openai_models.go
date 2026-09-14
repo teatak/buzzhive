@@ -1,9 +1,9 @@
 package buzzhive
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type openAIModelsResponse struct {
@@ -12,15 +12,10 @@ type openAIModelsResponse struct {
 }
 
 type openAIModelObject struct {
-	ID              string          `json:"id"`
-	Object          string          `json:"object"`
-	Created         int64           `json:"created"`
-	OwnedBy         string          `json:"owned_by"`
-	Name            string          `json:"name,omitempty"`
-	ContextLength   int64           `json:"context_length,omitempty"`
-	MaxInputTokens  int64           `json:"max_input_tokens,omitempty"`
-	MaxOutputTokens int64           `json:"max_output_tokens,omitempty"`
-	Capabilities    map[string]bool `json:"capabilities,omitempty"`
+	catalogModel
+	Object  string `json:"object"`
+	Created int64  `json:"created"`
+	OwnedBy string `json:"owned_by"`
 }
 
 func (s *Server) handleOpenAIModels(w http.ResponseWriter, r *http.Request, _ AuthToken) {
@@ -47,22 +42,49 @@ func (s *Server) handleOpenAIModels(w http.ResponseWriter, r *http.Request, _ Au
 	writeJSON(w, http.StatusOK, openAIModelsResponse{Object: "list", Data: data})
 }
 
-// Publish the saved model configuration, not preset or route-derived guesses.
-// Unknown capabilities stay absent; explicitly disabled ones remain false.
+// Public metadata comes solely from the saved model configuration. Catalog
+// fields follow OpenRouter; Credits rates are not advertised as USD pricing.
 func publicModelMetadata(model Model) openAIModelObject {
-	var raw map[string]any
-	capabilities := map[string]bool{}
-	if json.Unmarshal([]byte(model.Capabilities), &raw) == nil {
-		for key, value := range raw {
-			if enabled, ok := value.(bool); ok {
-				capabilities[key] = enabled
-			}
+	m := openAIModelObject{catalogModel: catalogModel{
+		ID: model.Name, Name: strings.TrimSpace(model.DisplayName), Description: strings.TrimSpace(model.Description),
+		ContextLength: max(0, model.ContextWindow),
+	}, Object: "model", OwnedBy: "buzzhive"}
+	if created, err := time.Parse(time.RFC3339, model.CreatedAt); err == nil {
+		m.Created = created.Unix()
+	}
+	if model.ContextWindow > 0 || model.MaxOutputTokens > 0 {
+		m.TopProvider = &modelTopProvider{ContextLength: max(0, model.ContextWindow), MaxCompletionTokens: max(0, model.MaxOutputTokens)}
+	}
+	caps := savedModelCapabilities(model.Capabilities)
+	_, visionKnown := caps["vision"]
+	_, audioKnown := caps["audio_input"]
+	// An array describes the whole supported set. Omit it when incomplete, so an
+	// unknown input type is not turned into an explicit unsupported capability.
+	if visionKnown && audioKnown {
+		inputs := []string{"text"}
+		if caps["vision"] {
+			inputs = append(inputs, "image")
 		}
+		if caps["audio_input"] {
+			inputs = append(inputs, "audio")
+		}
+		m.Architecture = &modelArchitecture{InputModalities: inputs, OutputModalities: []string{"text"}}
 	}
-	return openAIModelObject{
-		ID: model.Name, Object: "model", OwnedBy: "buzzhive",
-		Name:          strings.TrimSpace(model.DisplayName),
-		ContextLength: model.ContextWindow, MaxInputTokens: model.MaxInputTokens,
-		MaxOutputTokens: model.MaxOutputTokens, Capabilities: capabilities,
+	_, toolsKnown := caps["tools"]
+	_, reasoningKnown := caps["reasoning"]
+	_, schemaKnown := caps["json_schema"]
+	if toolsKnown && reasoningKnown && schemaKnown {
+		parameters := []string{}
+		if caps["tools"] {
+			parameters = append(parameters, "tools", "tool_choice")
+		}
+		if caps["reasoning"] {
+			parameters = append(parameters, "reasoning")
+		}
+		if caps["json_schema"] {
+			parameters = append(parameters, "response_format", "structured_outputs")
+		}
+		m.SupportedParameters = &parameters
 	}
+	return m
 }

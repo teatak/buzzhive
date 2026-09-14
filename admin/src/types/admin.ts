@@ -168,3 +168,13 @@ export type UsagePoint = {
   cached_tokens: number;
   reasoning_tokens: number;
 };
+
+// Only known endpoint/preset facts are present; false is distinct from unknown.
+export type ModelMetadata = {
+  context_window?: number;
+  max_input_tokens?: number;
+  max_output_tokens?: number;
+  capabilities?: Record<string, boolean>;
+};
+
+export type UpstreamModel = ModelMetadata & { id: string; name?: string };
