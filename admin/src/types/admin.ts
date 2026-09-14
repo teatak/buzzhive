@@ -1,6 +1,6 @@
 export type View = "dashboard" | "users" | "userDetail" | "myKeys" | "providers" | "models";
 
-export type Session = { user: AppUser };
+export type Session = { user: AppUser; version?: string };
 export type AppUser = {
   id: number;
   username: string;

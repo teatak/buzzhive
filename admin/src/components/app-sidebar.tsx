@@ -6,6 +6,7 @@ import { useLocale } from "@/i18n/locale";
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -18,6 +19,7 @@ import {
 type AppSidebarProps = {
   role: string;
   view: View;
+  version?: string;
   onNavigate: (view: View) => void;
 };
 
@@ -29,7 +31,7 @@ const items: Array<{ view: View; labelKey: string; icon: typeof Gauge; adminOnly
   { view: "providers", labelKey: "nav.providers", icon: Server, adminOnly: true },
 ];
 
-export function AppSidebar({ role, view, onNavigate }: AppSidebarProps) {
+export function AppSidebar({ role, view, version, onNavigate }: AppSidebarProps) {
   const { t } = useLocale();
   return (
     <Sidebar collapsible="icon">
@@ -69,6 +71,13 @@ export function AppSidebar({ role, view, onNavigate }: AppSidebarProps) {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+      {version && (
+        <SidebarFooter className="group-data-[collapsible=icon]:hidden">
+          <div className="px-2 py-1 text-xs text-muted-foreground/60 select-none">
+            v{version}
+          </div>
+        </SidebarFooter>
+      )}
       <AppSidebarRail />
     </Sidebar>
   );

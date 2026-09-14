@@ -43,6 +43,7 @@ export function AdminLayout(props: {
   session: Session;
   title: string;
   view: View;
+  version?: string;
   onNavigate: (view: View) => void;
   onChangePassword: () => void;
   onLogout: () => void;
@@ -56,7 +57,7 @@ export function AdminLayout(props: {
         defaultOpen={sidebarDefaultOpen}
         className="[&_[data-slot=sidebar-container]]:duration-300 [&_[data-slot=sidebar-container]]:ease-in-out [&_[data-slot=sidebar-gap]]:duration-300 [&_[data-slot=sidebar-gap]]:ease-in-out [&_[data-slot=sidebar-group-label]]:duration-300 [&_[data-slot=sidebar-group-label]]:ease-in-out [&_[data-slot=sidebar-menu-button]]:duration-300 [&_[data-slot=sidebar-menu-button]]:ease-in-out"
       >
-        <AppSidebar role={props.session.user.role} view={props.view} onNavigate={props.onNavigate} />
+        <AppSidebar role={props.session.user.role} view={props.view} version={props.version} onNavigate={props.onNavigate} />
         <SidebarInset className="min-w-0">
           <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 border-b bg-background px-4 transition-[height,padding] duration-300 ease-in-out">
             <SidebarTrigger className="-ml-1" />

@@ -103,6 +103,7 @@ export function App() {
   const [models, setModels] = useState<Model[]>([]);
   const [modelPresets, setModelPresets] = useState<ModelPreset[]>([]);
   const [modelRoutes, setModelRoutes] = useState<ModelRoute[]>([]);
+  const [version, setVersion] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [newUser, setNewUser] = useState({ username: "", password: "", role: "user" });
@@ -129,6 +130,7 @@ export function App() {
       request<Stats>("/admin/api/stats", activeToken),
     ]);
     setSession(nextSession);
+    if (nextSession.version) setVersion(nextSession.version);
     setConfig(data.config);
     setUsers(asList(data.users));
     setUserAPIKeys(asList(data.user_api_keys));
@@ -389,9 +391,10 @@ export function App() {
 
     async function boot() {
       try {
-        const state = await request<{ setup_required: boolean }>("/admin/api/setup-state", "", { signal: controller.signal });
+        const state = await request<{ setup_required: boolean; version?: string }>("/admin/api/setup-state", "", { signal: controller.signal });
         if (!active) return;
         setSetupRequired(state.setup_required);
+        if (state.version) setVersion(state.version);
         if (token) await load(token).catch(() => logout());
       } catch {
         if (active) setError(tNow("auth.unavailable"));
@@ -559,6 +562,11 @@ export function App() {
               </form>
             </CardContent>
           </Card>
+          {version && (
+            <p className="text-center text-xs text-muted-foreground/60 select-none">
+              v{version}
+            </p>
+          )}
         </div>
       </main>
     );
@@ -580,6 +588,7 @@ export function App() {
       session={session}
       title={title}
       view={view}
+      version={version}
       onNavigate={navigate}
       onChangePassword={() => setShowPasswordDialog(true)}
       onLogout={() => void logout()}

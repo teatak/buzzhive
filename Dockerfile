@@ -17,7 +17,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
-RUN CGO_ENABLED=1 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/buzzhive ./cmd/buzzhive
+COPY VERSION ./VERSION
+RUN CGO_ENABLED=1 GOOS=linux go build -trimpath -ldflags="-s -w -X 'github.com/teatak/buzzhive/internal.Version=$(cat VERSION)'" -o /out/buzzhive ./cmd/buzzhive
 
 FROM debian:bookworm-slim
 RUN apt-get update \

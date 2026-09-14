@@ -158,7 +158,7 @@ func (s *Server) handleSetupState(c *cart.Context) error {
 	if err != nil {
 		return jsonError(c, http.StatusInternalServerError, err)
 	}
-	return jsonOK(c, cart.H{"setup_required": required})
+	return jsonOK(c, cart.H{"setup_required": required, "version": Version})
 }
 
 func (s *Server) handleSetup(c *cart.Context) error {
@@ -202,7 +202,7 @@ func (s *Server) handleLogin(c *cart.Context) error {
 }
 
 func (s *Server) handleSession(c *cart.Context) error {
-	return jsonOK(c, cart.H{"user": adminUser(c)})
+	return jsonOK(c, cart.H{"user": adminUser(c), "version": Version})
 }
 
 func (s *Server) handleLogout(c *cart.Context) error {

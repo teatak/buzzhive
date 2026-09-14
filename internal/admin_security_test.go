@@ -504,3 +504,43 @@ func createAdminRouteTestSession(t *testing.T, srv *Server, username, role strin
 	}
 	return token
 }
+
+func TestAdminAPIReturnsVersion(t *testing.T) {
+	srv := newAdminRouteTestServer(t)
+
+	// Test setup-state returns version
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/setup-state", nil)
+	srv.adminAPI.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("setup-state status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var setupResp struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &setupResp); err != nil {
+		t.Fatal(err)
+	}
+	if setupResp.Version != Version {
+		t.Fatalf("setup-state version = %q, want %q", setupResp.Version, Version)
+	}
+
+	// Test session returns version
+	userToken := createAdminRouteTestSession(t, srv, "versionuser", "user")
+	rrSession := httptest.NewRecorder()
+	reqSession := httptest.NewRequest(http.MethodGet, "/admin/api/session", nil)
+	reqSession.Header.Set("Authorization", "Bearer "+userToken)
+	srv.adminAPI.ServeHTTP(rrSession, reqSession)
+	if rrSession.Code != http.StatusOK {
+		t.Fatalf("session status = %d, body = %s", rrSession.Code, rrSession.Body.String())
+	}
+	var sessionResp struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(rrSession.Body.Bytes(), &sessionResp); err != nil {
+		t.Fatal(err)
+	}
+	if sessionResp.Version != Version {
+		t.Fatalf("session version = %q, want %q", sessionResp.Version, Version)
+	}
+}
