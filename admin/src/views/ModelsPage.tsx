@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { request } from "../api/client";
-import { BrandIcon } from "../components/brand-icons";
+import { ModelIcon, ModelIconField, ModelPresetIcon } from "../components/model-icon";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
@@ -59,6 +59,7 @@ const modelDefaults: Model = {
   id: 0,
   name: "",
   display_name: "",
+  icon: "",
   description: "",
   context_window: 0,
   max_input_tokens: 0,
@@ -243,7 +244,7 @@ export function ModelsPage(props: ModelsPageProps) {
                 <Button type="button" variant="ghost" size="icon" onClick={() => setSelectedModelID(null)} aria-label={t("models.back_to_models")}>
                   <ArrowLeft />
                 </Button>
-                <ModelIcon model={selectedModel} className="mt-0.5 h-10 w-10" />
+                <ModelIcon model={selectedModel} presets={props.modelPresets} className="mt-0.5 h-10 w-10" />
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <CardTitle>{modelDisplayName(selectedModel)}</CardTitle>
@@ -366,7 +367,7 @@ export function ModelsPage(props: ModelsPageProps) {
                     <div className="grid gap-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex min-w-0 items-start gap-3">
-                          <ModelIcon model={model} />
+                          <ModelIcon model={model} presets={props.modelPresets} />
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-2">
                               <div className="truncate text-base font-semibold">{modelDisplayName(model)}</div>
@@ -413,6 +414,11 @@ export function ModelsPage(props: ModelsPageProps) {
               <FormTextField label={t("model.model")} value={modelForm.name} onChange={(name) => setModelForm({ ...modelForm, name })} />
               <FormTextField label={t("models.display_name")} value={modelForm.display_name} onChange={(display_name) => setModelForm({ ...modelForm, display_name })} />
             </div>
+            <ModelIconField
+              model={modelForm}
+              presets={props.modelPresets}
+              onChange={(icon) => setModelForm({ ...modelForm, icon })}
+            />
             <FormTextareaField label={t("models.description")} className="min-h-16" value={modelForm.description} onChange={(description) => setModelForm({ ...modelForm, description })} />
             <div className="grid gap-4 sm:grid-cols-2">
               <TokenNumberField label={t("models.context_window")} value={modelForm.context_window} onChange={(context_window) => setModelForm({ ...modelForm, context_window })} />
@@ -594,56 +600,10 @@ function activateCard(event: KeyboardEvent<HTMLElement>, onActivate: () => void)
   onActivate();
 }
 
-function ModelIcon({ model, className = "h-10 w-10" }: { model: Model; className?: string }) {
-  const family = modelFamily(model);
-  const brand = modelBrandForFamily(family);
-  if (brand) return <BrandIcon className={`${className} rounded-[10px]`} name={brand} />;
-
-  return (
-    <div className={`${className} flex shrink-0 items-center justify-center rounded-[10px] border border-dashed text-muted-foreground`}>
-      <Settings2 className="h-1/2 w-1/2" strokeWidth={2} />
-    </div>
-  );
-}
-
-function modelFamily(model: Model) {
-  const text = `${model.name} ${model.display_name}`.toLowerCase();
-  if (text.includes("gemini") || text.includes("gemma")) return "gemini";
-  if (text.includes("claude") || text.includes("anthropic")) return "anthropic";
-  if (text.includes("deepseek")) return "deepseek";
-  if (text.includes("qwen")) return "qwen";
-  if (text.includes("kimi") || text.includes("moonshot")) return "moonshot";
-  if (text.includes("glm") || text.includes("zhipu")) return "zhipu";
-  if (text.includes("gpt") || text.includes("openai")) return "openai";
-  if (text.includes("mimo")) return "mimo";
-  return "generic";
-}
-
 function policyLabel(t: (key: string) => string, policy: string) {
   if (policy === "weighted") return t("models.policy_weighted");
   if (policy === "round_robin") return t("models.policy_round_robin");
   return policy;
-}
-
-function modelBrandForFamily(family: string) {
-  const normalized = family.toLowerCase();
-  if (normalized === "anthropic") return "claude";
-  if (normalized === "mimo") return "mimo";
-  if (normalized === "moonshot") return "moonshot";
-  if (normalized === "zhipu") return "zhipu";
-  if (["gemini", "openai", "deepseek", "qwen", "openrouter"].includes(normalized)) return normalized;
-  return "";
-}
-
-function ModelPresetIcon({ preset, className = "h-8 w-8 rounded-[8px]" }: { preset: ModelPreset; className?: string }) {
-  const brand = modelBrandForFamily(preset.family);
-  if (brand) return <BrandIcon className={className} name={brand} />;
-
-  return (
-    <span className={`flex shrink-0 items-center justify-center border border-dashed text-muted-foreground ${className}`}>
-      <Settings2 className="h-5 w-5" strokeWidth={2} />
-    </span>
-  );
 }
 
 function ModelStat({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {

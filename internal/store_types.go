@@ -126,6 +126,7 @@ type Model struct {
 	ID                     int64   `json:"id"`
 	Name                   string  `json:"name"`
 	DisplayName            string  `json:"display_name"`
+	Icon                   string  `json:"icon"`
 	Description            string  `json:"description"`
 	ContextWindow          int64   `json:"context_window"`
 	MaxInputTokens         int64   `json:"max_input_tokens"`

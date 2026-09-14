@@ -15,6 +15,7 @@ BuzzHive 是一个自托管 LLM API 代理，支持多用户 API Key、提供方
 ## 架构文档
 
 - [Canonical 协议转换层任务](docs/canonical-protocol-task.zh-CN.md)：透传优先的协议转换层计划。
+- [模型预设清单](docs/model-presets.zh-CN.md)：已核验模型、token 上限与协议要求。
 
 ## 快速安装
 

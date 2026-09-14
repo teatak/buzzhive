@@ -92,6 +92,7 @@ func (s *Store) schemaStatements() []string {
 			id BIGSERIAL PRIMARY KEY,
 			name TEXT NOT NULL UNIQUE,
 			display_name TEXT NOT NULL DEFAULT '',
+			icon TEXT NOT NULL DEFAULT '',
 			description TEXT NOT NULL DEFAULT '',
 			context_window BIGINT NOT NULL DEFAULT 0,
 			max_input_tokens BIGINT NOT NULL DEFAULT 0,
@@ -105,6 +106,7 @@ func (s *Store) schemaStatements() []string {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
+		`ALTER TABLE models ADD COLUMN IF NOT EXISTS icon TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE models ADD COLUMN IF NOT EXISTS quota_uncached_input_rate NUMERIC(20,6) NOT NULL DEFAULT 1`,
 		`ALTER TABLE models ADD COLUMN IF NOT EXISTS quota_cached_input_rate NUMERIC(20,6) NOT NULL DEFAULT 1`,
 		`ALTER TABLE models ADD COLUMN IF NOT EXISTS quota_output_rate NUMERIC(20,6) NOT NULL DEFAULT 1`,

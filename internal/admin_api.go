@@ -838,6 +838,7 @@ type modelWriteRequest struct {
 	ID                     int64    `json:"id"`
 	Name                   string   `json:"name"`
 	DisplayName            string   `json:"display_name"`
+	Icon                   *string  `json:"icon"`
 	Description            string   `json:"description"`
 	ContextWindow          int64    `json:"context_window"`
 	MaxInputTokens         int64    `json:"max_input_tokens"`
@@ -1080,9 +1081,14 @@ func (s *Server) handleModels(c *cart.Context) error {
 		if err := c.BindJSON(&req); err != nil {
 			return jsonError(c, http.StatusBadRequest, err)
 		}
+		icon := ""
+		if req.Icon != nil {
+			icon = *req.Icon
+		}
 		created, err := s.store.CreateModel(Model{
 			Name:                   req.Name,
 			DisplayName:            req.DisplayName,
+			Icon:                   icon,
 			Description:            req.Description,
 			ContextWindow:          req.ContextWindow,
 			MaxInputTokens:         req.MaxInputTokens,
@@ -1111,6 +1117,9 @@ func (s *Server) handleModels(c *cart.Context) error {
 			model.Name = req.Name
 		}
 		model.DisplayName = req.DisplayName
+		if req.Icon != nil {
+			model.Icon = *req.Icon
+		}
 		model.Description = req.Description
 		model.ContextWindow = req.ContextWindow
 		model.MaxInputTokens = req.MaxInputTokens

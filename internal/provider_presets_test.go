@@ -40,3 +40,39 @@ func TestMimoPresetsDefineProtocolSpecificEndpoints(t *testing.T) {
 		})
 	}
 }
+
+func TestDeepSeekPresetAutoRoutesToMatchingProtocol(t *testing.T) {
+	preset, ok := findProviderPreset("deepseek")
+	if !ok {
+		t.Fatal("DeepSeek preset not found")
+	}
+	provider := preset.Provider()
+	if !provider.Enabled || len(provider.Endpoints) != 2 {
+		t.Fatalf("DeepSeek provider = %+v", provider)
+	}
+	targets := make([]RouteTarget, 0, len(provider.Endpoints))
+	for _, endpoint := range provider.Endpoints {
+		if !endpoint.Enabled || endpoint.BaseURL != "https://api.deepseek.com" {
+			t.Fatalf("DeepSeek endpoint = %+v", endpoint)
+		}
+		targets = append(targets, RouteTarget{
+			ID: 1, ProviderName: provider.Name, ProviderType: endpoint.Protocol,
+			RouteProtocol: providerAuto, UpstreamModel: "deepseek-flash",
+		})
+	}
+	for _, test := range []struct {
+		protocol   string
+		preference []string
+	}{
+		{providerOpenAI, openAIChatProtocolPreference()},
+		{providerOpenAIResponses, openAIResponsesProtocolPreference()},
+	} {
+		t.Run(test.protocol, func(t *testing.T) {
+			srv := &Server{}
+			selected := srv.selectRouteTargets("deepseek-flash", targets, test.preference)
+			if len(selected) != 1 || selected[0].ProviderType != test.protocol {
+				t.Fatalf("auto route = %+v, want %s passthrough", selected, test.protocol)
+			}
+		})
+	}
+}

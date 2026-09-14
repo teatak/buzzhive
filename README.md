@@ -15,6 +15,7 @@ BuzzHive is a self-hosted LLM API proxy with multi-user API keys, provider key r
 ## Architecture Docs
 
 - [Canonical protocol task](docs/canonical-protocol-task.zh-CN.md): passthrough-first protocol conversion plan.
+- [Model preset catalog](docs/model-presets.zh-CN.md): verified models, token limits, and protocol requirements.
 
 ## Quick Install
 

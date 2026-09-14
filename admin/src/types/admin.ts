@@ -75,6 +75,7 @@ export type Model = {
   id: number;
   name: string;
   display_name: string;
+  icon: string;
   description: string;
   context_window: number;
   max_input_tokens: number;
