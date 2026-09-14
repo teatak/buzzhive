@@ -2705,7 +2705,7 @@ func TestOpenAICompatibleStreamPassThroughFlushesChunks(t *testing.T) {
 func TestOpenAIModelsListsEnabledModels(t *testing.T) {
 	store := openTestStore(t)
 
-	if _, err := store.CreateModel(Model{Name: "enabled-model", Enabled: true}); err != nil {
+	if _, err := store.CreateModel(Model{Name: "enabled-model", DisplayName: "Saved Name", ContextWindow: 65536, MaxInputTokens: 60000, MaxOutputTokens: 8192, Capabilities: `{"vision":false,"tools":true}`, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.CreateModel(Model{Name: "disabled-model", Enabled: false}); err != nil {
@@ -2740,6 +2740,13 @@ func TestOpenAIModelsListsEnabledModels(t *testing.T) {
 	}
 	if len(got.Data) != 1 || got.Data[0].ID != "enabled-model" {
 		t.Fatalf("models = %+v", got.Data)
+	}
+	m := got.Data[0]
+	if m.Name != "Saved Name" || m.ContextLength != 65536 || m.MaxInputTokens != 60000 || m.MaxOutputTokens != 8192 || m.Capabilities["vision"] || !m.Capabilities["tools"] {
+		t.Fatalf("saved metadata lost: %+v", m)
+	}
+	if _, present := m.Capabilities["vision"]; !present {
+		t.Fatal("explicit false was dropped")
 	}
 }
 

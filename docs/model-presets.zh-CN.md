@@ -27,3 +27,10 @@
 - DeepSeek Responses 为无状态兼容接口，不提供 OpenAI 的完整持久化与内置工具能力；详见上方官方兼容性表。GLM 5.3 系列与 Kimi K3/K2.7、Claude Fable 5.1 均有始终开启思考的限制。预设描述提示模型用途，路由和参数转换仍使用既有配置与实现。
 
 本次未改管理员设置的 Credits 费率，也未自动迁移线上模型或路由。
+
+
+## 客户端模型发现
+
+`GET /v1/models` 在标准 `id/object/created/owned_by` 字段之外，返回管理员已保存的 `name`（显示名）、`context_length`、`max_input_tokens`、`max_output_tokens` 和 `capabilities` 对象。能力沿用 `vision`、`audio_input`、`tools` 等键，明确的 `false` 会保留，未填写的能力和零值限额不输出。
+
+目录只展示启用模型，以数据库中的模型配置为准；不会根据名称、预设或单条路由覆盖管理员的元数据。Pudding 导入时可直接读取这些字段，因此经 BuzzHive 转发的自定义模型 ID 也能携带已知参数。
