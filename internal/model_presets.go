@@ -70,9 +70,6 @@ func findModelPreset(id string) (ModelPreset, bool) {
 			return preset, true
 		}
 	}
-	if id == "qwen3.8-max-0902" {
-		return findModelPreset("qwen3.8-max")
-	}
 	return ModelPreset{}, false
 }
 
@@ -95,10 +92,8 @@ func (p ModelPreset) Model() Model {
 
 func modelPresetCapabilities(vision, audioInput bool) string {
 	data, err := json.MarshalIndent(map[string]any{
-		"stream":      true,
 		"tools":       true,
 		"vision":      vision,
-		"json_schema": true,
 		"reasoning":   true,
 		"audio_input": audioInput,
 	}, "", "  ")

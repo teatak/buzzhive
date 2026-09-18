@@ -1,7 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import {
   ArrowLeft,
-  Braces,
   Brain,
   Check,
   Copy,
@@ -10,7 +9,6 @@ import {
   Mic,
   Pencil,
   Plus,
-  Radio,
   Settings2,
   Trash2,
   Wrench,
@@ -47,10 +45,8 @@ type ModelsPageProps = {
 };
 
 const defaultCapabilities = JSON.stringify({
-  stream: true,
   tools: false,
   vision: false,
-  json_schema: false,
   reasoning: false,
   audio_input: false,
 }, null, 2);
@@ -73,10 +69,8 @@ const modelDefaults: Model = {
 };
 
 const capabilityOptions = [
-  "stream",
   "tools",
   "vision",
-  "json_schema",
   "reasoning",
   "audio_input",
 ] as const;
@@ -299,11 +293,17 @@ export function ModelsPage(props: ModelsPageProps) {
               <ModelStat label={t("models.policy")} value={policyLabel(t, selectedModel.selection_policy)} />
             </div>
             <div className="space-y-2">
-              <h3 className="text-sm font-medium">{t("models.quota_rates")}</h3>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-medium">{t("models.quota_rates")}</h3>
+                  <ModelMultiplierBadge model={selectedModel} />
+                </div>
+                <span className="text-xs text-muted-foreground">{t("models.quota_rates_tip")}</span>
+              </div>
               <div className="grid gap-3 sm:grid-cols-3">
-                <ModelStat label={t("models.quota_cached_input_rate")} value={formatQuotaRate(selectedModel.quota_cached_input_rate, locale)} mono />
-                <ModelStat label={t("models.quota_uncached_input_rate")} value={formatQuotaRate(selectedModel.quota_uncached_input_rate, locale)} mono />
-                <ModelStat label={t("models.quota_output_rate")} value={formatQuotaRate(selectedModel.quota_output_rate, locale)} mono />
+                <ModelStat label={t("models.quota_cached_input_rate")} value={formatQuotaRateWithUSD(selectedModel.quota_cached_input_rate, locale)} mono />
+                <ModelStat label={t("models.quota_uncached_input_rate")} value={formatQuotaRateWithUSD(selectedModel.quota_uncached_input_rate, locale)} mono />
+                <ModelStat label={t("models.quota_output_rate")} value={formatQuotaRateWithUSD(selectedModel.quota_output_rate, locale)} mono />
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -446,12 +446,42 @@ export function ModelsPage(props: ModelsPageProps) {
               <TokenNumberField label={t("models.max_output_tokens")} value={modelForm.max_output_tokens} onChange={(max_output_tokens) => setModelForm({ ...modelForm, max_output_tokens })} />
             </div>
             <div className="space-y-3 rounded-lg border p-3">
-              <div className="text-sm font-medium">{t("models.quota_rates")}</div>
+              <div className="flex flex-col gap-1">
+                <div className="text-sm font-medium">{t("models.quota_rates")}</div>
+                <div className="text-xs text-muted-foreground">{t("models.quota_rates_tip")}</div>
+              </div>
               <div className="grid gap-4 sm:grid-cols-3">
                 <FormNumberField label={t("models.quota_cached_input_rate")} min={0} step="any" value={modelForm.quota_cached_input_rate} onChange={(quota_cached_input_rate) => setModelForm({ ...modelForm, quota_cached_input_rate })} />
                 <FormNumberField label={t("models.quota_uncached_input_rate")} min={0} step="any" value={modelForm.quota_uncached_input_rate} onChange={(quota_uncached_input_rate) => setModelForm({ ...modelForm, quota_uncached_input_rate })} />
                 <FormNumberField label={t("models.quota_output_rate")} min={0} step="any" value={modelForm.quota_output_rate} onChange={(quota_output_rate) => setModelForm({ ...modelForm, quota_output_rate })} />
               </div>
+              {(() => {
+                const info = calculateModelMultiplier(modelForm);
+                if (!info) return null;
+                const displayMultiplier = info.isFree ? t("models.cost_free") : info.multiplier;
+                return (
+                  <div className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-2 text-xs">
+                    <span className="text-muted-foreground">{t("models.estimated_cost_multiplier")}</span>
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        variant="secondary"
+                        className={cn(
+                          "h-5 shrink-0 rounded px-1.5 mono text-[11px] font-medium",
+                          info.isFree ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-semibold" : "text-muted-foreground",
+                        )}
+                      >
+                        {displayMultiplier}
+                      </Badge>
+                      <span className="mono text-muted-foreground">
+                        {t("models.cost_multiplier_tip", {
+                          multiplier: displayMultiplier,
+                          cost: info.cost === 0 ? "0" : info.cost.toFixed(1),
+                        })}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
             <CapabilityField value={modelForm.capabilities} onChange={(capabilities) => setModelForm({ ...modelForm, capabilities })} />
             <div className="grid gap-4 sm:grid-cols-2">
@@ -730,7 +760,8 @@ function ModelMultiplierBadge({
         <Badge
           variant="secondary"
           className={cn(
-            "h-5 shrink-0 rounded px-1.5 mono text-[11px] font-medium text-muted-foreground hover:text-foreground cursor-default select-none",
+            "h-5 shrink-0 rounded px-1.5 mono text-[11px] font-medium cursor-default select-none",
+            info.isFree ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-semibold" : "text-muted-foreground hover:text-foreground",
             className,
           )}
         >
@@ -774,10 +805,8 @@ function CopyModelNameButton({ copied, onCopy }: { copied: boolean; onCopy: () =
 }
 
 const capabilityIconMap: Record<(typeof capabilityOptions)[number], LucideIcon> = {
-  stream: Radio,
   tools: Wrench,
   vision: Eye,
-  json_schema: Braces,
   reasoning: Brain,
   audio_input: Mic,
 };
@@ -841,6 +870,20 @@ function formatModelNumber(value: number) {
 function formatQuotaRate(value: number | undefined | null, locale: string) {
   if (value == null || isNaN(value)) return "-";
   return new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value);
+}
+
+function formatQuotaRateWithUSD(value: number | undefined | null, locale: string) {
+  if (value == null || isNaN(value)) return "-";
+  const formatted = new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value);
+  if (value === 0) return `${formatted} ($0)`;
+  const usd = value / 1000;
+  let usdStr: string;
+  if (usd >= 1) {
+    usdStr = `$${new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(usd)}`;
+  } else {
+    usdStr = `$${parseFloat(usd.toFixed(4))}`;
+  }
+  return `${formatted} (~${usdStr}/M)`;
 }
 
 function RowActions(props: { onEdit: () => void; onToggle: () => void; onDelete: () => void; enabled: boolean }) {
