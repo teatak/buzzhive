@@ -38,6 +38,7 @@ type catalogModel struct {
 	Name                string             `json:"name,omitempty"`
 	Description         string             `json:"description,omitempty"`
 	ContextLength       int64              `json:"context_length,omitempty"`
+	CostMultiplier      *float64           `json:"cost_multiplier,omitempty"`
 	Architecture        *modelArchitecture `json:"architecture,omitempty"`
 	SupportedParameters *[]string          `json:"supported_parameters,omitempty"`
 	TopProvider         *modelTopProvider  `json:"top_provider,omitempty"`

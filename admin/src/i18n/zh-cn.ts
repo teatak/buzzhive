@@ -260,6 +260,7 @@ export const dict: Record<string, string> = {
   "models.quota_uncached_input_rate": "未缓存输入",
   "models.quota_cached_input_rate": "缓存输入",
   "models.quota_output_rate": "输出（含推理）",
+  "models.cost_multiplier_tip": "综合费率: {{multiplier}} (约 {{cost}} Credits / 百万 Token)",
   "models.capabilities": "能力",
   "models.capability_stream": "流式",
   "models.capability_tools": "工具调用",

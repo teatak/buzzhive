@@ -88,3 +88,89 @@ func TestPublicModelMetadataPartialCapabilities(t *testing.T) {
 		})
 	}
 }
+
+func TestPublicModelMetadataCostMultiplier(t *testing.T) {
+	cases := []struct {
+		name     string
+		model    Model
+		wantMult *float64
+	}{
+		{
+			name: "deepseek 0.1x",
+			model: Model{
+				Name:                   "deepseek-flash",
+				QuotaCachedInputRate:   3,
+				QuotaUncachedInputRate: 140,
+				QuotaOutputRate:        280,
+			},
+			wantMult: float64Ptr(0.1),
+		},
+		{
+			name: "flagship 3.4x",
+			model: Model{
+				Name:                   "gpt-4o",
+				QuotaCachedInputRate:   1250,
+				QuotaUncachedInputRate: 2500,
+				QuotaOutputRate:        10000,
+			},
+			wantMult: float64Ptr(3.4),
+		},
+		{
+			name: "zero rate 0x",
+			model: Model{
+				Name: "free",
+			},
+			wantMult: float64Ptr(0),
+		},
+		{
+			name: "micro non-zero rate clamps to 0.01",
+			model: Model{
+				Name:                   "cheap",
+				QuotaUncachedInputRate: 5,
+			},
+			wantMult: float64Ptr(0.01),
+		},
+		{
+			name: "negative rate omitted",
+			model: Model{
+				Name:                   "invalid",
+				QuotaUncachedInputRate: -1,
+			},
+			wantMult: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := publicModelMetadata(tc.model)
+			if tc.wantMult == nil {
+				if m.CostMultiplier != nil {
+					t.Fatalf("CostMultiplier = %v, want nil", *m.CostMultiplier)
+				}
+			} else {
+				if m.CostMultiplier == nil || *m.CostMultiplier != *tc.wantMult {
+					t.Fatalf("CostMultiplier = %v, want %v", m.CostMultiplier, *tc.wantMult)
+				}
+			}
+
+			b, err := json.Marshal(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantMult != nil {
+				if !strings.Contains(string(b), `"cost_multiplier":`) {
+					t.Fatalf("cost_multiplier missing in json: %s", string(b))
+				}
+			} else {
+				if strings.Contains(string(b), `"cost_multiplier"`) {
+					t.Fatalf("cost_multiplier should be omitted: %s", string(b))
+				}
+			}
+		})
+	}
+}
+
+func float64Ptr(v float64) *float64 {
+	return &v
+}
+

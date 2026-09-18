@@ -260,6 +260,7 @@ export const dict: Record<string, string> = {
   "models.quota_uncached_input_rate": "Uncached input",
   "models.quota_cached_input_rate": "Cached input",
   "models.quota_output_rate": "Output (incl. reasoning)",
+  "models.cost_multiplier_tip": "Cost multiplier: {{multiplier}} (~{{cost}} Credits / M tokens)",
   "models.capabilities": "Capabilities",
   "models.capability_stream": "Streaming",
   "models.capability_tools": "Tool calls",

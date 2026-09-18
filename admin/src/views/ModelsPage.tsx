@@ -33,6 +33,7 @@ import { EnabledToggleButton } from "../components/enabled-toggle-button";
 import { FormNumberField, FormSelectField, FormStaticField, FormTextareaField, FormTextField, LabelWithTip } from "../components/form-fields";
 import { useLocale } from "../i18n/locale";
 import { modelDisplayName } from "../lib/model";
+import { cn } from "../lib/utils";
 import type { Model, ModelPreset, ModelRoute, ProviderRecord, UpstreamModel } from "../types/admin";
 
 type ModelsPageProps = {
@@ -92,7 +93,7 @@ const routeDefaults = {
 };
 
 export function ModelsPage(props: ModelsPageProps) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const upstreamModelID = useId();
   const [modelOpen, setModelOpen] = useState(false);
   const [presetOpen, setPresetOpen] = useState(false);
@@ -266,6 +267,7 @@ export function ModelsPage(props: ModelsPageProps) {
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <CardTitle>{modelDisplayName(selectedModel)}</CardTitle>
+                    <ModelMultiplierBadge model={selectedModel} />
                     <ModelDescriptionInfo description={selectedModel.description} />
                     <StatusBadge enabled={selectedModel.enabled} />
                   </div>
@@ -299,9 +301,9 @@ export function ModelsPage(props: ModelsPageProps) {
             <div className="space-y-2">
               <h3 className="text-sm font-medium">{t("models.quota_rates")}</h3>
               <div className="grid gap-3 sm:grid-cols-3">
-                <ModelStat label={t("models.quota_cached_input_rate")} value={formatModelNumber(selectedModel.quota_cached_input_rate)} />
-                <ModelStat label={t("models.quota_uncached_input_rate")} value={formatModelNumber(selectedModel.quota_uncached_input_rate)} />
-                <ModelStat label={t("models.quota_output_rate")} value={formatModelNumber(selectedModel.quota_output_rate)} />
+                <ModelStat label={t("models.quota_cached_input_rate")} value={formatQuotaRate(selectedModel.quota_cached_input_rate, locale)} mono />
+                <ModelStat label={t("models.quota_uncached_input_rate")} value={formatQuotaRate(selectedModel.quota_uncached_input_rate, locale)} mono />
+                <ModelStat label={t("models.quota_output_rate")} value={formatQuotaRate(selectedModel.quota_output_rate, locale)} mono />
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -389,6 +391,7 @@ export function ModelsPage(props: ModelsPageProps) {
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-2">
                               <div className="truncate text-base font-semibold">{modelDisplayName(model)}</div>
+                              <ModelMultiplierBadge model={model} />
                               <ModelDescriptionInfo description={model.description} />
                             </div>
                             <div className="mt-0.5 flex min-w-0 items-center gap-2">
@@ -682,6 +685,66 @@ function ModelValueChip({ value }: { value: string }) {
   return <Badge variant="secondary" className="h-5 shrink-0 rounded-full px-2 mono text-[11px]">{value || "-"}</Badge>;
 }
 
+export function calculateModelMultiplier(model: {
+  quota_cached_input_rate?: number;
+  quota_uncached_input_rate?: number;
+  quota_output_rate?: number;
+}): { multiplier: string; cost: number } | null {
+  const cached = Number(model.quota_cached_input_rate) || 0;
+  const uncached = Number(model.quota_uncached_input_rate) || 0;
+  const output = Number(model.quota_output_rate) || 0;
+  // 综合成本 = 缓存输入*0.48 + 未缓存输入*0.32 + 输出*0.20
+  const cost = cached * 0.48 + uncached * 0.32 + output * 0.20;
+  if (cost < 0 || isNaN(cost)) return null;
+  if (cost === 0) {
+    return { multiplier: "0x", cost: 0 };
+  }
+  const multiplier = cost / 1000;
+  let formatted: string;
+  if (multiplier < 0.01) {
+    formatted = "<0.01x";
+  } else if (multiplier < 1) {
+    formatted = `${parseFloat(multiplier.toFixed(2))}x`;
+  } else {
+    formatted = `${parseFloat(multiplier.toFixed(1))}x`;
+  }
+  return { multiplier: formatted, cost };
+}
+
+function ModelMultiplierBadge({
+  model,
+  className,
+}: {
+  model: Pick<Model, "quota_cached_input_rate" | "quota_uncached_input_rate" | "quota_output_rate">;
+  className?: string;
+}) {
+  const { t } = useLocale();
+  const info = calculateModelMultiplier(model);
+  if (!info) return null;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge
+          variant="secondary"
+          className={cn(
+            "h-5 shrink-0 rounded px-1.5 mono text-[11px] font-medium text-muted-foreground hover:text-foreground cursor-default select-none",
+            className,
+          )}
+        >
+          {info.multiplier}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent>
+        {t("models.cost_multiplier_tip", {
+          multiplier: info.multiplier,
+          cost: info.cost === 0 ? "0" : info.cost.toFixed(1),
+        })}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function CopyModelNameButton({ copied, onCopy }: { copied: boolean; onCopy: () => void }) {
   const { t } = useLocale();
   return (
@@ -771,6 +834,11 @@ function formatModelNumber(value: number) {
   if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(2))}M`;
   if (value >= 1_000) return `${Number((value / 1_000).toFixed(1))}K`;
   return String(value);
+}
+
+function formatQuotaRate(value: number | undefined | null, locale: string) {
+  if (value == null || isNaN(value)) return "-";
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value);
 }
 
 function RowActions(props: { onEdit: () => void; onToggle: () => void; onDelete: () => void; enabled: boolean }) {

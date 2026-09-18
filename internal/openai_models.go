@@ -1,6 +1,7 @@
 package buzzhive
 
 import (
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -86,5 +87,28 @@ func publicModelMetadata(model Model) openAIModelObject {
 		}
 		m.SupportedParameters = &parameters
 	}
+	m.CostMultiplier = calculateCostMultiplier(model)
 	return m
+}
+
+func calculateCostMultiplier(model Model) *float64 {
+	cost := model.QuotaCachedInputRate*0.48 + model.QuotaUncachedInputRate*0.32 + model.QuotaOutputRate*0.20
+	if cost < 0 || math.IsNaN(cost) || math.IsInf(cost, 0) {
+		return nil
+	}
+	if cost == 0 {
+		var zero float64 = 0
+		return &zero
+	}
+	raw := cost / 1000.0
+	var val float64
+	if raw < 1.0 {
+		val = math.Round(raw*100) / 100
+		if val == 0 && cost > 0 {
+			val = 0.01
+		}
+	} else {
+		val = math.Round(raw*10) / 10
+	}
+	return &val
 }
