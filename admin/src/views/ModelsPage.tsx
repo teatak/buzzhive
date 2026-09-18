@@ -697,7 +697,7 @@ export function calculateModelMultiplier(model: {
   const cost = cached * 0.48 + uncached * 0.32 + output * 0.20;
   if (cost < 0 || isNaN(cost)) return null;
   if (cost === 0) {
-    return { multiplier: "0x", cost: 0 };
+    return { multiplier: "FREE", cost: 0 };
   }
   const multiplier = cost / 1000;
   let formatted: string;
