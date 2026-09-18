@@ -48,7 +48,7 @@ func modelPresets() []ModelPreset {
 		{ID: "deepseek-v4-pro", Family: "DeepSeek", Name: "deepseek-v4-pro", DisplayName: "DeepSeek V4 Pro", Description: "DeepSeek V4 Pro text reasoning model.", ContextWindow: 1000000, MaxInputTokens: 1000000, MaxOutputTokens: 384000, Capabilities: capText, SelectionPolicy: "round_robin"},
 
 		{ID: "qwen3.8-flash", Family: "Qwen", Name: "qwen3.8-flash", DisplayName: "Qwen 3.8 Flash", Description: "Qwen fast text and vision model.", ContextWindow: 1000000, MaxInputTokens: 991808, MaxOutputTokens: 131072, Capabilities: capVision, SelectionPolicy: "round_robin"},
-		{ID: "qwen3.8-max-0902", Family: "Qwen", Name: "qwen3.8-max-0902", DisplayName: "Qwen 3.8 Max", Description: "Qwen vision and reasoning model, September 2 snapshot.", ContextWindow: 1000000, MaxInputTokens: 991808, MaxOutputTokens: 131072, Capabilities: capVision, SelectionPolicy: "round_robin"},
+		{ID: "qwen3.8-max", Family: "Qwen", Name: "qwen3.8-max", DisplayName: "Qwen 3.8 Max", Description: "Qwen vision and reasoning flagship model.", ContextWindow: 1000000, MaxInputTokens: 991808, MaxOutputTokens: 131072, Capabilities: capVision, SelectionPolicy: "round_robin"},
 		{ID: "qwen3.7-plus", Family: "Qwen", Name: "qwen3.7-plus", DisplayName: "Qwen 3.7 Plus", Description: "Qwen text and vision model.", ContextWindow: 1000000, MaxInputTokens: 991808, MaxOutputTokens: 131072, Capabilities: capVision, SelectionPolicy: "round_robin"},
 		{ID: "kimi-k3", Family: "Moonshot", Name: "kimi-k3", DisplayName: "Kimi K3", Description: "Kimi flagship vision model; output shares the context budget.", ContextWindow: 1048576, MaxInputTokens: 1048576, MaxOutputTokens: 1048576, Capabilities: capVision, SelectionPolicy: "round_robin"},
 		// K2.7 documentation specifies a default output budget, not a hard maximum.
@@ -66,9 +66,12 @@ func modelPresets() []ModelPreset {
 
 func findModelPreset(id string) (ModelPreset, bool) {
 	for _, preset := range modelPresets() {
-		if preset.ID == id {
+		if preset.ID == id || preset.Name == id {
 			return preset, true
 		}
+	}
+	if id == "qwen3.8-max-0902" {
+		return findModelPreset("qwen3.8-max")
 	}
 	return ModelPreset{}, false
 }
