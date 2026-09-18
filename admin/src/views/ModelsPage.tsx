@@ -689,7 +689,7 @@ export function calculateModelMultiplier(model: {
   quota_cached_input_rate?: number;
   quota_uncached_input_rate?: number;
   quota_output_rate?: number;
-}): { multiplier: string; cost: number } | null {
+}): { isFree: boolean; multiplier: string; cost: number } | null {
   const cached = Number(model.quota_cached_input_rate) || 0;
   const uncached = Number(model.quota_uncached_input_rate) || 0;
   const output = Number(model.quota_output_rate) || 0;
@@ -697,7 +697,7 @@ export function calculateModelMultiplier(model: {
   const cost = cached * 0.48 + uncached * 0.32 + output * 0.20;
   if (cost < 0 || isNaN(cost)) return null;
   if (cost === 0) {
-    return { multiplier: "FREE", cost: 0 };
+    return { isFree: true, multiplier: "FREE", cost: 0 };
   }
   const multiplier = cost / 1000;
   let formatted: string;
@@ -708,7 +708,7 @@ export function calculateModelMultiplier(model: {
   } else {
     formatted = `${parseFloat(multiplier.toFixed(1))}x`;
   }
-  return { multiplier: formatted, cost };
+  return { isFree: false, multiplier: formatted, cost };
 }
 
 function ModelMultiplierBadge({
@@ -722,6 +722,8 @@ function ModelMultiplierBadge({
   const info = calculateModelMultiplier(model);
   if (!info) return null;
 
+  const displayMultiplier = info.isFree ? t("models.cost_free") : info.multiplier;
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -732,12 +734,12 @@ function ModelMultiplierBadge({
             className,
           )}
         >
-          {info.multiplier}
+          {displayMultiplier}
         </Badge>
       </TooltipTrigger>
       <TooltipContent>
         {t("models.cost_multiplier_tip", {
-          multiplier: info.multiplier,
+          multiplier: displayMultiplier,
           cost: info.cost === 0 ? "0" : info.cost.toFixed(1),
         })}
       </TooltipContent>

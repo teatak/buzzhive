@@ -261,6 +261,7 @@ export const dict: Record<string, string> = {
   "models.quota_cached_input_rate": "快取輸入",
   "models.quota_output_rate": "輸出（含推理）",
   "models.cost_multiplier_tip": "綜合費率: {{multiplier}} (約 {{cost}} Credits / 百萬 Token)",
+  "models.cost_free": "免費",
   "models.capabilities": "能力",
   "models.capability_stream": "串流",
   "models.capability_tools": "工具呼叫",
