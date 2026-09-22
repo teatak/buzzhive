@@ -18,16 +18,18 @@ export function displayNameFromModelID(id: string) {
 
 function formatModelNamePart(part: string) {
   const lower = part.toLowerCase();
-  const acronyms: Record<string, string> = {
+  const wordNames: Record<string, string> = {
     api: "API",
+    deepseek: "DeepSeek",
     gpt: "GPT",
     glm: "GLM",
     json: "JSON",
     llm: "LLM",
+    mimo: "MiMo",
     r1: "R1",
     vl: "VL",
   };
-  if (acronyms[lower]) return acronyms[lower];
+  if (wordNames[lower]) return wordNames[lower];
   if (/^\d+(?:\.\d+)*$/.test(part)) return part;
   return lower.charAt(0).toUpperCase() + lower.slice(1);
 }

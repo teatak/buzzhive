@@ -1,6 +1,6 @@
 # 模型与供应商预设
 
-核验日期：2026-09-14；Mimo V2.6 于 2026-09-22 更新。实现位于 `internal/model_presets.go` 与 `internal/provider_presets.go`。
+核验日期：2026-09-14；MiMo V2.6 于 2026-09-22 更新。实现位于 `internal/model_presets.go` 与 `internal/provider_presets.go`。
 
 预设用于管理后台导入新模型、创建供应商。已有模型、路由、供应商端点及 Credits 费率由数据库保存；重复导入同名模型会跳过，不会覆盖已有配置。新增模型后仍需在模型详情中配置上游路由。更新源码后需要重新构建、部署服务，线上才会出现新预设。
 
@@ -15,7 +15,7 @@
 | Qwen | 新增 3.8 Flash；3.7 Max → `qwen3.8-max`；保留 3.7 Plus；均支持图像，不标记音频输入 | 1,000,000 / 131,072 | [3.8 Flash](https://help.aliyun.com/zh/model-studio/qwen3-8-flash)、[3.8 Max](https://help.aliyun.com/zh/model-studio/qwen3-8-max)、[3.7 Plus](https://help.aliyun.com/zh/model-studio/qwen3-7-plus) |
 | Kimi | 新增 K2.7 Code、K2.7 Code HighSpeed；保留 K3、K2.6；修正 token 元数据 | K3 1,048,576 / 1,048,576；K2.6 262,144 / 262,144；K2.7 系列 262,144 / 未设置 | [模型目录](https://platform.kimi.com/docs/models)、[K3 参数](https://platform.kimi.com/docs/guide/kimi-k3-quickstart)、[K2.7 参数](https://platform.kimi.com/docs/guide/kimi-k2-7-code-quickstart)、[K2.6 基准参数](https://platform.kimi.com/docs/guide/benchmark-best-practice) |
 | GLM | 新增 5.3 Flash（图像）、5.3（文本）；保留 5.2、5.1；修正 5.1 长度 | 5.3 系列、5.2 为 1,000,000 / 128,000；5.1 为 200,000 / 128,000 | [5.3 Flash](https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash)、[5.3](https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3)、[5.1](https://docs.z.ai/guides/llm/glm-5.1) |
-| Mimo | 新增 V2.6 Flash / Pro（图像、音频、工具），保留 V2.5 / Pro；显示名统一为 Mimo | V2.6 按官方 1M 保守设置 1,000,000 / 131,072；V2.5 保留 1,048,576 / 131,072 | [V2.6 发布说明](https://mimo.mi.com/docs/en-US/news/latest/v2-6)、[模型参数](https://mimo.mi.com/models/en-US/mimo-v2.6-pro)、[Responses API](https://mimo.mi.com/docs/en-US/api/chat/responses)、[V2.5 接入示例](https://github.com/XiaomiMiMo/awesome-mimo-agent/blob/main/docs/pi_mono.md) |
+| MiMo | 新增 V2.6 Flash / Pro（图像、音频、工具），保留 V2.5 / Pro；显示名统一为 MiMo | V2.6 按官方 1M 保守设置 1,000,000 / 131,072；V2.5 保留 1,048,576 / 131,072 | [V2.6 发布说明](https://mimo.mi.com/docs/en-US/news/latest/v2-6)、[模型参数](https://mimo.mi.com/models/en-US/mimo-v2.6-pro)、[Responses API](https://mimo.mi.com/docs/en-US/api/chat/responses)、[V2.5 接入示例](https://github.com/XiaomiMiMo/awesome-mimo-agent/blob/main/docs/pi_mono.md) |
 
 ## 参数与协议边界
 
@@ -28,9 +28,9 @@
 
 本次未改管理员设置的 Credits 费率，也未自动迁移线上模型或路由。
 
-## Mimo 思考强度
+## MiMo 思考强度
 
-在别名路由解析、协议转换之后，统一依据实际上游模型 ID 适配版本化 Mimo 推理模型家族（含 `xiaomi/`、`xiaomimimo/` 前缀，不包括 ASR/TTS 或任意自定义别名）。Chat 的 `reasoning_effort`、Responses 的 `reasoning.effort`、Anthropic 的 `output_config.effort` 中，`xhigh/max` 转为 `high`，其他值和字段保留；不合成未设置的思考参数，不更改公共模型或数据库配置。
+在别名路由解析、协议转换之后，统一依据实际上游模型 ID 适配版本化 MiMo 推理模型家族（含 `xiaomi/`、`xiaomimimo/` 前缀，不包括 ASR/TTS 或任意自定义别名）。Chat 的 `reasoning_effort`、Responses 的 `reasoning.effort`、Anthropic 的 `output_config.effort` 中，`xhigh/max` 转为 `high`，其他值和字段保留；不合成未设置的思考参数，不更改公共模型或数据库配置。
 
 根据上方 Responses 官方说明，目前非 `none` 档位均启用思考，实际强度不区分。该映射避免旧兼容端点拒绝扩展档位；测试覆盖直通、协议转换、模型别名及原始字段精度，不代表已完成付费上游验证。
 
