@@ -405,6 +405,7 @@ func (s *Server) doProviderAttemptLoop(ctx context.Context, user AuthToken, mode
 	if req.Model == "" {
 		req.Model = target.UpstreamModel
 	}
+	req.Body = normalizeModelReasoning(target.ProviderType, req.Model, req.Body)
 	s.runtimeMu.Lock()
 	provider := s.providers[providerRuntimeKey(req.ProviderName, target.ProviderType)]
 	if provider == nil {

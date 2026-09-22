@@ -8,7 +8,7 @@ export const modelIconOptions = [
   { value: "qwen", label: "Qwen" },
   { value: "moonshot", label: "Kimi" },
   { value: "zhipu", label: "GLM" },
-  { value: "mimo", label: "MiMo" },
+  { value: "mimo", label: "Mimo" },
   { value: "grok", label: "Grok" },
   { value: "openrouter", label: "OpenRouter" },
   { value: "ollama", label: "Ollama" },
