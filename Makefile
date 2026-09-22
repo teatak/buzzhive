@@ -2,7 +2,7 @@ IMAGE ?= teatak/buzzhive
 TAG ?= latest
 PLATFORMS ?= linux/amd64,linux/arm64
 
-.PHONY: dev admin-build admin-dev docker-build docker-push docker-publish version-patch version-minor version-major tag release-patch release-minor release-major
+.PHONY: dev admin-build admin-dev docker-build docker-push docker-publish version-patch version-minor version-major tag release release-patch release-minor release-major
 
 dev:
 	@test -f config.yaml || cp config.example.yaml config.yaml
@@ -50,7 +50,7 @@ tag:
 		git commit -m "chore: bump version to $$v"; \
 	fi; \
 	git tag -a "v$$v" -m "Release v$$v" && \
-	git push origin HEAD --follow-tags && \
+	git push origin HEAD "v$$v" && \
 	echo "Successfully created and pushed tag v$$v"
 
 release: release-patch
