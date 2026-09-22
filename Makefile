@@ -2,7 +2,7 @@ IMAGE ?= teatak/buzzhive
 TAG ?= latest
 PLATFORMS ?= linux/amd64,linux/arm64
 
-.PHONY: dev admin-build admin-dev docker-build docker-push docker-publish version-patch version-minor version-major
+.PHONY: dev admin-build admin-dev docker-build docker-push docker-publish version-patch version-minor version-major tag release-patch release-minor release-major
 
 dev:
 	@test -f config.yaml || cp config.example.yaml config.yaml
@@ -39,3 +39,27 @@ version-major:
 	@awk -F. '{ printf "%d.0.0\n", $$1 + 1 }' VERSION > VERSION.tmp
 	@mv VERSION.tmp VERSION
 	@cat VERSION
+
+tag:
+	@v=$$(cat VERSION); \
+	if git rev-parse "v$$v" >/dev/null 2>&1; then \
+		echo "Tag v$$v already exists"; exit 1; \
+	fi; \
+	if ! git diff --quiet VERSION; then \
+		git add VERSION && \
+		git commit -m "chore: bump version to $$v"; \
+	fi; \
+	git tag -a "v$$v" -m "Release v$$v" && \
+	git push origin HEAD --follow-tags && \
+	echo "Successfully created and pushed tag v$$v"
+
+release: release-patch
+
+release-patch:
+	IMAGE=$(IMAGE) PLATFORMS=$(PLATFORMS) ./scripts/release.sh patch
+
+release-minor:
+	IMAGE=$(IMAGE) PLATFORMS=$(PLATFORMS) ./scripts/release.sh minor
+
+release-major:
+	IMAGE=$(IMAGE) PLATFORMS=$(PLATFORMS) ./scripts/release.sh major
